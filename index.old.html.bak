@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mesa Viva — RPG com IA como Mestre</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="theme-color" content="#0d0d1a">
+  <meta name="description" content="Mesa Viva: RPG de mesa com Inteligência Artificial como Mestre. Jogue aventuras épicas com amigos direto do celular.">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=Inter:wght@300;400;600;700&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      background: #0d0d1a;
+      color: #d4ccb8;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-image:
+        radial-gradient(ellipse at 20% 30%, rgba(230, 154, 74, 0.05) 0%, transparent 70%),
+        radial-gradient(ellipse at 80% 70%, rgba(134, 188, 211, 0.04) 0%, transparent 60%),
+        radial-gradient(ellipse at 50% 100%, rgba(124, 196, 143, 0.03) 0%, transparent 50%);
+      background-attachment: fixed;
+      padding: 20px;
+    }
+
+    .card {
+      background: linear-gradient(145deg, #16162a 0%, #1a1a32 50%, #181e28 100%);
+      border-radius: 24px;
+      padding: 48px 40px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(230,154,74,0.12);
+      border: 1px solid rgba(230,154,74,0.10);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: -50%; left: -50%;
+      width: 200%; height: 200%;
+      background: conic-gradient(from -45deg, #e39a4a08, #86bcd306, #0d0d1a00);
+      animation: shimmer 12s ease-in-out infinite;
+      pointer-events: none;
+    }
+
+    @keyframes shimmer {
+      0%, 100% { transform: rotate(0deg) translate(0,0); }
+      50% { transform: rotate(180deg) translate(10px, -10px); }
+    }
+
+    .dice {
+      width: 64px; height: 64px;
+      background: linear-gradient(135deg, #c0b090, #d4c4a0);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px; font-weight: 700; color: #2a1a0a;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 2px rgba(200,180,150,0.3);
+      margin: 0 auto 16px;
+      transform: perspective(200px) rotateX(6deg) rotateY(-10deg);
+      animation: roll 4s ease-in-out infinite;
+    }
+
+    @keyframes roll {
+      0%, 100% { transform: perspective(200px) rotateX(6deg) rotateY(-10deg); }
+      25% { transform: perspective(200px) rotateX(-8deg) rotateY(15deg) scale(0.96); }
+      50% { transform: perspective(200px) rotateX(10deg) rotateY(-4deg); }
+      75% { transform: perspective(200px) rotateX(-4deg) rotateY(12deg) scale(0.97); }
+    }
+
+    h1 {
+      font-family: 'Cinzel Decorative', 'Georgia', serif;
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: #e8dcc8;
+      text-shadow: 0 2px 8px rgba(230,154,74,0.15);
+      margin-bottom: 4px;
+      letter-spacing: 1px;
+    }
+
+    .subtitle {
+      font-size: 0.95rem;
+      color: #9a8a78;
+      margin-bottom: 24px;
+      font-weight: 300;
+      letter-spacing: 0.5px;
+    }
+
+    .subtitle em {
+      color: #b3a08a;
+      font-style: italic;
+    }
+
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(230,154,74,0.2), rgba(134,188,211,0.15), transparent);
+      margin: 8px 0 20px;
+    }
+
+    .features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: center;
+      margin: 16px 0 24px;
+    }
+
+    .tag {
+      background: rgba(134,188,211,0.12);
+      border: 1px solid rgba(134,188,211,0.08);
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      color: #86bcd3;
+      font-weight: 400;
+      backdrop-filter: blur(2px);
+    }
+
+    .btn {
+      display: block;
+      background: linear-gradient(135deg, #8a6a3e 0%, #b08050 50%, #c09060 100%);
+      color: #0d0d1a;
+      text-decoration: none;
+      padding: 16px 32px;
+      border-radius: 14px;
+      font-weight: 700;
+      font-size: 1.2rem;
+      text-align: center;
+      box-shadow: 0 6px 20px rgba(160,120,70,0.15), inset 0 1px 2px rgba(60,40,20,0.1);
+      transition: all 0.25s cubic-bezier(0.2, 0.9, 0.4, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn:hover {
+      transform: translateY(-3px) scale(1.01);
+      box-shadow: 0 10px 30px rgba(160,120,70,0.25);
+      background: linear-gradient(135deg, #967850 0%, #c49868 40%, #d8a878 100%);
+    }
+
+    .btn:active { transform: scale(0.97); }
+
+    .btn small {
+      display: block;
+      font-size: 0.7rem;
+      font-weight: 400;
+      color: rgba(13,13,26,0.7);
+      margin-top: 5px;
+    }
+
+    .btn-icon { font-size: 1.4rem; margin-right: 6px; }
+
+    .meta {
+      margin-top: 18px;
+      font-size: 0.78rem;
+      color: #6a5e4e;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+
+    .meta span { opacity: 0.8; }
+
+    .meta a {
+      color: #86bcd3;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(134,188,211,0.3);
+      transition: color 0.2s;
+    }
+
+    .meta a:hover { color: #a8d0e8; }
+
+    .legacy-notice {
+      font-size: 0.7rem;
+      color: #4a3e2e;
+      margin-top: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 420px) {
+      .card { padding: 32px 24px; }
+      h1 { font-size: 1.7rem; }
+      .btn { padding: 14px 20px; font-size: 1rem; }
+      .dice { width: 48px; height: 48px; font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="dice">20</div>
+
+    <h1>Mesa Viva</h1>
+    <div class="subtitle">RPG de mesa com <em>Inteligência Artificial</em> como Mestre</div>
+
+    <div class="divider"></div>
+
+    <div class="features">
+      <span class="tag">🎭 D20 Simplificado</span>
+      <span class="tag">⚔️ Combate em Rodadas</span>
+      <span class="tag">🧙 Magias & Perícias</span>
+      <span class="tag">🗣️ Narração por Voz</span>
+      <span class="tag">👥 Multijogador</span>
+      <span class="tag">📜 Aventuras Épicas</span>
+    </div>
+
+    <a class="btn" href="mesa-viva-latest.apk" download>
+      <span class="btn-icon">📱</span> Baixar APK
+      <small>Android · 48 MB · Instalação lateral (sideload)</small>
+    </a>
+
+    <div class="meta">
+      <span>v0.1.1</span>
+      <a href="https://github.com/mariomcj/mesa-viva">Código Aberto no GitHub →</a>
+    </div>
+
+    <div class="legacy-notice">
+      ⚠️ Requer Android 8+ · Após baixar, ative "Instalar apps de fontes desconhecidas" nas configurações.
+    </div>
+  </div>
+  <!--
+    Mesa Viva — v0.1.1
+    Design temático RPG com dados d20 animados
+  -->
+</body>
+</html>

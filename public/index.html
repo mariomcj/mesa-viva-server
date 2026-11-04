@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Mesa Viva — RPG de mesa com IA como Mestre</title>
+<meta name="description" content="Mesa Viva: RPG de mesa narrado por Inteligência Artificial. Role o d20, escolha magias e viva uma campanha que se adapta às suas decisões — direto do celular. Grátis e de código aberto.">
+<meta name="theme-color" content="#07060b">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/x-icon" href="favicon.ico">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Mesa Viva — o Mestre nunca dorme">
+<meta property="og:description" content="RPG de mesa narrado por IA. d20, combate em rodadas, magias e uma campanha que lembra do que você fez. APK Android, grátis e aberto.">
+<meta property="og:locale" content="pt_BR">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&display=swap">
+<style>
+  :root{
+    --ink:#07060b;
+    --ink-2:#0b0912;
+    --stone:#121019;
+    --parchment:#ece0c8;
+    --muted:#a2947f;
+    --gold:#e0b263;
+    --gold-deep:#b47c33;
+    --ember:#ff8a3d;
+    --arcane:#8fbcd8;
+    --line:rgba(236,224,200,.10);
+    --radius:16px;
+    --serif:'Cinzel Decorative',Georgia,'Times New Roman',serif;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  }
+
+  *,*::before,*::after{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--ink);
+    color:var(--parchment);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+
+  /* ---------- atmosfera: tochas, vinheta, grão ---------- */
+  .atmos{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+  .atmos .torch{
+    position:absolute;inset:-10%;
+    background:
+      radial-gradient(58vw 46vh at 16% -6%, rgba(255,138,61,.20), transparent 68%),
+      radial-gradient(46vw 40vh at 88% 4%, rgba(143,188,216,.13), transparent 70%),
+      radial-gradient(80vw 55vh at 50% 108%, rgba(120,66,190,.14), transparent 72%);
+    animation:breathe 11s ease-in-out infinite;
+  }
+  .atmos .vignette{
+    position:absolute;inset:0;
+    background:radial-gradient(ellipse 120% 90% at 50% 42%, transparent 38%, rgba(3,2,6,.72) 100%);
+  }
+  .atmos .grain{
+    position:absolute;inset:0;opacity:.045;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  @keyframes breathe{0%,100%{opacity:.85}50%{opacity:1}}
+
+  .embers{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+  .embers i{
+    position:absolute;bottom:-8vh;width:3px;height:3px;border-radius:50%;
+    background:radial-gradient(circle,#ffcf8a,#ff7a2f 60%,transparent 70%);
+    opacity:0;will-change:transform,opacity;
+    animation:rise 14s linear infinite;
+  }
+  .embers i:nth-child(1){left:9%;animation-duration:15s;animation-delay:-2s}
+  .embers i:nth-child(2){left:23%;animation-duration:19s;animation-delay:-9s;width:2px;height:2px}
+  .embers i:nth-child(3){left:41%;animation-duration:13s;animation-delay:-5s}
+  .embers i:nth-child(4){left:58%;animation-duration:21s;animation-delay:-14s;width:2px;height:2px}
+  .embers i:nth-child(5){left:72%;animation-duration:16s;animation-delay:-3s}
+  .embers i:nth-child(6){left:88%;animation-duration:18s;animation-delay:-11s;width:2px;height:2px}
+  @keyframes rise{
+    0%{transform:translate3d(0,0,0) scale(1);opacity:0}
+    12%{opacity:.85}
+    70%{opacity:.5}
+    100%{transform:translate3d(24px,-96vh,0) scale(.4);opacity:0}
+  }
+
+  /* ---------- estrutura ---------- */
+  .shell{position:relative;z-index:1;max-width:1120px;margin:0 auto;padding:0 22px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0 8px}
+  .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--parchment)}
+  .brand svg{width:26px;height:26px;display:block}
+  .brand b{
+    font-family:var(--serif);font-size:.82rem;font-weight:700;letter-spacing:.22em;
+    text-transform:uppercase;color:#e6d7b8;
+  }
+  .pill{
+    font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--gold);border:1px solid rgba(224,178,99,.28);
+    background:rgba(224,178,99,.07);border-radius:999px;padding:3px 9px;
+    white-space:nowrap;
+  }
+  .topbar a.ghost{font-size:.82rem;color:var(--muted);text-decoration:none;transition:color .2s}
+  .topbar a.ghost:hover{color:var(--gold)}
+
+  /* ---------- herói ---------- */
+  .hero{display:grid;grid-template-columns:1.08fr .92fr;gap:40px;align-items:center;padding:22px 0 58px}
+
+  .kicker{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:.7rem;letter-spacing:.24em;text-transform:uppercase;color:var(--gold);
+    margin-bottom:16px;
+  }
+  .kicker::before{content:"";width:26px;height:1px;background:linear-gradient(90deg,transparent,var(--gold))}
+  .kicker::after{content:"";width:26px;height:1px;background:linear-gradient(90deg,var(--gold),transparent)}
+
+  h1{
+    font-family:var(--serif);font-weight:700;
+    font-size:clamp(2.5rem,7.4vw,4.3rem);
+    line-height:.98;letter-spacing:.01em;margin:0 0 6px;
+    background:linear-gradient(180deg,#fbf1dc 0%,#e9cb92 46%,#c8944a 78%,#a9742f 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 10px 26px rgba(224,178,99,.22));
+  }
+  .tagline{
+    font-family:Georgia,'Times New Roman',serif;font-style:italic;
+    font-size:clamp(1.15rem,2.6vw,1.5rem);color:#d9cbb0;margin:0 0 16px;
+  }
+  .lede{margin:0 0 26px;color:#bcae99;font-size:1rem;max-width:46ch}
+  .lede strong{color:#e8dcc4;font-weight:600}
+
+  .cta-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+  .btn{
+    position:relative;display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    border-radius:14px;text-decoration:none;font-weight:800;letter-spacing:.01em;
+    transition:transform .18s cubic-bezier(.2,.9,.3,1),box-shadow .25s,background .25s,border-color .25s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .btn-primary{
+    padding:16px 26px;font-size:1.02rem;color:#1a1206;
+    background:linear-gradient(180deg,#f6dc9f 0%,#e0b263 48%,#bd8438 100%);
+    box-shadow:0 14px 34px -12px rgba(224,178,99,.65),inset 0 1px 0 rgba(255,255,255,.55),inset 0 -2px 0 rgba(90,54,12,.28);
+    overflow:hidden;
+  }
+  .btn-primary svg{width:19px;height:19px;flex:none}
+  .btn-primary::after{
+    content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;
+    background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);
+    transform:skewX(-18deg);transition:left .6s ease;
+  }
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 20px 44px -14px rgba(224,178,99,.8),inset 0 1px 0 rgba(255,255,255,.6),inset 0 -2px 0 rgba(90,54,12,.28)}
+  .btn-primary:hover::after{left:120%}
+  .btn-primary:active{transform:translateY(0) scale(.985)}
+
+  .btn-ghost{
+    padding:15px 22px;font-size:.9rem;font-weight:600;color:#cfc2aa;
+    border:1px solid rgba(236,224,200,.16);background:rgba(255,255,255,.025);
+  }
+  .btn-ghost:hover{border-color:rgba(224,178,99,.45);color:#f0e2c8;transform:translateY(-2px)}
+  .btn:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+
+  .cta-note{
+    margin-top:14px;font-size:.76rem;letter-spacing:.06em;text-transform:uppercase;
+    color:#8d8070;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;
+  }
+  .cta-note span{display:inline-flex;align-items:center;gap:6px}
+  .cta-note span+span::before{content:"·";color:#5d5347}
+
+  /* ---------- palco do d20 ---------- */
+  .stage{position:relative;display:grid;place-items:center;min-height:340px;isolation:isolate}
+  .stage .halo{
+    position:absolute;width:min(420px,88%);aspect-ratio:1;border-radius:50%;
+    background:radial-gradient(circle,rgba(224,178,99,.30) 0%,rgba(255,138,61,.10) 42%,transparent 66%);
+    filter:blur(6px);z-index:-1;animation:breathe 7s ease-in-out infinite;
+  }
+  .rune-ring{
+    position:absolute;width:min(340px,80%);aspect-ratio:1;border-radius:50%;
+    border:1px dashed rgba(224,178,99,.32);z-index:-1;
+    animation:spin 46s linear infinite;
+  }
+  .rune-ring::after{
+    content:"";position:absolute;inset:14px;border-radius:50%;
+    border:1px solid rgba(143,188,216,.16);
+  }
+  .rune-ring i{
+    position:absolute;top:-3px;left:50%;width:5px;height:5px;border-radius:50%;
+    background:var(--gold);box-shadow:0 0 12px 2px rgba(224,178,99,.8);transform:translateX(-50%);
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .die{
+    width:min(300px,72vw);height:auto;display:block;
+    animation:float 7s ease-in-out infinite;
+    filter:drop-shadow(0 24px 28px rgba(0,0,0,.55));
+  }
+  @keyframes float{0%,100%{transform:translateY(-6px) rotate(-1.2deg)}50%{transform:translateY(8px) rotate(1.2deg)}}
+  .stage .floor{
+    position:absolute;bottom:6%;width:56%;height:26px;border-radius:50%;
+    background:radial-gradient(ellipse,rgba(255,138,61,.22),transparent 70%);
+    filter:blur(9px);z-index:-1;
+  }
+
+  /* ---------- seções ---------- */
+  section{position:relative}
+  .sec{padding:56px 0}
+  .sec-head{max-width:56ch;margin:0 0 28px}
+  .sec-head h2{
+    font-family:var(--serif);font-weight:700;font-size:clamp(1.35rem,3.2vw,1.85rem);
+    line-height:1.25;margin:0 0 8px;color:#f1e4cc;letter-spacing:.01em;
+  }
+  .sec-head p{margin:0;color:#9d907d;font-size:.94rem}
+  .rule{height:1px;background:linear-gradient(90deg,transparent,var(--line),transparent)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(238px,1fr));gap:12px}
+  .feat{
+    padding:20px;border-radius:var(--radius);
+    background:linear-gradient(160deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+    border:1px solid var(--line);
+    transition:border-color .25s,transform .25s,background .25s;
+  }
+  .feat:hover{border-color:rgba(224,178,99,.34);transform:translateY(-3px);background:linear-gradient(160deg,rgba(224,178,99,.07),rgba(255,255,255,.012))}
+  .feat .ico{
+    width:38px;height:38px;border-radius:10px;display:grid;place-items:center;
+    font-size:18px;line-height:1;margin-bottom:12px;
+    background:linear-gradient(160deg,rgba(224,178,99,.16),rgba(255,138,61,.06));
+    border:1px solid rgba(224,178,99,.22);
+  }
+  .feat h3{margin:0 0 4px;font-size:.98rem;font-weight:700;color:#eddfc6;letter-spacing:.01em}
+  .feat p{margin:0;font-size:.86rem;color:#9a8d7b;line-height:1.55}
+
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .step{position:relative;padding:22px 20px 20px;border-radius:var(--radius);border:1px solid var(--line);background:rgba(255,255,255,.02)}
+  .step b{
+    font-family:var(--serif);font-size:1.6rem;line-height:1;
+    color:transparent;-webkit-text-stroke:1px rgba(224,178,99,.55);
+    display:block;margin-bottom:10px;
+  }
+  .step h3{margin:0 0 4px;font-size:.94rem;color:#eddfc6}
+  .step p{margin:0;font-size:.85rem;color:#9a8d7b}
+
+  /* ---------- prova / confiança ---------- */
+  .proof{
+    display:grid;grid-template-columns:1.25fr .75fr;gap:0;
+    border:1px solid var(--line);border-radius:20px;overflow:hidden;
+    background:linear-gradient(150deg,rgba(224,178,99,.06),rgba(255,255,255,.015) 55%,rgba(143,188,216,.05));
+  }
+  .proof blockquote{
+    margin:0;padding:30px 28px 30px 26px;position:relative;
+    border-left:3px solid var(--gold-deep);
+  }
+  .proof blockquote p{
+    margin:0 0 10px;font-family:Georgia,serif;font-style:italic;
+    font-size:clamp(1rem,2.2vw,1.15rem);color:#e6d8be;line-height:1.55;
+  }
+  .proof cite{font-style:normal;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:#8d8070}
+  .facts{display:grid;grid-template-rows:repeat(3,1fr);border-left:1px solid var(--line)}
+  .fact{padding:14px 18px;display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--line)}
+  .fact:last-child{border-bottom:0}
+  .fact b{font-size:1rem;color:#f0e2c8;font-weight:700;white-space:nowrap}
+  .fact span{font-size:.76rem;color:#8d8070;letter-spacing:.04em}
+
+  /* ---------- detalhes / instalação ---------- */
+  details{
+    border:1px solid var(--line);border-radius:12px;padding:0 16px;
+    background:rgba(255,255,255,.018);margin-bottom:8px;
+  }
+  details[open]{border-color:rgba(224,178,99,.26);background:rgba(224,178,99,.04)}
+  summary{
+    cursor:pointer;padding:15px 0;font-size:.92rem;font-weight:600;color:#e3d5bb;
+    list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::after{
+    content:"+";color:var(--gold);font-size:1.1rem;line-height:1;font-weight:400;
+    transition:transform .2s;
+  }
+  details[open] summary::after{transform:rotate(45deg)}
+  details .body{padding:0 0 16px;font-size:.88rem;color:#a4967f;line-height:1.65}
+  details .body ol{margin:0;padding-left:18px}
+  details .body li{margin-bottom:6px}
+  details .body code{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82em;
+    background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;color:#d9c9a8;
+  }
+
+  /* ---------- cta final ---------- */
+  .final{
+    text-align:center;padding:44px 24px 48px;border-radius:22px;
+    border:1px solid rgba(224,178,99,.20);
+    background:
+      radial-gradient(60% 100% at 50% 0%,rgba(224,178,99,.16),transparent 70%),
+      linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.01));
+  }
+  .final h2{
+    font-family:var(--serif);font-weight:700;margin:0 0 8px;
+    font-size:clamp(1.3rem,3.4vw,1.7rem);color:#f4e7cd;
+  }
+  .final p{margin:0 auto 22px;color:#a2947f;font-size:.92rem;max-width:42ch}
+
+  footer{padding:34px 0 40px;color:#8a7f70;font-size:.76rem;display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:space-between;align-items:center}
+  footer a{color:#a2947f;text-decoration:none;border-bottom:1px dotted rgba(162,148,127,.45)}
+  footer a:hover{color:var(--gold);border-bottom-color:rgba(224,178,99,.5)}
+
+  /* ---------- barra fixa mobile ---------- */
+  .stickybar{
+    position:fixed;left:0;right:0;bottom:0;z-index:20;
+    display:none;align-items:center;gap:12px;justify-content:space-between;
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+    background:rgba(9,7,14,.9);
+    border-top:1px solid rgba(224,178,99,.22);
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    transform:translateY(110%);transition:transform .3s cubic-bezier(.2,.9,.3,1);
+  }
+  .stickybar.on{transform:translateY(0)}
+  .stickybar .label{font-size:.76rem;line-height:1.3;color:#b6a894}
+  .stickybar .label b{display:block;font-size:.86rem;color:#eee0c6}
+  .stickybar .btn-primary{padding:12px 18px;font-size:.88rem;border-radius:11px;box-shadow:0 10px 24px -12px rgba(224,178,99,.7)}
+
+  /* ---------- responsivo ---------- */
+  @media (max-width:880px){
+    .hero{grid-template-columns:1fr;gap:8px;padding:8px 0 40px;text-align:center}
+    .kicker{justify-content:center}
+    .lede{margin-left:auto;margin-right:auto}
+    .cta-row{justify-content:center}
+    .cta-note{justify-content:center}
+    .stage{order:-1;min-height:0;padding:8px 0 18px}
+    .die{width:min(210px,52vw)}
+    .rune-ring{width:min(240px,62vw)}
+    .stage .halo{width:min(300px,72vw)}
+    .proof{grid-template-columns:1fr}
+    .facts{border-left:0;border-top:1px solid var(--line);grid-template-rows:none;grid-template-columns:repeat(3,1fr)}
+    .fact{border-bottom:0;border-right:1px solid var(--line);flex-direction:column;gap:2px;padding:12px}
+    .fact:last-child{border-right:0}
+    .steps{grid-template-columns:1fr}
+  }
+  @media (max-width:720px){
+    .stickybar{display:flex}
+    .sec{padding:42px 0}
+    body{padding-bottom:74px}
+  }
+  @media (max-width:420px){
+    .shell{padding:0 16px}
+    .btn-primary{width:100%;padding:15px 18px}
+    .btn-ghost{width:100%;justify-content:center}
+    .fact b{font-size:.9rem}
+    .brand b{letter-spacing:.16em;font-size:.74rem}
+    .topbar .pill{display:none}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+    .btn-primary::after{display:none}
+    .stickybar{transition:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="atmos" aria-hidden="true">
+  <div class="torch"></div>
+  <div class="vignette"></div>
+  <div class="grain"></div>
+</div>
+<div class="embers" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+<div class="shell">
+
+  <header class="topbar">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <polygon points="136.5,81.8 53.8,47.1 62.8,138.1" fill="#8a6438"/>
+        <polygon points="136.5,81.8 62.8,138.1 145.7,165.3" fill="#e6c68b"/>
+        <polygon points="62.8,138.1 68.8,182.0 145.7,165.3" fill="#b39463"/>
+        <polygon points="136.5,81.8 188.0,91.0 131.2,18.0" fill="#4b3923"/>
+        <polygon points="54.3,34.7 12.0,109.0 63.5,118.2" fill="#c8a674"/>
+        <polygon points="54.3,34.7 63.5,118.2 137.2,61.9" fill="#e0bd85"/>
+        <polygon points="63.5,118.2 146.2,152.9 137.2,61.9" fill="#8a6438"/>
+      </svg>
+      <b>Mesa Viva</b>
+    </a>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span class="pill">v0.1.1</span>
+      <a class="ghost" href="https://github.com/mariomcj/mesa-viva" rel="noopener">GitHub</a>
+    </div>
+  </header>
+
+  <!-- HERÓI -->
+  <section class="hero">
+    <div>
+      <span class="kicker">RPG narrado por IA</span>
+      <h1>Mesa&nbsp;Viva</h1>
+      <p class="tagline">O Mestre nunca dorme.</p>
+      <p class="lede">
+        Role o <strong>d20</strong>, escolha suas magias e entre numa campanha que reage a cada
+        decisão. Narração por voz, combate em rodadas e uma história que lembra do que você fez —
+        <strong>direto do celular</strong>, sem precisar de um mestre humano na mesa.
+        Jogue <strong>sozinho</strong> ou chame <strong>amigos</strong> pra compartilhar a aventura.
+      </p>
+
+      <div class="cta-row">
+        <a class="btn btn-primary" href="mesa-viva-latest.apk" download type="application/vnd.android.package-archive">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/>
+          </svg>
+          Baixar o APK
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/mariomcj/mesa-viva" rel="noopener">Ver o código</a>
+      </div>
+
+      <p class="cta-note">
+        <span>Android 8+</span><span>48 MB</span><span>Grátis e aberto</span>
+      </p>
+    </div>
+
+    <div class="stage" aria-hidden="true">
+      <div class="halo"></div>
+      <div class="rune-ring"><i></i></div>
+      <div class="floor"></div>
+      <svg class="die" viewBox="0 0 200 200">
+        <g stroke="#0d0a12" stroke-width="1.5" stroke-linejoin="round">
+          <polygon points="136.5,81.8 53.8,47.1 62.8,138.1" fill="#7a5730"/>
+          <polygon points="136.5,81.8 62.8,138.1 145.7,165.3" fill="#dfbe86"/>
+          <polygon points="62.8,138.1 68.8,182.0 145.7,165.3" fill="#a98a5c"/>
+          <polygon points="136.5,81.8 188.0,91.0 131.2,18.0" fill="#47361f"/>
+          <polygon points="53.8,47.1 54.3,34.7 12.0,109.0" fill="#18130f"/>
+          <polygon points="68.8,182.0 145.7,165.3 146.2,152.9" fill="#18130f"/>
+          <polygon points="188.0,91.0 131.2,18.0 137.2,61.9" fill="#3d2f1c"/>
+          <polygon points="54.3,34.7 12.0,109.0 63.5,118.2" fill="#b6945f"/>
+          <polygon points="54.3,34.7 63.5,118.2 137.2,61.9" fill="#d6b47c"/>
+          <polygon points="63.5,118.2 146.2,152.9 137.2,61.9" fill="#7a5730"/>
+        </g>
+        <polygon points="54.3,34.7 63.5,118.2 137.2,61.9" fill="#fff" opacity=".10"/>
+      </svg>
+    </div>
+  </section>
+
+  <div class="rule"></div>
+
+  <!-- RECURSOS -->
+  <section class="sec">
+    <div class="sec-head">
+      <h2>A mesa está posta</h2>
+      <p>Tudo o que uma sessão precisa, resolvido pelo sistema — você só decide o que o seu personagem faria.</p>
+    </div>
+    <div class="grid">
+      <article class="feat">
+        <div class="ico" aria-hidden="true">🎲</div>
+        <h3>d20 simplificado</h3>
+        <p>Um rolamento resolve a ação. Modificadores, dificuldade e resultado na mesma tela — sem planilha.</p>
+      </article>
+      <article class="feat">
+        <div class="ico" aria-hidden="true">⚔️</div>
+        <h3>Combate em rodadas</h3>
+        <p>Iniciativa, dano e condições controlados pelo sistema. Você descreve, o Mestre narra o impacto.</p>
+      </article>
+      <article class="feat">
+        <div class="ico" aria-hidden="true">🧙</div>
+        <h3>Magias e perícias</h3>
+        <p>Fichas com classe, atributos e talentos. Cada escolha muda o que o seu personagem consegue fazer.</p>
+      </article>
+      <article class="feat">
+        <div class="ico" aria-hidden="true">🗣️</div>
+        <h3>Narração por voz</h3>
+        <p>O Mestre lê a cena em voz alta. Perfeito para jogar no escuro, de fone, ou com as mãos ocupadas.</p>
+      </article>
+      <article class="feat">
+        <div class="ico" aria-hidden="true">👥</div>
+        <h3>Mesa compartilhada</h3>
+        <p>Abra uma sala e jogue com os amigos na mesma sessão, cada um com o seu personagem.</p>
+      </article>
+      <article class="feat">
+        <div class="ico" aria-hidden="true">📜</div>
+        <h3>Crônicas que continuam</h3>
+        <p>A aventura resume o que já aconteceu e usa isso contra — ou a favor — de você na próxima cena.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- COMO FUNCIONA -->
+  <section class="sec">
+    <div class="sec-head">
+      <h2>Da instalação à primeira rolagem</h2>
+      <p>Três passos. Sem conta, sem assinatura, sem loja de aplicativos no caminho.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <b>I</b>
+        <h3>Instale o APK</h3>
+        <p>Baixe o arquivo e autorize "instalar apps de fontes desconhecidas" quando o Android pedir.</p>
+      </div>
+      <div class="step">
+        <b>II</b>
+        <h3>Crie seu personagem</h3>
+        <p>Escolha raça, classe e distribua os atributos. A ficha é montada em poucos toques.</p>
+      </div>
+      <div class="step">
+        <b>III</b>
+        <h3>Role o d20</h3>
+        <p>Descreva o que quer fazer. O Mestre responde a cena, pede o teste e segue a história.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONFIANÇA -->
+  <section class="sec">
+    <div class="proof">
+      <blockquote>
+        <p>“Não é um chatbot com tema de fantasia. É uma mesa de RPG: iniciativa, classe de armadura,
+          magias com espaço de conjuração e consequências que ficam na crônica.”</p>
+        <cite>Sobre o projeto</cite>
+      </blockquote>
+      <div class="facts">
+        <div class="fact"><b>48 MB</b><span>tamanho do APK</span></div>
+        <div class="fact"><b>Android 8+</b><span>compatibilidade</span></div>
+        <div class="fact"><b>100% aberto</b><span>código no GitHub</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DETALHES -->
+  <section class="sec">
+    <div class="sec-head">
+      <h2>Antes de descer à masmorra</h2>
+    </div>
+
+    <details>
+      <summary>Como instalar o APK no Android</summary>
+      <div class="body">
+        <ol>
+          <li>Toque em <strong>Baixar o APK</strong> e aguarde o download de 48 MB.</li>
+          <li>Abra o arquivo pela notificação ou pela pasta <code>Downloads</code>.</li>
+          <li>Se o Android avisar sobre fontes desconhecidas, toque em <strong>Configurações</strong> e permita para o app de onde veio o arquivo (Chrome, Arquivos…).</li>
+          <li>Volte e confirme <strong>Instalar</strong>. Se o Play Protect alertar, escolha "instalar mesmo assim" — o app não vem da Play Store.</li>
+        </ol>
+      </div>
+    </details>
+
+    <details>
+      <summary>Por que não está na Play Store?</summary>
+      <div class="body">
+        O Mesa Viva é um projeto aberto e em desenvolvimento rápido: cada versão sai direto do repositório,
+        sem esperar revisão de loja. A desvantagem é o aviso de segurança do Android — a vantagem é que o
+        código que roda no seu celular é o mesmo que você pode ler no GitHub.
+      </div>
+    </details>
+
+    <details>
+      <summary>Preciso de internet para jogar?</summary>
+      <div class="body">
+        Sim: a narração é gerada por um modelo de linguagem, então a mesa precisa de conexão.
+        Uma conexão móvel comum já dá conta — as respostas chegam em texto e são lidas em voz pelo próprio aparelho.
+      </div>
+    </details>
+
+    <details>
+      <summary>Quais são os requisitos?</summary>
+      <div class="body">
+        Android 8.0 ou superior e cerca de 120 MB livres (48 MB do APK mais os dados do app).
+        Roda em aparelhos modestos; a narração por voz usa o motor de fala do sistema.
+      </div>
+    </details>
+  </section>
+
+  <!-- CTA FINAL -->
+  <section class="sec" style="padding-top:8px">
+    <div class="final">
+      <h2>A tocha está acesa.</h2>
+      <p>Sua próxima campanha começa com uma rolagem de d20. Baixe, instale e sente à mesa.</p>
+      <a class="btn btn-primary" href="mesa-viva-latest.apk" download type="application/vnd.android.package-archive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/>
+        </svg>
+        Baixar o APK · 48 MB
+      </a>
+      <p style="margin:14px 0 0;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#7d7264">
+        v0.1.1 · Android 8+ · instalação lateral
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Mesa Viva — RPG de mesa com IA como Mestre.</span>
+    <span>
+      <a href="https://github.com/mariomcj/mesa-viva" rel="noopener">Código aberto no GitHub →</a>
+    </span>
+  </footer>
+
+</div>
+
+<div class="stickybar" id="stickybar">
+  <div class="label"><b>Mesa Viva</b>APK · 48 MB · Android 8+</div>
+  <a class="btn btn-primary" href="mesa-viva-latest.apk" download>Baixar</a>
+</div>
+
+<script>
+(function () {
+  var bar = document.getElementById('stickybar');
+  var hero = document.querySelector('.hero .btn-primary');
+
+  if (bar && hero && 'IntersectionObserver' in window) {
+    new IntersectionObserver(function (entries) {
+      bar.classList.toggle('on', !entries[0].isIntersecting);
+    }, { rootMargin: '-40px 0px 0px 0px' }).observe(hero);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.env
+node_modules/
+public/mesa-viva-latest.apk
+public/mesa-viva-latest.aab
+public/auth
+public/google*.html
+mesa-viva.db
+mesa-viva.db-shm
+mesa-viva.db-wal
