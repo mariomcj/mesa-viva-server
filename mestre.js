@@ -85,7 +85,6 @@ Exemplo 3 (diálogo com NPC + teste de perícia):
 {
   "narracao": "texto para ler em voz alta, 2 a 4 frases. Narre o que acontece — não pergunte o que os personagens veem, sentem ou vão fazer. O Mestre descreve o mundo; os jogadores decidem a ação.",
   "cena": null ou "nome curto do local (máx 40 caracteres)",
-  "fundo": null ou "URL de imagem de ambiente para o fundo do chat (apenas quando a cena mudar significativamente)",
   "resumo": "resumo atualizado da história em até 5 frases",
   "teste": null ou {"tipo":"pericia","pericia":"nome exato da perícia","cd":13,"motivo":"curto"} ou {"tipo":"salvaguarda","atributo":"for|des|con|int|sab|car","cd":13,"motivo":"curto"} ou {"tipo":"ataque","ataque":"nome do ataque da ficha","alvo":"id do inimigo"},
   "combate": null ou {"inimigos":[{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2}]},
@@ -115,7 +114,7 @@ Responda SOMENTE com JSON no formato:
 
 function resumoFicha(f) {
   const at = ATRIBUTOS.map((a) => `${a.toUpperCase()} ${f.atributos[a]}(${sinal(mod(f.atributos[a]))})`).join(" ");
-  const atq = (f.ataques || []).map((a) => `${a.nome} (${sinal(a.bonus)}${a.bonus}, ${a.dano})`).join("; ") || "nenhum";
+  const atq = (f.ataques || []).map((a) => `${a.nome} (${sinal(a.bonus)}, ${a.dano})`).join("; ") || "nenhum";
   const mag = (f.magias || []).map((m) => m.nome).join(", ");
   return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${f.ca}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}`;
 }
@@ -144,6 +143,20 @@ class ErroMestre extends Error {
   constructor(msg) { super(msg); this.name = "ErroMestre"; }
 }
 
+/** Lê o primeiro valor JSON da resposta: inteiro, dentro de um bloco ```, ou do primeiro { / [ ao último } / ]. */
+function lerJson(texto) {
+  const t = String(texto || "").trim();
+  try { return JSON.parse(t); } catch {}
+  const bloco = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (bloco) { try { return JSON.parse(bloco[1]); } catch {} }
+  const ini = t.search(/[[{]/);
+  const fim = Math.max(t.lastIndexOf("}"), t.lastIndexOf("]"));
+  if (ini >= 0 && fim > ini) { try { return JSON.parse(t.slice(ini, fim + 1)); } catch {} }
+  throw new ErroMestre("JSON inválido na resposta");
+}
+
+const TEMPO_LIMITE_IA_MS = 90_000;
+
 async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000, temperatura) {
   const model = qualidade === "caprichado"
     ? (process.env.MODELO_CAPRICHADO || "anthropic/claude-sonnet-5.5")
@@ -153,38 +166,41 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
   const url = "https://openrouter.ai/api/v1/chat/completions";
   const body = { model, messages: [{ role: "system", content: prompt }], max_tokens: maxTokens, temperature: temperatura };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "https://mesa-viva.local",
-      "X-Title": "Mesa Viva",
-    },
-    body: JSON.stringify(body),
-  });
+  const controle = new AbortController();
+  const timer = setTimeout(() => controle.abort(), TEMPO_LIMITE_IA_MS);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://mesa-viva.local",
+        "X-Title": "Mesa Viva",
+      },
+      body: JSON.stringify(body),
+      signal: controle.signal,
+    });
+  } catch (e) {
+    throw new ErroMestre(e.name === "AbortError" ? "O Mestre demorou demais para responder." : "Sem conexão com a IA.");
+  } finally { clearTimeout(timer); }
 
   if (!res.ok) {
     const err = await res.text().catch(() => "");
-    if (res.status === 429 || res.status === 529) throw new ErroMestre("Sobrecarregado");
-    throw new ErroMestre(`API: ${res.status} ${err.slice(0, 200)}`);
+    if (res.status === 429 || res.status === 529) throw new ErroMestre("O Mestre está sobrecarregado. Tente de novo em alguns segundos.");
+    if (res.status === 402) throw new ErroMestre("Créditos da IA esgotados.");
+    console.error(`[IA] ${res.status} ${err.slice(0, 300)}`);
+    throw new ErroMestre("O Mestre não respondeu. Tente de novo.");
   }
 
   const json = await res.json();
   const text = json.choices?.[0]?.message?.content;
   if (!text) throw new ErroMestre("Resposta vazia da IA");
-
-  try {
-    const codeMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    const clean = codeMatch ? codeMatch[1] : text;
-    return JSON.parse(clean);
-  } catch (e) {
-    throw new ErroMestre("JSON inválido na resposta");
-  }
+  return lerJson(text);
 }
 
 async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
-  if (tentativa > 3) return _fallbackImage(prompt, baseUrl);
+  if (tentativa > 3) return "";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
   const modelos = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image"];
@@ -271,4 +287,4 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { AVENTURA, FORMATO, CRICACAO, contexto, perguntar, gerarImagem, ErroMestre, resumoFicha };
+module.exports = { AVENTURA, FORMATO, CRICACAO, contexto, perguntar, gerarImagem, ErroMestre, resumoFicha, lerJson };

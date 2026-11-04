@@ -7,3 +7,9 @@ public/google*.html
 mesa-viva.db
 mesa-viva.db-shm
 mesa-viva.db-wal
+
+# Gerados em produção (não versionar: imagens dos jogadores e builds)
+public/images/
+*.apk
+*.aab
+.env.*

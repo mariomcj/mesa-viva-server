@@ -1,6 +1,9 @@
 /**
- * Mesa Viva — Servidor local (Express + SQLite + OpenRouter)
- * Substitui Firebase Cloud Functions + Firestore.
+ * Mesa Viva — Servidor (Express + SQLite + OpenRouter)
+ *
+ * Identidade: toda rota do jogo exige o token de login (Authorization: Bearer).
+ * O jogador é o id da CONTA. O cabeçalho X-User-Id (id antigo do aparelho) só serve
+ * para migrar, uma única vez, as mesas e fichas criadas antes do login para a conta.
  */
 "use strict";
 
@@ -13,42 +16,31 @@ const { WebSocketServer } = require("ws");
 
 const R = require("./regras");
 const M = require("./mestre");
-let SERVER_BASE_URL = process.env.PUBLIC_BASE_URL || "https://download.proflow.online";
 
 // ── Config ──
-// Load .env first so env vars are available
-try { const fs = require("fs"); if (fs.existsSync(".env")) { const e = fs.readFileSync(".env", "utf8"); for (const l of e.split("\n")) { const m = l.match(/^([^=]+)=(.*)$/); if (m && !process.env[m[1]]) process.env[m[1]] = m[2]; } } } catch (_) {}
+// .env primeiro, para as variáveis valerem abaixo
+try { const fs = require("fs"); if (fs.existsSync(".env")) { const e = fs.readFileSync(".env", "utf8"); for (const l of e.split("\n")) { const m = l.match(/^([^=#]+)=(.*)$/); if (m && !process.env[m[1].trim()]) process.env[m[1].trim()] = m[2].trim(); } } } catch (_) {}
 const PORT = Number(process.env.PORT) || 3062;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY;
 const DB_PATH = process.env.DB_PATH || "./mesa-viva.db";
+const BASE_URL_FIXA = process.env.PUBLIC_BASE_URL || "";
+let SERVER_BASE_URL = BASE_URL_FIXA || "https://download.proflow.online";
 const ALFABETO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-// ── Admin ──
+const TOKEN_VALIDADE_MS = 90 * 24 * 3600_000;      // login vale 90 dias
+const TRAVA_MS = 150_000;                          // tempo máximo de uma narração em andamento
+const ONLINE_WINDOW_MS = 90_000;                   // 90 s sem atividade = offline
+const TYPING_TTL_MS = 6_000;                       // 6 s sem batida = parou de digitar
+const LIMITE_IA = { max: Number(process.env.LIMITE_IA_MAX) || 40, janelaMs: 10 * 60_000 }; // por conta: 40 pedidos à IA a cada 10 min
+
+// ── Admin: sem ADMIN_PASS definido, o painel fica desligado (nunca uma senha padrão) ──
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
-const ADMIN_PASS = process.env.ADMIN_PASS || "mesaviva2026";
-const _adminTokens = new Set();
+const ADMIN_PASS = process.env.ADMIN_PASS || "";
+const _adminTokens = new Map(); // token -> expira
 function adminMw(req, res, next) {
   const tok = req.headers["x-admin-token"];
-  if (!tok || !_adminTokens.has(tok)) return erro(res, 401, "Não autenticado.");
+  const exp = tok && _adminTokens.get(tok);
+  if (!exp || exp < Date.now()) { if (tok) _adminTokens.delete(tok); return erro(res, 401, "Não autenticado."); }
   next();
-}
-
-// ── Auth Token ──
-function gerarToken() { return crypto.randomBytes(32).toString("hex"); }
-
-function authTokenMw(req, res, next) {
-  // Primeiro X-User-Id (UID anônimo/consistente)
-  const u = req.headers["x-user-id"];
-  if (u) { req.uid = String(u).slice(0, 36); return next(); }
-  // Fallback para token
-  const auth = req.headers["authorization"];
-  if (auth && auth.startsWith("Bearer ")) {
-    const token = auth.slice(7);
-    const row = db.prepare("SELECT userId FROM tokens WHERE token = ?").get(token);
-    if (!row) return erro(res, 401, "Token inválido.");
-    req.uid = row.userId;
-    return next();
-  }
-  erro(res, 401, "Autenticação necessária.");
 }
 
 // ── Database ──
@@ -98,7 +90,7 @@ db.exec(`
   );
 `);
 
-// ── Migrations ──
+// ── Migrations (idempotentes) ──
 try { db.exec("ALTER TABLE membros ADD COLUMN ultimaAtividade INTEGER DEFAULT 0"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN ultimaNarrativa INTEGER DEFAULT 0"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN fundo TEXT DEFAULT ''"); } catch (e) {}
@@ -106,45 +98,21 @@ try { db.exec("CREATE TABLE IF NOT EXISTS reacoes (codigo TEXT NOT NULL, logId I
 try { db.exec("CREATE TABLE IF NOT EXISTS sessoes (codigo TEXT NOT NULL, uid TEXT NOT NULL, resumo TEXT DEFAULT '', criadaEm INTEGER DEFAULT (strftime('%s','now')*1000), PRIMARY KEY (codigo, uid))"); } catch (e) {}
 try { db.exec("CREATE TABLE IF NOT EXISTS usuarios (id TEXT PRIMARY KEY, nome TEXT NOT NULL, email TEXT UNIQUE NOT NULL, senha TEXT NOT NULL, criadoEm INTEGER NOT NULL)"); } catch (e) {}
 try { db.exec("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, userId TEXT NOT NULL, criadoEm INTEGER NOT NULL)"); } catch (e) {}
+try { db.exec("ALTER TABLE tokens ADD COLUMN expiraEm INTEGER DEFAULT 0"); } catch (e) {}
+try { db.exec("CREATE TABLE IF NOT EXISTS aparelhos (deviceUid TEXT PRIMARY KEY, userId TEXT NOT NULL, vinculadoEm INTEGER NOT NULL)"); } catch (e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_log_codigo ON log (codigo, id)"); } catch (e) {}
 
 // ── Helpers ──
 function uid() { return crypto.randomUUID().slice(0, 8); }
-
 function json(s) { if (!s) return null; if (typeof s === "object") return s; try { return JSON.parse(s); } catch { return null; } }
-
 function agora() { return Date.now(); }
-
-const ONLINE_WINDOW_MS = 90_000;  // 90s sem bater = offline
-const TYPING_TTL_MS = 6_000;      // 6s sem batida = parou de digitar
-
-// Quem está digitando: Map<codigo, Map<uid, {nome, ate}>>
-const digitando = new Map();
-
-function atualizarDigitando(codigo, uid, nome, ativo) {
-  if (!digitando.has(codigo)) digitando.set(codigo, new Map());
-  const m = digitando.get(codigo);
-  if (ativo) { m.set(uid, { nome, ate: agora() + TYPING_TTL_MS }); }
-  else { m.delete(uid); if (!m.size) digitando.delete(codigo); }
-}
-
-function limparDigitando(codigo) {
-  if (!digitando.has(codigo)) return;
-  const m = digitando.get(codigo);
-  const ago = agora();
-  for (const [uid, v] of m) { if (v.ate < ago) m.delete(uid); }
-  if (!m.size) digitando.delete(codigo);
-}
 
 function texto(v, max) {
   let s = String(v ?? "").trim();
-  // Remove control chars
-  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\uFFFE\uFFFF]/g, "");
-  // Remove lone surrogates
+  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f￾￿]/g, "");
   s = s.replace(/(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/g, "");
-  // Truncate preserving surrogate pairs
   if (s.length > max) {
     s = s.substring(0, max);
-    // If ends in high surrogate (start of a pair), drop it
     const last = s.charCodeAt(max - 1);
     if (last >= 0xD800 && last <= 0xDBFF) s = s.substring(0, max - 1);
   }
@@ -153,106 +121,207 @@ function texto(v, max) {
 
 function codigoValido(v) {
   const c = texto(v, 8).toUpperCase();
-  if (!/^[A-Z0-9]{5}$/.test(c)) return null;
-  return c;
+  return /^[A-Z0-9]{5}$/.test(c) ? c : null;
 }
 
-function erro(res, status, msg) {
-  return res.status(status).json({ error: msg });
+function erro(res, status, msg) { return res.status(status).json({ error: msg }); }
+
+// ── Senhas (scrypt) e tokens ──
+function hashSenha(senha) {
+  const sal = crypto.randomBytes(16).toString("hex");
+  const h = crypto.scryptSync(String(senha), sal, 32).toString("hex");
+  return `scrypt$${sal}$${h}`;
+}
+function conferirSenha(guardada, senha) {
+  if (!guardada || !senha) return false;
+  if (guardada.startsWith("scrypt$")) {
+    const [, sal, h] = guardada.split("$");
+    const calc = crypto.scryptSync(String(senha), sal, 32);
+    const esp = Buffer.from(h, "hex");
+    return esp.length === calc.length && crypto.timingSafeEqual(esp, calc);
+  }
+  // senha antiga em texto puro: compara em tempo constante; o login regrava como hash
+  const a = Buffer.from(String(guardada)), b = Buffer.from(String(senha));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function emitirToken(userId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  db.prepare("INSERT INTO tokens (token, userId, criadoEm, expiraEm) VALUES (?, ?, ?, ?)").run(token, userId, agora(), agora() + TOKEN_VALIDADE_MS);
+  return token;
+}
+function usuarioDoToken(req) {
+  const auth = String(req.headers["authorization"] || "");
+  if (!auth.startsWith("Bearer ")) return null;
+  const row = db.prepare("SELECT userId, criadoEm, expiraEm FROM tokens WHERE token = ?").get(auth.slice(7));
+  if (!row) return null;
+  const expira = row.expiraEm || row.criadoEm + TOKEN_VALIDADE_MS;
+  if (expira < agora()) { db.prepare("DELETE FROM tokens WHERE token = ?").run(auth.slice(7)); return null; }
+  return row.userId;
 }
 
-function exigirUsuario(req, res) {
-  const u = req.headers["x-user-id"];
-  if (!u) return erro(res, 401, "Usuário não identificado. Mande X-User-Id.");
-  return String(u).slice(0, 36);
+/**
+ * Migração única: mesas e fichas criadas com o id do aparelho (antes do login) passam para a conta.
+ * Só acontece se o aparelho ainda não foi vinculado a nenhuma conta. Depois disso o id do aparelho é ignorado.
+ */
+const _aparelhosVistos = new Set();
+function vincularAparelho(userId, deviceUid) {
+  const d = texto(deviceUid, 36);
+  if (!d || d === userId || _aparelhosVistos.has(d)) return;
+  _aparelhosVistos.add(d);
+  if (db.prepare("SELECT 1 FROM aparelhos WHERE deviceUid = ?").get(d)) return;
+  if (db.prepare("SELECT 1 FROM usuarios WHERE id = ?").get(d)) return; // é id de outra conta, não de aparelho
+  db.transaction(() => {
+    db.prepare("INSERT INTO aparelhos (deviceUid, userId, vinculadoEm) VALUES (?, ?, ?)").run(d, userId, agora());
+    for (const m of db.prepare("SELECT codigo, nome, ultimaAtividade FROM membros WHERE uid = ?").all(d)) {
+      db.prepare("INSERT OR IGNORE INTO membros (codigo, uid, nome, ultimaAtividade) VALUES (?, ?, ?, ?)").run(m.codigo, userId, m.nome, m.ultimaAtividade || 0);
+    }
+    db.prepare("DELETE FROM membros WHERE uid = ?").run(d);
+    for (const f of db.prepare("SELECT codigo, dados FROM fichas WHERE uid = ?").all(d)) {
+      const dados = json(f.dados) || {};
+      dados.uid = userId;
+      db.prepare("INSERT OR IGNORE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(f.codigo, userId, JSON.stringify(dados));
+    }
+    db.prepare("DELETE FROM fichas WHERE uid = ?").run(d);
+    db.prepare("UPDATE mesas SET dono = ? WHERE dono = ?").run(userId, d);
+    db.prepare("UPDATE log SET autor = ? WHERE autor = ?").run(userId, d);
+    db.prepare("UPDATE OR IGNORE reacoes SET uid = ? WHERE uid = ?").run(userId, d);
+    for (const m of db.prepare("SELECT codigo, combate, rolagem, processando FROM mesas WHERE combate LIKE ? OR rolagem LIKE ? OR processando LIKE ?").all(`%${d}%`, `%${d}%`, `%${d}%`)) {
+      const troca = (s) => (s ? s.split(`"${d}"`).join(`"${userId}"`) : s);
+      db.prepare("UPDATE mesas SET combate = ?, rolagem = ?, processando = ? WHERE codigo = ?").run(troca(m.combate), troca(m.rolagem), troca(m.processando), m.codigo);
+    }
+  })();
+  console.log(`[migração] aparelho ${d} vinculado à conta ${userId}`);
 }
 
-const TRAVA_MS = 150_000;
+/** Toda rota do jogo: exige login. req.uid = id da conta. */
+function authMw(req, res, next) {
+  const userId = usuarioDoToken(req);
+  if (!userId) return erro(res, 401, "Faça login novamente.");
+  req.uid = userId;
+  const aparelho = req.headers["x-user-id"];
+  if (aparelho) vincularAparelho(userId, aparelho);
+  const cod = codigoValido(req.body?.codigo || req.params?.codigo);
+  if (cod) db.prepare("UPDATE membros SET ultimaAtividade = ? WHERE codigo = ? AND uid = ?").run(agora(), cod, userId);
+  next();
+}
 
-// Carrega mesa + fichas + log recente
+function ehMembro(codigo, uid) {
+  return !!db.prepare("SELECT 1 FROM membros WHERE codigo = ? AND uid = ?").get(codigo, uid);
+}
+/** Lê o código da mesa (corpo ou URL) e confere se quem chama é membro. Devolve o código ou null (resposta já enviada). */
+function mesaDoMembro(req, res) {
+  const codigo = codigoValido(req.params?.codigo || req.body?.codigo);
+  if (!codigo) { erro(res, 400, "Código inválido."); return null; }
+  if (!db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo)) { erro(res, 404, "Mesa não encontrada."); return null; }
+  if (!ehMembro(codigo, req.uid)) { erro(res, 403, "Você não é membro desta mesa."); return null; }
+  return codigo;
+}
+
+// Limite de pedidos à IA por conta (protege os créditos)
+const _usoIA = new Map(); // uid -> [instantes]
+function limiteIA(req, res, next) {
+  const t = agora();
+  const lista = (_usoIA.get(req.uid) || []).filter((x) => t - x < LIMITE_IA.janelaMs);
+  if (lista.length >= LIMITE_IA.max) return erro(res, 429, "Muitos pedidos ao Mestre. Espere alguns minutos.");
+  lista.push(t);
+  _usoIA.set(req.uid, lista);
+  next();
+}
+setInterval(() => { const t = agora(); for (const [k, v] of _usoIA) if (!v.some((x) => t - x < LIMITE_IA.janelaMs)) _usoIA.delete(k); }, 60_000).unref();
+
+// Quem está digitando: Map<codigo, Map<uid, {nome, ate}>>
+const digitando = new Map();
+function atualizarDigitando(codigo, uid, nome, ativo) {
+  if (!digitando.has(codigo)) digitando.set(codigo, new Map());
+  const m = digitando.get(codigo);
+  if (ativo) m.set(uid, { nome, ate: agora() + TYPING_TTL_MS });
+  else { m.delete(uid); if (!m.size) digitando.delete(codigo); }
+}
+function limparDigitando(codigo) {
+  if (!digitando.has(codigo)) return;
+  const m = digitando.get(codigo);
+  const t = agora();
+  for (const [u, v] of m) if (v.ate < t) m.delete(u);
+  if (!m.size) digitando.delete(codigo);
+}
+
+// Carrega mesa + fichas + log recente (null se a mesa não existe ou se uid não é membro)
 function carregar(codigo, uid) {
   const m = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-  if (!m) return null;
+  if (!m || !ehMembro(codigo, uid)) return null;
   m.combate = json(m.combate);
   m.rolagem = json(m.rolagem);
   m.processando = json(m.processando);
-  const membro = db.prepare("SELECT * FROM membros WHERE codigo = ? AND uid = ?").get(codigo, uid);
-  if (!membro) return null;
-  const fichasRaw = db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo);
+  m.membros = Object.fromEntries(db.prepare("SELECT uid, nome FROM membros WHERE codigo = ?").all(codigo).map((r) => [r.uid, r.nome]));
   const fichas = {};
-  for (const f of fichasRaw) fichas[f.uid] = R.normalizarFicha(json(f.dados), f.uid);
-  const recentes = db.prepare("SELECT * FROM log WHERE codigo = ? ORDER BY t DESC LIMIT 14").all(codigo).reverse();
+  for (const f of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) fichas[f.uid] = R.normalizarFicha(json(f.dados), f.uid);
+  const recentes = db.prepare("SELECT * FROM log WHERE codigo = ? ORDER BY id DESC LIMIT 14").all(codigo).reverse();
   return { codigo, uid, mesa: m, fichas, recentes };
 }
 
+const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo"]);
 function salvarMesa(codigo, campos) {
-  const sets = Object.entries(campos).filter(([k]) => k !== "codigo").map(([k]) => `${k} = ?`).join(", ");
-  const vals = Object.entries(campos).filter(([k]) => k !== "codigo").map(([, v]) => typeof v === "object" ? JSON.stringify(v) : v);
-  if (!sets) return;
+  const pares = Object.entries(campos).filter(([k]) => COLUNAS_MESA.has(k));
+  if (!pares.length) return;
+  const sets = pares.map(([k]) => `${k} = ?`).join(", ");
+  const vals = pares.map(([, v]) => (v !== null && typeof v === "object" ? JSON.stringify(v) : v));
   db.prepare(`UPDATE mesas SET ${sets} WHERE codigo = ?`).run(...vals, codigo);
 }
+function salvarFicha(codigo, f) {
+  db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, f.uid);
+}
 
+/** Grava entradas no diário e devolve os ids criados. */
 function registrar(codigo, ...entradas) {
   const stmt = db.prepare("INSERT INTO log (codigo, t, tipo, texto, autor, nome, res, ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
   const t = agora();
-  let nCount = 0;
+  const ids = [];
+  let narrou = false;
   for (const [i, e] of entradas.entries()) {
-    stmt.run(codigo, t + i, e.tipo, e.texto, e.autor || null, e.nome || null, e.res || null, e.ok != null ? (e.ok ? 1 : 0) : null);
-    if (e.tipo === 'narr') { broadcast(codigo, 'narrativa', e); nCount++; }
+    const info = stmt.run(codigo, t + i, e.tipo, e.texto, e.autor || null, e.nome || null, e.res || null, e.ok != null ? (e.ok ? 1 : 0) : null);
+    ids.push(Number(info.lastInsertRowid));
+    if (e.tipo === "narr") narrou = true;
   }
-  if (nCount) salvarMesa(codigo, { ultimaNarrativa: db.prepare("SELECT COALESCE(max(id),0) as id FROM log WHERE codigo = ?").get(codigo).id });
+  if (narrou) salvarMesa(codigo, { ultimaNarrativa: ids[ids.length - 1] });
+  broadcast(codigo, narrou ? "narrativa" : "nova", {});
+  return ids;
 }
 
 function broadcast(codigo, evento, dados) {
-  // Notifica todos os WebSocket clients conectados nesta mesa
   const msg = JSON.stringify({ evento, dados });
   for (const ws of wss.clients) {
-    if (ws.mesa === codigo && ws.readyState === 1) {
-      try { ws.send(msg); } catch {}
-    }
+    if (ws.mesa === codigo && ws.readyState === 1) { try { ws.send(msg); } catch {} }
   }
 }
 
-// ── Middleware de autenticação simples ──
-function _tokenUid(req) {
-  const auth = req.headers["authorization"];
-  if (auth && auth.startsWith("Bearer ")) {
-    const row = db.prepare("SELECT userId FROM tokens WHERE token = ?").get(auth.slice(7));
-    if (row) return row.userId;
-  }
+/** Trava "o Mestre está narrando": só um pedido à IA por mesa de cada vez. Devolve mensagem de erro ou null. */
+function travar(codigo, uid, nome) {
+  const m = db.prepare("SELECT processando FROM mesas WHERE codigo = ?").get(codigo);
+  const p = json(m?.processando);
+  if (p && agora() - p.desde < TRAVA_MS) return p.por === uid ? "Sua ação já está sendo processada." : `O Mestre está narrando a ação de ${p.nome}. Espere um pouco.`;
+  salvarMesa(codigo, { processando: { por: uid, nome, desde: agora() } });
+  broadcast(codigo, "atualizar", {});
   return null;
 }
+function destravar(codigo) { salvarMesa(codigo, { processando: null }); broadcast(codigo, "atualizar", {}); }
 
-function authMw(req, res, next) {
-  const u = req.headers["x-user-id"] || _tokenUid(req);
-  if (!u) return erro(res, 401, "X-User-Id obrigatório");
-  req.uid = String(u).slice(0, 36);
-  // Atualiza atividade online do membro
-  const cod = req.body?.codigo || req.params?.codigo;
-  if (cod) {
-    const c = codigoValido(cod);
-    if (c) db.prepare("UPDATE membros SET ultimaAtividade = ? WHERE codigo = ? AND uid = ?").run(agora(), c, req.uid);
-  }
-  next();
-}
+const msgErro = (e) => (e instanceof M.ErroMestre ? e.message : "O Mestre não respondeu. Tente de novo.");
 
 // ── Express ──
 const app = express();
-// Set server URL for image generation (never latch onto localhost from the tunnel)
-app.use((req, res, next) => {
-  const host = String(req.headers['x-forwarded-host'] || req.headers['host'] || '');
-  if (host && !/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/i.test(host)) {
-    SERVER_BASE_URL = `https://${host}`;
-  }
-  next();
-});
+app.set("trust proxy", 1);
+if (!BASE_URL_FIXA) {
+  // Sem PUBLIC_BASE_URL, usa o host pelo qual o servidor foi acessado (exceto localhost)
+  app.use((req, res, next) => {
+    const host = String(req.headers["x-forwarded-host"] || req.headers["host"] || "");
+    if (host && /^[a-z0-9.-]+(:\d+)?$/i.test(host) && !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(host)) SERVER_BASE_URL = `https://${host}`;
+    next();
+  });
+}
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-// Admin redirect — antes do static p/ evitar conflito
 app.get(["/admin", "/admin/"], (req, res) => res.redirect(301, "/admin.html"));
-
-// Arquivos estáticos (APK, etc.) sem cache
 app.use(express.static("public", {
   setHeaders(res, path) {
     if (path.endsWith(".apk")) {
@@ -260,111 +329,117 @@ app.use(express.static("public", {
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
     }
-  }
+  },
 }));
-app.use((req, res, next) => { console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`); next()});
+if (process.env.LOG_REQUESTS !== "0") app.use((req, res, next) => { console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`); next(); });
 
-// ── Rate limiter ──
-const RATE_LIMIT = {};
-const RATE_MAX = 60;     // requests per window
-const RATE_WIN = 60_000; // 1 minute window
+// ── Limite geral de requisições (por login ou IP, por rota) ──
+const RATE_LIMIT = new Map();
+const RATE_WIN = 60_000;
 app.use((req, res, next) => {
-  const uid = req.headers?.["x-user-id"] || req.ip;
-  const key = `${uid}:${req.path}`;
-  const now = Date.now();
-  if (!RATE_LIMIT[key] || now - RATE_LIMIT[key].win > RATE_WIN) {
-    RATE_LIMIT[key] = { win: now, count: 1 };
-  } else if (RATE_LIMIT[key].count >= RATE_MAX) {
-    return erro(res, 429, "Muitas requisições. Aguarde um minuto.");
-  } else {
-    RATE_LIMIT[key].count++;
-  }
+  const quem = String(req.headers["authorization"] || "").slice(-16) || req.ip;
+  const key = `${quem}:${req.method}:${req.path}`;
+  const max = (req.method === "GET" ? 150 : 60) * (Number(process.env.RATE_MULTIPLICADOR) || 1); // o app consulta a mesa a cada 2 s
+  const t = agora();
+  const r = RATE_LIMIT.get(key);
+  if (!r || t - r.win > RATE_WIN) RATE_LIMIT.set(key, { win: t, count: 1 });
+  else if (r.count >= max) return erro(res, 429, "Muitas requisições. Aguarde um minuto.");
+  else r.count++;
   next();
 });
-// Periodic cleanup
-setInterval(() => {
-  const now = Date.now();
-  for (const k in RATE_LIMIT) {
-    if (now - RATE_LIMIT[k].win > RATE_WIN) delete RATE_LIMIT[k];
-  }
-}, 60_000).unref();
+setInterval(() => { const t = agora(); for (const [k, v] of RATE_LIMIT) if (t - v.win > RATE_WIN) RATE_LIMIT.delete(k); }, 60_000).unref();
 
 // ── Health ──
 app.get("/api/ping", (_, res) => res.json({ status: "pong", server: "mesa-viva" }));
 
 // ── API: Auth ──
+function respostaLogin(req, res, user) {
+  const aparelho = req.headers["x-user-id"];
+  if (aparelho) vincularAparelho(user.id, aparelho);
+  res.json({ token: emitirToken(user.id), usuario: { id: user.id, nome: user.nome, email: user.email } });
+}
+
 app.post("/api/auth/registrar", (req, res) => {
   const nome = texto(req.body?.nome, 30) || "Jogador";
-  const email = texto(req.body?.email, 100);
-  const senha = req.body?.senha;
-  if (!email || email.length < 3) return erro(res, 400, "Email inválido.");
-  if (!senha || senha.length < 4) return erro(res, 400, "Senha deve ter no mínimo 4 caracteres.");
+  const email = texto(req.body?.email, 100).toLowerCase();
+  const senha = String(req.body?.senha ?? "");
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return erro(res, 400, "Email inválido.");
+  if (senha.length < 6) return erro(res, 400, "A senha precisa ter pelo menos 6 caracteres.");
   const id = uid();
   try {
-    db.prepare("INSERT INTO usuarios (id, nome, email, senha, criadoEm) VALUES (?, ?, ?, ?, ?)").run(id, nome, email, senha, agora());
-    const token = gerarToken();
-    db.prepare("INSERT INTO tokens (token, userId, criadoEm) VALUES (?, ?, ?)").run(token, id, agora());
-    res.json({ token, usuario: { id, nome, email } });
+    db.prepare("INSERT INTO usuarios (id, nome, email, senha, criadoEm) VALUES (?, ?, ?, ?, ?)").run(id, nome, email, hashSenha(senha), agora());
   } catch (e) {
     if (e.message?.includes("UNIQUE")) return erro(res, 409, "Email já cadastrado.");
-    erro(res, 500, "Erro ao registrar.");
+    return erro(res, 500, "Erro ao registrar.");
   }
+  respostaLogin(req, res, { id, nome, email });
 });
 
 app.post("/api/auth/login", (req, res) => {
-  const email = texto(req.body?.email, 100);
-  const senha = req.body?.senha;
+  const email = texto(req.body?.email, 100).toLowerCase();
+  const senha = String(req.body?.senha ?? "");
   if (!email || !senha) return erro(res, 400, "Email e senha obrigatórios.");
-  const user = db.prepare("SELECT id, nome, email FROM usuarios WHERE email = ? AND senha = ?").get(email, senha);
-  if (!user) return erro(res, 401, "Email ou senha incorretos.");
-  const token = gerarToken();
-  db.prepare("INSERT INTO tokens (token, userId, criadoEm) VALUES (?, ?, ?)").run(token, user.id, agora());
-  res.json({ token, usuario: user });
+  const user = db.prepare("SELECT id, nome, email, senha FROM usuarios WHERE lower(email) = ?").get(email);
+  if (!user || !conferirSenha(user.senha, senha)) return erro(res, 401, "Email ou senha incorretos.");
+  if (!user.senha.startsWith("scrypt$")) db.prepare("UPDATE usuarios SET senha = ? WHERE id = ?").run(hashSenha(senha), user.id);
+  respostaLogin(req, res, user);
 });
 
-app.get("/api/user/dados", authTokenMw, (req, res) => {
+app.post("/api/auth/sair", (req, res) => {
+  const auth = String(req.headers["authorization"] || "");
+  if (auth.startsWith("Bearer ")) db.prepare("DELETE FROM tokens WHERE token = ?").run(auth.slice(7));
+  res.json({ ok: true });
+});
+
+app.get("/api/user/dados", authMw, (req, res) => {
   const user = db.prepare("SELECT id, nome, email, criadoEm FROM usuarios WHERE id = ?").get(req.uid);
   if (!user) return erro(res, 404, "Usuário não encontrado.");
   res.json(user);
 });
 
-app.get("/api/user/mesas", authTokenMw, (req, res) => {
-  const criadas = db.prepare("SELECT codigo, fase, criadaEm, 'dono' as papel FROM mesas WHERE dono = ?").all(req.uid);
-  const membro = db.prepare(`
-    SELECT m.codigo, me.fase, me.criadaEm, 'membro' as papel
+app.get("/api/user/mesas", authMw, (req, res) => {
+  const mesas = db.prepare(`
+    SELECT me.codigo, me.fase, me.criadaEm, CASE WHEN me.dono = ? THEN 'dono' ELSE 'membro' END as papel
     FROM membros m JOIN mesas me ON m.codigo = me.codigo
-    WHERE m.uid = ? AND me.dono != ?
+    WHERE m.uid = ? ORDER BY me.criadaEm DESC
   `).all(req.uid, req.uid);
-  res.json({ mesas: [...criadas, ...membro] });
+  res.json({ mesas });
 });
 
-app.post("/api/mesa/criar", authTokenMw, (req, res) => {
+// ── API: Mesa (criar / entrar / sair) ──
+function criarMesa(req, res) {
   const nome = texto(req.body?.nome, 30) || "Jogador";
   for (let tentativa = 0; tentativa < 6; tentativa++) {
-    const codigo = Array.from({ length: 5 }, () => ALFABETO[Math.floor(Math.random() * ALFABETO.length)]).join("");
-    const existe = db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo);
-    if (existe) continue;
+    const codigo = Array.from({ length: 5 }, () => ALFABETO[crypto.randomInt(ALFABETO.length)]).join("");
+    if (db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo)) continue;
     db.prepare("INSERT INTO mesas (codigo, dono, criadaEm) VALUES (?, ?, ?)").run(codigo, req.uid, agora());
-    db.prepare("INSERT INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, req.uid, nome);
-    return res.json({ codigo });
+    db.prepare("INSERT INTO membros (codigo, uid, nome, ultimaAtividade) VALUES (?, ?, ?, ?)").run(codigo, req.uid, nome, agora());
+    return res.json({ codigo, uid: req.uid });
   }
   erro(res, 503, "Não consegui criar a mesa.");
-});
-
-app.post("/api/mesa/entrar/:codigo", authTokenMw, (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
+}
+function entrarMesa(codigoBruto, req, res) {
+  const codigo = codigoValido(codigoBruto);
   if (!codigo) return erro(res, 400, "Código inválido.");
   const nome = texto(req.body?.nome, 30) || "Jogador";
-  const mesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-  if (!mesa) return erro(res, 404, "Mesa não encontrada.");
-  const total = db.prepare("SELECT COUNT(*) as c FROM membros WHERE codigo = ?").get(codigo).c;
-  if (total >= 6) return erro(res, 429, "Mesa cheia.");
-  db.prepare("INSERT OR REPLACE INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, req.uid, nome);
+  if (!db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo)) return erro(res, 404, "Mesa não encontrada.");
+  if (!ehMembro(codigo, req.uid)) {
+    const total = db.prepare("SELECT COUNT(*) as c FROM membros WHERE codigo = ?").get(codigo).c;
+    if (total >= 6) return erro(res, 409, "Mesa cheia (6 jogadores).");
+    db.prepare("INSERT INTO membros (codigo, uid, nome, ultimaAtividade) VALUES (?, ?, ?, ?)").run(codigo, req.uid, nome, agora());
+  } else {
+    db.prepare("UPDATE membros SET nome = ? WHERE codigo = ? AND uid = ?").run(nome, codigo, req.uid);
+  }
   broadcast(codigo, "membro", { uid: req.uid, nome });
-  res.json({ codigo });
-});
+  res.json({ codigo, uid: req.uid });
+}
 
-app.post("/api/mesa/:codigo/sair", authTokenMw, (req, res) => {
+app.post("/api/mesa/criar", authMw, criarMesa);
+app.post("/api/criar-mesa", authMw, criarMesa);                                 // rota antiga
+app.post("/api/mesa/entrar/:codigo", authMw, (req, res) => entrarMesa(req.params.codigo, req, res));
+app.post("/api/entrar-mesa", authMw, (req, res) => entrarMesa(req.body?.codigo, req, res)); // rota antiga
+
+app.post("/api/mesa/:codigo/sair", authMw, (req, res) => {
   const codigo = codigoValido(req.params.codigo);
   if (!codigo) return erro(res, 400, "Código inválido.");
   db.prepare("DELETE FROM membros WHERE codigo = ? AND uid = ?").run(codigo, req.uid);
@@ -373,220 +448,155 @@ app.post("/api/mesa/:codigo/sair", authTokenMw, (req, res) => {
 });
 
 // ── API: Google OAuth (PKCE com Web Application) ──
-const GOOGLE_CLIENT_ID = "SUA_GOOGLE_CLIENT_ID";
-const GOOGLE_CLIENT_SECRET = "SUA_GOOGLE_CLIENT_SECRET";
-const GOOGLE_REDIRECT_URI = "https://download.proflow.online/auth/google/callback";
-
-// Armazena estados PKCE pendentes { state -> { code_verifier, criadoEm } }
-const _pkceStates = {};
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "SUA_GOOGLE_CLIENT_ID";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "SUA_GOOGLE_CLIENT_SECRET";
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || "https://download.proflow.online/auth/google/callback";
+const _pkceStates = {}; // state -> { codeVerifier, criadoEm } | { token, usuario, criadoEm }
+setInterval(() => { const t = agora(); for (const k in _pkceStates) if (t - _pkceStates[k].criadoEm > 15 * 60_000) delete _pkceStates[k]; }, 60_000).unref();
+const escaparHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 app.post("/api/auth/google/iniciar", async (req, res) => {
   try {
-    const state = uid() + uid(); // 16 chars
-    const codeVerifier = crypto.randomBytes(32).base64urlSlice();
-    const hash = crypto.createHash("sha256");
-    hash.update(codeVerifier);
-    const codeChallenge = hash.digest().base64urlSlice();
-
-    _pkceStates[state] = { codeVerifier, criadoEm: Date.now() };
-
+    const state = crypto.randomBytes(12).toString("base64url");
+    const codeVerifier = crypto.randomBytes(32).toString("base64url");
+    const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+    _pkceStates[state] = { codeVerifier, criadoEm: agora() };
     const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      response_type: "code",
-      redirect_uri: GOOGLE_REDIRECT_URI,
-      scope: "openid email profile",
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-      access_type: "offline"
+      client_id: GOOGLE_CLIENT_ID, response_type: "code", redirect_uri: GOOGLE_REDIRECT_URI,
+      scope: "openid email profile", state, code_challenge: codeChallenge, code_challenge_method: "S256", access_type: "offline",
     });
-
-    res.json({
-      auth_url: "https://accounts.google.com/o/oauth2/v2/auth?" + params,
-      state
-    });
+    res.json({ auth_url: "https://accounts.google.com/o/oauth2/v2/auth?" + params, state });
   } catch (e) {
-    erro(res, 502, "Erro ao iniciar OAuth: " + String(e));
+    erro(res, 502, "Erro ao iniciar o login com Google.");
   }
 });
 
 app.get("/auth/google/callback", async (req, res) => {
   const { code, state } = req.query;
   if (!code || !state) return res.type("html").send("<h2>Faltam parâmetros (code, state).</h2>");
-
   const dados = _pkceStates[state];
-  if (!dados) return res.type("html").send("<h2>State inválido ou expirado.</h2>");
-
+  if (!dados || !dados.codeVerifier) return res.type("html").send("<h2>Login expirado. Volte ao app e tente de novo.</h2>");
   delete _pkceStates[state];
-
   try {
     const tr = await (await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        code,
-        code_verifier: dados.codeVerifier,
-        redirect_uri: GOOGLE_REDIRECT_URI,
-        grant_type: "authorization_code"
-      })
+      body: new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, code, code_verifier: dados.codeVerifier, redirect_uri: GOOGLE_REDIRECT_URI, grant_type: "authorization_code" }),
     })).json();
-
-    if (tr.error) return res.type("html").send("<h2>Erro Google: " + (tr.error_description || tr.error) + "</h2>");
-
-    // Buscar user info
-    const userR = await (await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { "Authorization": "Bearer " + tr.access_token }
-    })).json();
-
-    if (userR.error) return res.type("html").send("<h2>Erro ao obter dados do usuário.</h2>");
-
-    // Criar ou buscar usuário
-    const email = userR.email;
-    const nome = userR.name || userR.given_name || "Jogador";
-    let user = db.prepare("SELECT id, nome, email FROM usuarios WHERE email = ?").get(email);
+    if (tr.error) return res.type("html").send("<h2>Erro do Google: " + escaparHtml(tr.error_description || tr.error) + "</h2>");
+    const userR = await (await fetch("https://www.googleapis.com/oauth2/v2/userinfo", { headers: { Authorization: "Bearer " + tr.access_token } })).json();
+    if (userR.error || !userR.email) return res.type("html").send("<h2>Erro ao obter os dados da conta Google.</h2>");
+    const email = String(userR.email).toLowerCase();
+    const nome = texto(userR.name || userR.given_name || "Jogador", 30);
+    let user = db.prepare("SELECT id, nome, email FROM usuarios WHERE lower(email) = ?").get(email);
     if (!user) {
       const id = uid();
-      db.prepare("INSERT INTO usuarios (id, nome, email, senha, criadoEm) VALUES (?, ?, ?, '', ?)").run(id, nome, email, Date.now());
+      db.prepare("INSERT INTO usuarios (id, nome, email, senha, criadoEm) VALUES (?, ?, ?, '', ?)").run(id, nome, email, agora());
       user = { id, nome, email };
     }
-
-    const token = gerarToken();
-    db.prepare("INSERT INTO tokens (token, userId, criadoEm) VALUES (?, ?, ?)").run(token, user.id, Date.now());
-
-    // Página de sucesso — mostra o código e armazena o resultado
-    _pkceStates[state] = { token, usuario: user };
-    res.type("html").send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Login OK</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0a0a1a;color:#e0e0e0;text-align:center}.card{background:#1a1a3a;border-radius:16px;padding:40px 32px;max-width:400px;box-shadow:0 4px 30px rgba(0,0,0,.4)}.ok{font-size:48px;margin-bottom:8px}.codigo{font-size:28px;font-weight:700;letter-spacing:4px;color:#ffd700;background:#2a2a4a;border-radius:10px;padding:12px 20px;margin:16px 0;word-break:break-all}</style></head><body><div class="card"><div class="ok">✓</div><h2>Login com Google</h2><p>Volte para o app e digite o código abaixo:</p><div class="codigo">${state}</div><p style="font-size:14px;color:#888">O app verificará automaticamente.</p></div></body></html>`);
+    _pkceStates[state] = { token: emitirToken(user.id), usuario: user, criadoEm: agora() };
+    res.type("html").send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Login OK</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0a0a1a;color:#e0e0e0;text-align:center}.card{background:#1a1a3a;border-radius:16px;padding:40px 32px;max-width:400px}.ok{font-size:48px}</style></head><body><div class="card"><div class="ok">✓</div><h2>Login com Google concluído</h2><p>Pode voltar para o app: ele entra sozinho em alguns segundos.</p></div></body></html>`);
   } catch (e) {
-    res.type("html").send("<h2>Erro interno: " + String(e) + "</h2>");
+    console.error("[google]", e);
+    res.type("html").send("<h2>Erro interno no login com Google. Tente de novo.</h2>");
   }
 });
 
-app.post("/api/auth/google/verificar", async (req, res) => {
-  const state = texto(req.body?.state, 30);
+app.post("/api/auth/google/verificar", (req, res) => {
+  const state = texto(req.body?.state, 40);
   if (!state) return erro(res, 400, "state obrigatório.");
-
   const dados = _pkceStates[state];
   if (!dados || !dados.token) return res.json({ status: "pending" });
-
-  const { token, usuario } = dados;
-  // Limpa após 1 uso
   delete _pkceStates[state];
-
-  res.json({ status: "done", token, usuario });
+  const aparelho = req.headers["x-user-id"];
+  if (aparelho) vincularAparelho(dados.usuario.id, aparelho);
+  res.json({ status: "done", token: dados.token, usuario: dados.usuario });
 });
 
-// ── API: Mesa ──
-
-app.post("/api/criar-mesa", (req, res) => {
-  const userHeader = texto(req.headers["x-user-id"], 36);
-  const userId = userHeader || uid();
-  const nome = texto(req.body?.nome, 30) || "Jogador";
-  for (let tentativa = 0; tentativa < 6; tentativa++) {
-    const codigo = Array.from({ length: 5 }, () => ALFABETO[Math.floor(Math.random() * ALFABETO.length)]).join("");
-    const existe = db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo);
-    if (existe) continue;
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm) VALUES (?, ?, ?)").run(codigo, userId, agora());
-    db.prepare("INSERT INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, userId, nome);
-    return res.json({ codigo, uid: userId });
-  }
-  erro(res, 503, "Não consegui criar a mesa.");
-});
-
-app.post("/api/entrar-mesa", (req, res) => {
-  const userHeader = texto(req.headers["x-user-id"], 36);
-  const userId = userHeader || uid();
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const nome = texto(req.body?.nome, 30) || "Jogador";
-  const mesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-  if (!mesa) return erro(res, 404, "Mesa não encontrada.");
-  const total = db.prepare("SELECT COUNT(*) as c FROM membros WHERE codigo = ?").get(codigo).c;
-  if (total >= 6) return erro(res, 429, "Mesa cheia.");
-  db.prepare("INSERT OR REPLACE INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, userId, nome);
-  broadcast(codigo, "membro", { uid: userId, nome });
-  res.json({ codigo, uid: userId });
-});
-
+// ── API: configuração da mesa ──
 app.post("/api/configurar-mesa", authMw, (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const d = req.body || {};
   const campos = {};
   if (["epico", "humor", "sombrio"].includes(d.tom)) campos.tom = d.tom;
   if (typeof d.vetos === "string") campos.vetos = texto(d.vetos, 300);
   if (["rapido", "caprichado"].includes(d.qualidade)) campos.qualidade = d.qualidade;
   if (typeof d.cdVisivel === "boolean") campos.cdVisivel = d.cdVisivel ? 1 : 0;
-  if (Object.keys(campos).length) salvarMesa(codigo, campos);
+  if (Object.keys(campos).length) { salvarMesa(codigo, campos); broadcast(codigo, "atualizar", {}); }
   res.json({ ok: true });
 });
 
 app.post("/api/reiniciar-mesa", authMw, (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const mesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-  if (!mesa || mesa.dono !== req.uid) return erro(res, 403, "Só o dono pode reiniciar.");
-  db.prepare("DELETE FROM log WHERE codigo = ?").run(codigo);
-  const fichas = db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo);
-  for (const f of fichas) {
-    const ficha = R.normalizarFicha(json(f.dados), f.uid);
-    ficha.pv = ficha.pvMax;
-    db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(ficha), codigo, f.uid);
-  }
-  salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "Taverna Javali Cego", fundo: "" });
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const mesa = db.prepare("SELECT dono FROM mesas WHERE codigo = ?").get(codigo);
+  if (mesa.dono !== req.uid) return erro(res, 403, "Só o dono pode reiniciar.");
+  db.transaction(() => {
+    db.prepare("DELETE FROM log WHERE codigo = ?").run(codigo);
+    for (const f of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) {
+      const ficha = R.normalizarFicha(json(f.dados), f.uid);
+      ficha.pv = ficha.pvMax;
+      salvarFicha(codigo, ficha);
+    }
+    salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "Taverna Javali Cego", fundo: "" });
+  })();
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
 
 // ── API: Personagem ──
-
-app.post("/api/criar-personagem", authMw, (req, res) => {
+app.post("/api/criar-personagem", authMw, limiteIA, async (req, res) => {
   const conceito = texto(req.body?.conceito, 300);
   if (!conceito) return erro(res, 400, "Descreva seu personagem.");
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
-  const prompt = `${M.CRICACAO}\n\nConceito: ${conceito}`;
-  M.perguntar(OPENROUTER_KEY, prompt, "rapido", 2000)
-    .then((r) => res.json({ ficha: R.normalizarFicha(r, req.uid, conceito) }))
-    .catch((e) => erro(res, 502, e.message || "Erro ao criar personagem."));
+  try {
+    const r = await M.perguntar(OPENROUTER_KEY, `${M.CRICACAO}\n\nConceito: ${conceito}`, "rapido", 2000);
+    const ficha = R.normalizarFicha({ ...r, pv: undefined, xp: 0, nivel: 1 }, req.uid, conceito);
+    res.json({ ficha });
+  } catch (e) { erro(res, 502, msgErro(e)); }
 });
 
 app.post("/api/salvar-ficha", authMw, (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const antiga = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(codigo, req.uid);
-  const mesa = db.prepare("SELECT fase FROM mesas WHERE codigo = ?").get(codigo);
-  const nova = R.normalizarFicha(req.body?.ficha, req.uid);
-  if (!antiga || mesa?.fase === "lobby") nova.pv = req.body?.ficha?.pv === undefined ? nova.pvMax : nova.pv;
-  else {
-    const a = json(antiga.dados);
-    nova.pv = Math.min(nova.pvMax, Math.max(0, Math.abs(nova.pv - a.pv) <= 1 ? nova.pv : a.pv));
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const recebida = req.body?.ficha || {};
+  const antigaRow = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(codigo, req.uid);
+  const antiga = antigaRow ? R.normalizarFicha(json(antigaRow.dados), req.uid) : null;
+  const mesa = db.prepare("SELECT fase, combate FROM mesas WHERE codigo = ?").get(codigo);
+  // XP e nível são do servidor: o app não os altera
+  const nova = R.normalizarFicha({ ...recebida, xp: antiga?.xp ?? 0, nivel: antiga?.nivel ?? 1 }, req.uid);
+  if (!antiga || mesa.fase === "lobby") {
+    // fora da sessão: vida cheia, a não ser que o jogador mande outra
+    if (recebida.pv === undefined || recebida.pv === null) nova.pv = nova.pvMax;
+  } else {
+    // durante a sessão, o jogador só ajusta a vida de 1 em 1 (botões −1/+1) e nunca durante um combate
+    const pedida = Number(recebida.pv);
+    const ajusteManual = !json(mesa.combate) && Number.isFinite(pedida) && Math.abs(pedida - antiga.pv) <= 1;
+    nova.pv = ajusteManual ? Math.max(0, Math.min(nova.pvMax, pedida)) : Math.min(antiga.pv, nova.pvMax);
   }
   db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(codigo, req.uid, JSON.stringify(nova));
   broadcast(codigo, "ficha", { uid: req.uid });
   res.json({ ficha: nova });
 });
 
-app.post("/api/gerar-imagem", authMw, async (req, res) => {
+app.post("/api/gerar-imagem", authMw, limiteIA, async (req, res) => {
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
   const prompt = texto(req.body?.prompt, 500);
   if (!prompt) return erro(res, 400, "Descreva a imagem.");
   try {
-    let url = await M.gerarImagem(OPENROUTER_KEY, `Ilustração para RPG de fantasia: ${prompt}`, SERVER_BASE_URL);
-    if (!url) return erro(res, 502, "Não foi possível gerar a imagem.");
+    const url = await M.gerarImagem(OPENROUTER_KEY, `Ilustração para RPG de fantasia: ${prompt}`, SERVER_BASE_URL);
+    if (!url) return erro(res, 502, "Não foi possível gerar a imagem agora.");
     res.json({ url });
-  } catch (e) { erro(res, 502, e.message || "Erro ao gerar imagem."); }
+  } catch (e) { erro(res, 502, "Não foi possível gerar a imagem agora."); }
 });
 
-// ── API: Admin ──
-
+// ── API: Admin (desligado se ADMIN_PASS não estiver definido) ──
 app.post("/api/admin/login", (req, res) => {
+  if (!ADMIN_PASS) return erro(res, 503, "Painel desativado. Defina ADMIN_PASS no .env do servidor.");
   const { user, pass } = req.body || {};
-  if (user !== ADMIN_USER || pass !== ADMIN_PASS) return erro(res, 401, "Usuário ou senha inválidos.");
-  const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-  _adminTokens.add(token);
-  // Remove token antigo do mesmo user (se houver)
-  setTimeout(() => _adminTokens.delete(token), 86400000); // expira em 24h
+  const ok = typeof user === "string" && typeof pass === "string" && user === ADMIN_USER &&
+    pass.length === ADMIN_PASS.length && crypto.timingSafeEqual(Buffer.from(pass), Buffer.from(ADMIN_PASS));
+  if (!ok) return erro(res, 401, "Usuário ou senha inválidos.");
+  const token = crypto.randomBytes(24).toString("hex");
+  _adminTokens.set(token, agora() + 24 * 3600_000);
   res.json({ token, user: ADMIN_USER });
 });
 
@@ -604,7 +614,7 @@ app.get("/api/admin/mesas/:codigo", adminMw, (req, res) => {
   const cod = req.params.codigo;
   const mesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(cod);
   if (!mesa) return erro(res, 404, "Mesa não encontrada.");
-  const fichas = db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(cod).map(r => {
+  const fichas = db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(cod).map((r) => {
     try { return { uid: r.uid, ...JSON.parse(r.dados) }; } catch { return { uid: r.uid }; }
   });
   const membros = db.prepare("SELECT uid, nome, ultimaAtividade FROM membros WHERE codigo = ?").all(cod);
@@ -613,456 +623,406 @@ app.get("/api/admin/mesas/:codigo", adminMw, (req, res) => {
 
 app.post("/api/admin/mesas", adminMw, (req, res) => {
   const { codigo, cena, tom } = req.body || {};
-  const cod = (codigo || Math.random().toString(36).slice(2, 7)).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+  const cod = String(codigo || Math.random().toString(36).slice(2, 7)).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
   if (cod.length < 3) return erro(res, 400, "Código inválido.");
-  const existente = db.prepare("SELECT codigo FROM mesas WHERE codigo = ?").get(cod);
-  if (existente) return erro(res, 409, "Código já existe.");
+  if (db.prepare("SELECT codigo FROM mesas WHERE codigo = ?").get(cod)) return erro(res, 409, "Código já existe.");
   db.prepare("INSERT INTO mesas (codigo, dono, cena, tom) VALUES (?, 'admin', ?, ?)").run(cod, cena || "Taverna Javali Cego", tom || "epico");
   res.json({ ok: true, codigo: cod });
 });
 
 app.put("/api/admin/mesas/:codigo", adminMw, (req, res) => {
-  const cod = req.params.codigo;
-  const campos = [];
-  const params = [];
+  const campos = [], params = [];
   for (const k of ["cena", "fase", "tom", "resumo", "fundo"]) {
     if (req.body[k] !== undefined) { campos.push(`${k} = ?`); params.push(req.body[k]); }
   }
   if (!campos.length) return erro(res, 400, "Nada a alterar.");
-  params.push(cod);
+  params.push(req.params.codigo);
   db.prepare(`UPDATE mesas SET ${campos.join(", ")} WHERE codigo = ?`).run(...params);
   res.json({ ok: true });
 });
 
 app.delete("/api/admin/mesas/:codigo", adminMw, (req, res) => {
   const cod = req.params.codigo;
-  if (cod === "J6T5N") return erro(res, 403, "Mesa principal protegida.");
-  db.prepare("DELETE FROM log WHERE codigo = ?").run(cod);
-  db.prepare("DELETE FROM fichas WHERE codigo = ?").run(cod);
-  db.prepare("DELETE FROM membros WHERE codigo = ?").run(cod);
-  db.prepare("DELETE FROM reacoes WHERE codigo = ?").run(cod);
-  db.prepare("DELETE FROM sessoes WHERE codigo = ?").run(cod);
-  db.prepare("DELETE FROM mesas WHERE codigo = ?").run(cod);
+  if (cod === (process.env.MESA_PROTEGIDA || "J6T5N")) return erro(res, 403, "Mesa principal protegida.");
+  db.transaction(() => {
+    for (const t of ["log", "fichas", "membros", "reacoes", "sessoes", "mesas"]) db.prepare(`DELETE FROM ${t} WHERE codigo = ?`).run(cod);
+  })();
   res.json({ ok: true });
 });
 
 app.post("/api/admin/fichas/:codigo", adminMw, (req, res) => {
-  const cod = req.params.codigo;
   const f = req.body || {};
-  const uid = f.uid || `admin_${Math.random().toString(36).slice(2, 8)}`;
   if (!f.nome) return erro(res, 400, "Nome obrigatório.");
-  const ficha = {
-    uid, nome: f.nome, raca: f.raca || "Humano", classe: f.classe || "Guerreiro",
-    pv: Math.max(1, Number(f.pv) || 20), pvMax: Math.max(1, Number(f.pvMax) || 20),
-    nivel: Math.max(1, Number(f.nivel) || 1), xp: Math.max(0, Number(f.xp) || 0),
-    forca: 10, destreza: 10, inteligencia: 10, presenca: 10, ataques: [], pericias: [], inventario: [], moedas: 0
-  };
-  db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(cod, uid, JSON.stringify(ficha));
-  res.json({ ok: true, uid });
+  const fuid = f.uid || `admin_${Math.random().toString(36).slice(2, 8)}`;
+  const ficha = R.normalizarFicha({ nome: f.nome, raca: f.raca, classe: f.classe, pv: f.pv, nivel: f.nivel, xp: f.xp }, fuid);
+  db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(req.params.codigo, fuid, JSON.stringify(ficha));
+  res.json({ ok: true, uid: fuid });
 });
 
 app.put("/api/admin/fichas/:codigo/:uid", adminMw, (req, res) => {
-  const cod = req.params.codigo, uid = req.params.uid;
-  const existente = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(cod, uid);
-  let f = existente ? JSON.parse(existente.dados) : {};
+  const cod = req.params.codigo, fuid = req.params.uid;
+  const existente = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(cod, fuid);
+  const f = existente ? json(existente.dados) || {} : {};
   for (const k of ["nome", "raca", "classe"]) if (req.body[k] !== undefined) f[k] = req.body[k];
-  if (req.body.pv !== undefined) f.pv = Math.max(0, Number(req.body.pv));
-  if (req.body.pvMax !== undefined) f.pvMax = Math.max(1, Number(req.body.pvMax));
-  if (req.body.nivel !== undefined) f.nivel = Math.max(1, Number(req.body.nivel));
-  if (req.body.xp !== undefined) f.xp = Math.max(0, Number(req.body.xp));
-  db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(cod, uid, JSON.stringify(f));
+  for (const k of ["pv", "nivel", "xp"]) if (req.body[k] !== undefined) f[k] = Math.max(0, Number(req.body[k]) || 0);
+  db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(cod, fuid, JSON.stringify(R.normalizarFicha(f, fuid)));
   res.json({ ok: true });
 });
 
 app.delete("/api/admin/fichas/:codigo/:uid", adminMw, (req, res) => {
-  const cod = req.params.codigo, uid = req.params.uid;
-  db.prepare("DELETE FROM fichas WHERE codigo = ? AND uid = ?").run(cod, uid);
+  db.prepare("DELETE FROM fichas WHERE codigo = ? AND uid = ?").run(req.params.codigo, req.params.uid);
   res.json({ ok: true });
 });
 
 // ── API: Jogo ──
 
-app.post("/api/comecar-aventura", authMw, async (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+app.post("/api/comecar-aventura", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  const ctx = carregar(codigo, req.uid);
+  if (ctx.mesa.fase === "jogo") return erro(res, 409, "A aventura já começou.");
+  if (!Object.keys(ctx.fichas).length) return erro(res, 400, "Crie pelo menos um personagem.");
+  const msgTrava = travar(codigo, req.uid, ctx.mesa.membros[req.uid] || "alguém");
+  if (msgTrava) return erro(res, 409, msgTrava);
   try {
-    const fichas = db.prepare("SELECT COUNT(*) as c FROM fichas WHERE codigo = ?").get(codigo).c;
-    if (!fichas) return erro(res, 400, "Crie pelo menos um personagem.");
-    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: "Taverna Javali Cego", fundo: "", resumo: "", combate: null, rolagem: null, processando: null });
-    registrar(codigo, { tipo: "sys", texto: "A sessão começou." });
-    const ctx = carregar(codigo, req.uid);
-    if (!ctx) return erro(res, 404, "Não encontrado.");
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e coloque o grupo na taverna Javali Cego, quando Odila Ventoforte se aproxima. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
+    const prompt = `${M.contexto({ ...ctx.mesa, resumo: "", combate: null }, Object.values(ctx.fichas), [])}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e coloque o grupo na taverna Javali Cego, quando Odila Ventoforte se aproxima. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
     const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
+    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: texto(r?.cena, 60) || "Taverna Javali Cego", fundo: "", resumo: texto(r?.resumo, 900), combate: null, rolagem: null });
+    registrar(codigo, { tipo: "sys", texto: "A sessão começou." });
     if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
-    const campos = {};
-    if (r?.cena) campos.cena = texto(r.cena, 60);
-    if (Object.keys(campos).length) salvarMesa(codigo, campos);
-    broadcast(codigo, "nova", { narracao: r?.narracao || "" });
     res.json({ ok: true });
-  } catch (e) { erro(res, 502, e.message); }
+  } catch (e) { erro(res, 502, msgErro(e)); }
+  finally { destravar(codigo); }
 });
 
-app.post("/api/agir", authMw, async (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+app.post("/api/agir", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const acao = texto(req.body?.texto, 500);
   if (!acao) return erro(res, 400, "Diga o que faz.");
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  const ctx = carregar(codigo, req.uid);
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Crie seu personagem.");
+  if (ctx.mesa.fase !== "jogo") return erro(res, 400, "A aventura ainda não começou.");
+  if (ctx.mesa.rolagem) return erro(res, 400, "Há uma rolagem pendente.");
+  const combate = ctx.mesa.combate;
+  const vez = R.vezAtual(combate);
+  if (vez) {
+    if (combate.pausado) return erro(res, 400, "Combate pausado. Retome para agir.");
+    const atu = ctx.fichas[vez.id];
+    const expirou = combate.inicioVez && agora() - combate.inicioVez > 600_000;
+    // Vez travada (inimigo, jogador caído/que saiu, ou 10 min sem jogar): resolve e devolve o controle
+    if (vez.tipo !== "pj" || !atu || atu.pv <= 0 || (expirou && vez.id !== req.uid)) {
+      registrar(codigo, { tipo: "sys", texto: vez.tipo === "pj" ? `${vez.nome} não pode agir agora — o combate segue.` : "O combate segue." });
+      await avancarCombate(ctx, vez.tipo === "pj" ? vez.id : null);
+      return erro(res, 409, "A vez mudou. Confira de quem é a vez e tente de novo.");
+    }
+    if (vez.id !== req.uid) return erro(res, 400, `Vez de ${vez.nome}.`);
+  }
+  if (f.pv <= 0) return erro(res, 400, `${f.nome} está caído.`);
+  const msgTrava = travar(codigo, req.uid, ctx.mesa.membros[req.uid] || f.nome);
+  if (msgTrava) return erro(res, 409, msgTrava);
+  const [idAcao] = registrar(codigo, { tipo: "acao", autor: req.uid, nome: f.nome, texto: acao });
   try {
-    const ctx = carregar(codigo, req.uid);
-    if (!ctx) return erro(res, 404, "Mesa não encontrada.");
-    const f = ctx.fichas[req.uid];
-    if (!f) return erro(res, 400, "Crie seu personagem.");
-    if (ctx.mesa.fase !== "jogo") return erro(res, 400, "Aventura não começou.");
-    const rol = json(ctx.mesa.rolagem);
-    if (rol) return erro(res, 400, "Há uma rolagem pendente.");
-    const vez = R.vezAtual(json(ctx.mesa.combate));
-    if (vez) {
-      const combate = json(ctx.mesa.combate);
-      // Se o combate está pausado, ninguém age
-      if (combate?.pausado) return erro(res, 400, "Combate pausado. Retome para agir.");
-      // Se o jogador da vez está caído ou foi excluído, avança o combate automaticamente
-      const atu = ctx.fichas[vez.id];
-      if (!atu || atu.pv <= 0) {
-        registrar(ctx.codigo, { tipo: "sys", texto: `${vez.nome} não pode agir — pulando para o próximo.` });
-        await avancarCombate(ctx);
-        const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-        broadcast(codigo, "atualizar", { mesa: dadosMesa });
-        return res.json({ rolagem: null });
-      }
-      // Se o turno expirou (>10 min), avança automaticamente
-      if (combate?.inicioVez && Date.now() - combate.inicioVez > 600000) {
-        registrar(ctx.codigo, { tipo: "sys", texto: `Tempo de ${vez.nome} esgotado (10 min) — avançando.` });
-        // Pula o jogador que esgotou o tempo
-        ctx.uid = vez.id;
-        await avancarCombate(ctx);
-        const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-        broadcast(codigo, "atualizar", { mesa: dadosMesa });
-        return res.json({ rolagem: null });
-      }
-      if (vez.id !== req.uid) return erro(res, 400, `Vez de ${vez.nome}.`);
-    }
-    if (f.pv <= 0) return erro(res, 400, `${f.nome} está caído.`);
-    const p = json(ctx.mesa.processando);
-    if (p) {
-      const expirado = agora() - p.desde >= TRAVA_MS;
-      if (p.por !== req.uid && !expirado)
-        return erro(res, 429, `O Mestre está narrando a ação de ${p.nome}.`);
-      if (p.por === req.uid && !expirado)
-        return erro(res, 429, "Sua ação já está sendo processada.");
-    }
-    salvarMesa(codigo, { processando: JSON.stringify({ por: req.uid, nome: ctx.mesa.membros?.[req.uid] || f.nome, desde: agora() }) });
-    registrar(codigo, { tipo: "acao", autor: req.uid, nome: f.nome, texto: acao });
-    const extra = json(ctx.mesa.combate) ? `É o turno de ${f.nome} no combate. Se for um ataque, peça um teste do tipo "ataque". Se houver inimigos visíveis e o jogador não atacá-los, pode iniciar combate com eles.` : "";
+    const extra = combate ? `É o turno de ${f.nome} no combate. Se for um ataque, peça um teste do tipo "ataque" usando o nome exato de um ataque da ficha e o id do inimigo.` : "";
     const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: ${f.nome} (id ${req.uid}) declara a ação: "${acao.replace(/"/g, "'")}"\n${extra}`, ctx.mesa.qualidade || "rapido", 3000, 0.7);
-    await aplicar(ctx, r, true, req.uid);
-    salvarMesa(codigo, { processando: null });
-    // Se não gerou rolagem, avança combate
-    const novoRol = json(db.prepare("SELECT rolagem FROM mesas WHERE codigo = ?").get(codigo).rolagem);
-    if (!novoRol && json(ctx.mesa.combate)) await avancarCombate(ctx);
-    const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-    broadcast(codigo, "atualizar", { mesa: dadosMesa });
-    res.json({ rolagem: novoRol });
-  } catch (e) { salvarMesa(codigo, { processando: null }); erro(res, 502, e.message); }
+    const { rolagem, combateNovo } = await aplicar(ctx, r, true, req.uid);
+    if (combateNovo) await avancarCombate(ctx, null);          // inimigos que ganharam a iniciativa agem já
+    else if (!rolagem && combate) await avancarCombate(ctx, req.uid);
+    res.json({ rolagem });
+  } catch (e) {
+    // a IA falhou: tira a ação do diário para o jogador poder tentar de novo
+    db.prepare("DELETE FROM log WHERE id = ?").run(idAcao);
+    broadcast(codigo, "nova", {});
+    erro(res, 502, msgErro(e));
+  } finally { destravar(codigo); }
 });
 
-app.post("/api/rolar", authMw, async (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+app.post("/api/rolar", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const valor = req.body?.valor === undefined || req.body?.valor === null ? null : Number(req.body.valor);
-  if (valor !== null && !(Number.isInteger(valor) && valor >= 1 && valor <= 20))
-    return erro(res, 400, "O d20 vai de 1 a 20.");
-  if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  if (valor !== null && !(Number.isInteger(valor) && valor >= 1 && valor <= 20)) return erro(res, 400, "O d20 vai de 1 a 20.");
+  const ctx = carregar(codigo, req.uid);
+  const rol = ctx.mesa.rolagem;
+  if (!rol || rol.jogador !== req.uid) return erro(res, 400, "Não há rolagem pendente para você.");
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Personagem não encontrado.");
+  const msgTrava = travar(codigo, req.uid, ctx.mesa.membros[req.uid] || f.nome);
+  if (msgTrava) return erro(res, 409, msgTrava);
   try {
-    const ctx = carregar(codigo, req.uid);
-    if (!ctx) return erro(res, 404, "Mesa não encontrada.");
-    const rol = json(ctx.mesa.rolagem);
-    if (!rol || rol.jogador !== req.uid) return erro(res, 400, "Não há rolagem pendente para você.");
-    const f = ctx.fichas[req.uid];
-    if (!f) return erro(res, 400, "Personagem não encontrado.");
     const natural = valor ?? R.d(20);
-    const combate = json(ctx.mesa.combate);
-    const res2 = R.resolverRolagem(rol, natural, combate, f.nome);
+    const combate = ctx.mesa.combate;
+    const r2 = R.resolverRolagem(rol, natural, combate, f.nome);
     registrar(codigo, {
-      tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${res2.natural}${R.sinal(rol.bonus)}${rol.bonus} = ${res2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}`,
-      res: res2.dano !== undefined ? `acertou, ${res2.dano} de dano` : res2.sucesso ? "sucesso" : "falha",
-      ok: res2.sucesso ? 1 : 0,
+      tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${r2.natural}${R.sinal(rol.bonus)} = ${r2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}`,
+      res: r2.dano !== undefined ? `acertou, ${r2.dano} de dano` : r2.sucesso ? "sucesso" : "falha",
+      ok: r2.sucesso,
     });
-    const campos = { rolagem: null };
-    if (combate) campos.combate = JSON.stringify(combate);
-    salvarMesa(codigo, campos);
-    const fim = R.combateAcabou(combate, ctx.fichas);
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: Resultado de um teste. Narre a consequência.\n${res2.descricao}${fim ? "\nTodos os inimigos foram derrotados: narre o fim do combate." : ""}\nNão peça outro teste agora (deixe "teste" nulo).`;
-    const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.5);
-    await aplicar(ctx, { ...r, combate: null, efeitos: [] }, false, req.uid);
-    if (json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo).combate)) await avancarCombate(ctx);
-    const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-    broadcast(codigo, "atualizar", { mesa: dadosMesa });
-    res.json({ natural: res2.natural, total: res2.total, sucesso: res2.sucesso, dano: res2.dano ?? null });
-  } catch (e) { erro(res, 502, e.message); }
+    salvarMesa(codigo, combate ? { rolagem: null, combate } : { rolagem: null });
+    ctx.mesa.combate = combate;
+    const fim = combate && R.combateAcabou(combate, ctx.fichas);
+    if (OPENROUTER_KEY) {
+      try {
+        const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: Resultado de um teste. Narre a consequência.\n${r2.descricao}${fim ? "\nTodos os inimigos foram derrotados: narre o fim do combate." : ""}\nNão peça outro teste agora (deixe "teste" nulo).`;
+        const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.5);
+        await aplicar(ctx, { ...r, combate: null, efeitos: [] }, false, req.uid);
+      } catch (e) {
+        registrar(codigo, { tipo: "sys", texto: "O Mestre não conseguiu narrar este resultado, mas ele vale." });
+      }
+    }
+    if (combate) await avancarCombate(ctx, req.uid);
+    res.json({ natural: r2.natural, total: r2.total, sucesso: r2.sucesso, dano: r2.dano ?? null });
+  } catch (e) { console.error("[rolar]", e); erro(res, 502, msgErro(e)); }
+  finally { destravar(codigo); }
 });
 
-app.post("/api/ideias", authMw, async (req, res) => {
-  const codigo = codigoValido(req.body?.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+app.post("/api/ideias", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  const ctx = carregar(codigo, req.uid);
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Crie seu personagem.");
   try {
-    const ctx = carregar(codigo, req.uid);
-    if (!ctx) return erro(res, 404, "Mesa não encontrada.");
-    const f = ctx.fichas[req.uid];
-    if (!f) return erro(res, 400, "Crie seu personagem.");
     const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem. Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.`;
     const r = await M.perguntar(OPENROUTER_KEY, prompt, "rapido", 2000);
-    res.json({ ideias: (Array.isArray(r) ? r : []).slice(0, 3).map((s) => texto(s, 160)) });
-  } catch (e) { erro(res, 502, e.message); }
+    const lista = Array.isArray(r) ? r : Array.isArray(r?.ideias) ? r.ideias : [];
+    res.json({ ideias: lista.slice(0, 3).map((s) => texto(s, 160)).filter(Boolean) });
+  } catch (e) { erro(res, 502, msgErro(e)); }
 });
 
-// ── API: Leitura (para o app) ──
+// ── API: Leitura (polling do app) ──
 
-app.get("/api/mesa/:codigo", (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const uid = req.headers["x-user-id"];
-  if (uid) {
-    const membro = db.prepare("SELECT uid FROM membros WHERE codigo = ? AND uid = ?").get(codigo, String(uid).slice(0, 36));
-    if (!membro) return erro(res, 403, "Você não é membro desta mesa.");
-    req.uid = String(uid).slice(0, 36);
-  }
+app.get("/api/mesa/:codigo", authMw, (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const mesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-  if (!mesa) return erro(res, 404, "Mesa não encontrada.");
   mesa.combate = json(mesa.combate);
   mesa.rolagem = json(mesa.rolagem);
   mesa.processando = json(mesa.processando);
+  if (mesa.processando && agora() - mesa.processando.desde >= TRAVA_MS) mesa.processando = null;
+  mesa.cdVisivel = mesa.cdVisivel !== 0;
   const membros = db.prepare("SELECT uid, nome, ultimaAtividade FROM membros WHERE codigo = ?").all(codigo);
-  const m = {};
-  const online = [];
-  const ago = agora();
-  for (const mb of membros) {
-    m[mb.uid] = mb.nome;
-    if (mb.ultimaAtividade && ago - mb.ultimaAtividade < ONLINE_WINDOW_MS) online.push(mb.uid);
-  }
-  mesa.membros = m;
-  mesa.online = online;
-  // Limpa digitando expirado e inclui
+  const t = agora();
+  mesa.membros = Object.fromEntries(membros.map((mb) => [mb.uid, mb.nome]));
+  mesa.online = membros.filter((mb) => mb.ultimaAtividade && t - mb.ultimaAtividade < ONLINE_WINDOW_MS).map((mb) => mb.uid);
   limparDigitando(codigo);
   mesa.digitando = {};
-  if (digitando.has(codigo)) {
-    for (const [uid, v] of digitando.get(codigo)) mesa.digitando[uid] = v.nome;
-  }
+  if (digitando.has(codigo)) for (const [u, v] of digitando.get(codigo)) mesa.digitando[u] = v.nome;
+  mesa.agora = t; // relógio do servidor, para o app não depender do relógio do celular
   res.json(mesa);
 });
 
-app.get("/api/mesa/:codigo/fichas", (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const uid = req.headers["x-user-id"] || _tokenUid(req);
-  if (!uid) return erro(res, 401, "X-User-Id obrigatório");
-  if (!db.prepare("SELECT uid FROM membros WHERE codigo = ? AND uid = ?").get(codigo, String(uid).slice(0, 36)))
-    return erro(res, 403, "Você não é membro desta mesa.");
-  const rows = db.prepare("SELECT * FROM fichas WHERE codigo = ?").all(codigo);
+app.get("/api/mesa/:codigo/fichas", authMw, (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const fichas = {};
-  for (const r of rows) fichas[r.uid] = R.normalizarFicha(json(r.dados), r.uid);
+  for (const r of db.prepare("SELECT * FROM fichas WHERE codigo = ?").all(codigo)) fichas[r.uid] = R.normalizarFicha(json(r.dados), r.uid);
   res.json(fichas);
 });
 
-app.get("/api/mesa/:codigo/log", (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const uid = req.headers["x-user-id"] || _tokenUid(req);
-  if (!uid) return erro(res, 401, "X-User-Id obrigatório");
-  if (!db.prepare("SELECT uid FROM membros WHERE codigo = ? AND uid = ?").get(codigo, String(uid).slice(0, 36)))
-    return erro(res, 403, "Você não é membro desta mesa.");
-  const log = db.prepare("SELECT * FROM log WHERE codigo = ? ORDER BY id DESC LIMIT 50").all(codigo).reverse();
+app.get("/api/mesa/:codigo/log", authMw, (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const log = db.prepare("SELECT id, t, tipo, texto, autor, nome, res, ok FROM log WHERE codigo = ? ORDER BY id DESC LIMIT 60").all(codigo).reverse();
+  for (const e of log) e.ok = e.ok == null ? null : e.ok === 1;
   res.json(log);
 });
 
-// ── API: Online / Digitando ──
+// ── API: Online / Digitando / Reações / Pausa ──
 
 app.post("/api/mesa/:codigo/typing", authMw, (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const ativo = req.body?.digitando === true;
-  const nome = req.body?.nome || "";
+  const nome = texto(req.body?.nome, 30);
   limparDigitando(codigo);
-  atualizarDigitando(codigo, req.uid, texto(nome, 30), ativo);
-  broadcast(codigo, "typing", { uid: req.uid, nome: texto(nome, 30), ativo });
+  atualizarDigitando(codigo, req.uid, nome, ativo);
+  broadcast(codigo, "typing", { uid: req.uid, nome, ativo });
   res.json({ ok: true });
 });
 
-// ── API: Reações (👍/👎) ──
 app.post("/api/mesa/:codigo/reacao", authMw, (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
   const logId = Number(req.body?.logId);
   const tipo = String(req.body?.tipo || "");
   if (!logId || !["gostei", "nao_gostei", "desisti"].includes(tipo)) return erro(res, 400, "Tipo inválido.");
-  try { db.exec("INSERT OR REPLACE INTO reacoes (codigo, logId, uid, tipo) VALUES (?, ?, ?, ?)", codigo, logId, req.uid, tipo); } catch (e) { return erro(res, 500, "Erro ao salvar reação."); }
+  if (!db.prepare("SELECT 1 FROM log WHERE id = ? AND codigo = ?").get(logId, codigo)) return erro(res, 404, "Entrada não encontrada.");
+  db.prepare("INSERT OR REPLACE INTO reacoes (codigo, logId, uid, tipo) VALUES (?, ?, ?, ?)").run(codigo, logId, req.uid, tipo);
   res.json({ ok: true });
 });
 
-// ── Pausar/Retomar Combate ──
 app.post("/api/mesa/:codigo/combate/pausar", authMw, (req, res) => {
-  const codigo = codigoValido(req.params.codigo);
-  if (!codigo) return erro(res, 400, "Código inválido.");
-  const m = db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo);
-  const combate = json(m?.combate);
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const combate = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo)?.combate);
   if (!combate) return erro(res, 400, "Não há combate ativo.");
   if (combate.pausado) {
-    // Retomar: ajusta o timer para descontar o tempo pausado
-    const agora = Date.now();
-    const parado = agora - combate.pausadoEm;
-    combate.inicioVez = (combate.inicioVez || agora) + parado;
+    const t = agora();
+    combate.inicioVez = (combate.inicioVez || t) + (t - (combate.pausadoEm || t));
     delete combate.pausado;
     delete combate.pausadoEm;
-    db.prepare("UPDATE mesas SET combate = ? WHERE codigo = ?").run(JSON.stringify(combate), codigo);
-    registrar(codigo, { tipo: "sys", texto: "⏵ Combate retomado." });
+    salvarMesa(codigo, { combate });
+    registrar(codigo, { tipo: "sys", texto: "Combate retomado." });
   } else {
-    // Pausar
     combate.pausado = true;
-    combate.pausadoEm = Date.now();
-    db.prepare("UPDATE mesas SET combate = ? WHERE codigo = ?").run(JSON.stringify(combate), codigo);
-    registrar(codigo, { tipo: "sys", texto: "⏸ Combate pausado." });
+    combate.pausadoEm = agora();
+    salvarMesa(codigo, { combate });
+    registrar(codigo, { tipo: "sys", texto: "Combate pausado." });
   }
-  const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
-  broadcast(codigo, "atualizar", { mesa: dadosMesa });
+  broadcast(codigo, "atualizar", {});
   res.json({ ok: true, pausado: !!combate.pausado });
 });
 
 // ── Helpers de jogo ──
 
-async function aplicar(ctx, r, permitirTeste, uid) {
+/** Aplica a resposta do Mestre. Devolve { rolagem, combateNovo }. */
+async function aplicar(ctx, r, permitirTeste, uidAtor) {
   const codigo = ctx.codigo;
   const campos = {};
   if (r?.cena) campos.cena = texto(r.cena, 60);
-  if (r?.fundo) campos.fundo = texto(r.fundo, 500);
-  // Generate background image when scene has a name and no fundo exists yet
-  if (r?.cena && OPENROUTER_KEY && (!ctx.mesa?.fundo || r.cena !== ctx.mesa.cena)) {
-    M.gerarImagem(OPENROUTER_KEY, `Ambiente de RPG de fantasia: ${r.cena}, ilustração de fundo para chat, atmosférico, desfoque suave`, SERVER_BASE_URL).then((url) => {
-      if (url) salvarMesa(codigo, { fundo: url });
-    }).catch(() => {});
+  // Imagem de fundo só quando a cena muda (cada imagem custa créditos)
+  if (r?.cena && OPENROUTER_KEY && process.env.IMAGENS_DE_FUNDO !== "0" && (!ctx.mesa?.fundo || campos.cena !== ctx.mesa.cena)) {
+    M.gerarImagem(OPENROUTER_KEY, `Ambiente de RPG de fantasia: ${campos.cena}, ilustração de fundo para chat, atmosférico, desfoque suave`, SERVER_BASE_URL)
+      .then((url) => { if (url) { salvarMesa(codigo, { fundo: url }); broadcast(codigo, "atualizar", {}); } })
+      .catch(() => {});
   }
   if (r?.resumo) campos.resumo = texto(r.resumo, 900);
   if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
-  // XP por participação
-  for (const f of Object.values(ctx.fichas)) {
-    if (f.pv > 0 && f.xp != null) {
-      f.xp = (f.xp || 0) + 5;
-      while (f.xp >= f.nivel * 100) { f.xp -= f.nivel * 100; f.nivel = (f.nivel || 1) + 1; registrar(codigo, { tipo: "sys", texto: `${f.nome} subiu para nível ${f.nivel}!`, ok: 1 }); }
-      db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, f.uid);
-    }
-  }
+
+  // XP: +5 para quem agiu, a cada ação narrada
+  const ator = ctx.fichas[uidAtor];
+  if (ator && r?.narracao && permitirTeste) ganharXp(ctx, ator, 5);
+
+  let combate = ctx.mesa.combate;
   for (const ef of Array.isArray(r?.efeitos) ? r.efeitos.slice(0, 6) : []) {
     const alvoId = ef?.alvo;
-    let f = ctx.fichas[alvoId];
-    if (!f) f = Object.values(ctx.fichas).find((x) => x.nome === alvoId);
+    const f = ctx.fichas[alvoId] || Object.values(ctx.fichas).find((x) => R.chave(x.nome) === R.chave(alvoId));
     if (f) {
-      if (ef.cura) { const v = R.rolar(String(ef.cura)).total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: 1 }); }
-      if (ef.dano) { const v = R.rolar(String(ef.dano)).total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano`, ok: 0 }); }
-      db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, f.uid);
+      if (ef.cura) { const v = R.rolar(String(ef.cura)).total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: true }); }
+      if (ef.dano) { const v = R.rolar(String(ef.dano)).total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano${f.pv <= 0 ? " e cai" : ""}`, ok: false }); }
+      salvarFicha(codigo, f);
       continue;
     }
-    // Se o alvo não for um jogador, pode ser um inimigo do combate
-    const combate = json(ctx.mesa?.combate || campos?.combate);
-    if (combate?.inimigos) {
-      const ini = combate.inimigos.find((i) => i.id === alvoId || i.nome === alvoId);
-      if (ini && ef.dano) {
-        const v = R.rolar(String(ef.dano)).total;
-        ini.pv = Math.max(0, ini.pv - v);
-        ini.pvMax = ini.pvMax || ini.pv; // garante pvMax se não existir
-        registrar(codigo, { tipo: "roll", texto: `${ini.nome} sofre ${v} de dano`, ok: 1 });
-        campos.combate = JSON.stringify(combate);
-      }
+    const ini = combate?.inimigos?.find((i) => i.id === alvoId || R.chave(i.nome) === R.chave(alvoId));
+    if (ini && ef.dano) {
+      const v = R.rolar(String(ef.dano)).total;
+      ini.pv = Math.max(0, ini.pv - v);
+      registrar(codigo, { tipo: "roll", texto: `${ini.nome} sofre ${v} de dano`, ok: true });
+      campos.combate = combate;
     }
   }
-  if (Array.isArray(r?.combate?.inimigos) && r.combate.inimigos.length && !ctx.mesa.combate) {
+
+  let combateNovo = false;
+  if (Array.isArray(r?.combate?.inimigos) && r.combate.inimigos.length && !combate) {
     const jogadores = Object.values(ctx.fichas).filter((f) => f.pv > 0);
-    const c = R.iniciarCombate(jogadores, r.combate.inimigos);
-    campos.combate = JSON.stringify(c);
-    registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + c.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · ") });
+    if (jogadores.length) {
+      combate = R.iniciarCombate(jogadores, r.combate.inimigos.slice(0, 8));
+      campos.combate = combate;
+      combateNovo = true;
+      registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + combate.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · ") });
+    }
   }
+
   let rolagem = null;
-  const minha = ctx.fichas[uid || ctx.uid];
-  if (permitirTeste && r?.teste && minha) {
-    const combate = json(ctx.mesa.combate) || json(campos.combate);
+  const minha = ctx.fichas[uidAtor];
+  // Um teste de ataque só faz sentido com o combate já em andamento e na vez de quem agiu
+  if (permitirTeste && r?.teste && minha && !(combateNovo && r.teste.tipo === "ataque")) {
     rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
-    if (rolagem) campos.rolagem = JSON.stringify(rolagem);
+    if (rolagem) campos.rolagem = rolagem;
   }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
+  ctx.mesa.combate = combate;
+  if (campos.cena) ctx.mesa.cena = campos.cena;
+  return { rolagem, combateNovo };
 }
 
-async function avancarCombate(ctx) {
-  const m = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(ctx.codigo);
+function ganharXp(ctx, f, quanto) {
+  f.xp = (f.xp || 0) + quanto;
+  while (f.xp >= (f.nivel || 1) * 100) {
+    f.xp -= (f.nivel || 1) * 100;
+    f.nivel = (f.nivel || 1) + 1;
+    const nova = R.normalizarFicha(f, f.uid);  // recalcula PV máximo e proficiência do novo nível
+    Object.assign(f, nova, { pv: Math.min(nova.pvMax, f.pv + (nova.pvMax - f.pvMax)) });
+    registrar(ctx.codigo, { tipo: "sys", texto: `${f.nome} subiu para o nível ${f.nivel}!`, ok: true });
+  }
+  salvarFicha(ctx.codigo, f);
+}
+
+/** Passa a vez depois de `quemAgiu` (null = ninguém), resolve os turnos dos inimigos e narra. */
+async function avancarCombate(ctx, quemAgiu) {
+  const codigo = ctx.codigo;
+  const m = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
   const combate = json(m.combate);
   if (!combate) return;
+  // fichas atualizadas (o turno pode ter mudado a vida de alguém)
+  for (const f of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) ctx.fichas[f.uid] = R.normalizarFicha(json(f.dados), f.uid);
+
+  if (!R.combateAcabou(combate, ctx.fichas)) {
+    const antes = Object.fromEntries(Object.values(ctx.fichas).map((f) => [f.uid, f.pv]));
+    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu);
+    for (const f of Object.values(ctx.fichas)) if (f.pv !== antes[f.uid]) salvarFicha(codigo, f);
+    salvarMesa(codigo, { combate });
+    ctx.mesa.combate = combate;
+    for (const o of ocorrido) registrar(codigo, { tipo: "roll", texto: o.log.texto, ok: !o.log.ok }); // ok = bom para o grupo
+    if (ocorrido.length && OPENROUTER_KEY) {
+      const prox = R.vezAtual(combate);
+      try {
+        const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto({ ...m, combate }, Object.values(ctx.fichas), [])}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados já rolados pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox && prox.tipo === "pj" ? `\nDepois disso é a vez de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.4);
+        if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
+      } catch (e) {
+        console.log(`[avancarCombate] narração falhou: ${e.message}`);
+      }
+    }
+  }
+
   if (R.combateAcabou(combate, ctx.fichas)) {
-    salvarMesa(ctx.codigo, { combate: null });
-    registrar(ctx.codigo, { tipo: "sys", texto: "Combate encerrado." });
-    // XP por vitória
-    for (const f of Object.values(ctx.fichas)) {
-      if (f.pv > 0 && f.xp != null) {
-        f.xp = (f.xp || 0) + 25;
-        while (f.xp >= f.nivel * 100) { f.xp -= f.nivel * 100; f.nivel = (f.nivel || 1) + 1; }
-        db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), ctx.codigo, f.uid);
-      }
+    const vivos = Object.values(ctx.fichas).filter((f) => f.pv > 0);
+    salvarMesa(codigo, { combate: null });
+    ctx.mesa.combate = null;
+    if (vivos.length) {
+      registrar(codigo, { tipo: "sys", texto: "Combate encerrado. Vitória do grupo!" });
+      for (const f of vivos) ganharXp(ctx, f, 25);
+    } else {
+      // ninguém fica preso numa mesa sem jogadores de pé
+      for (const f of Object.values(ctx.fichas)) { f.pv = 1; salvarFicha(codigo, f); }
+      registrar(codigo, { tipo: "sys", texto: "O grupo caiu. Vocês despertam mais tarde, feridos, com 1 PV cada." });
     }
-    broadcast(ctx.codigo, "combate-fim", {});
-    return;
+    broadcast(codigo, "combate-fim", {});
   }
-  const antes = {};
-  for (const f of Object.values(ctx.fichas)) antes[f.uid] = f.pv;
-  const ocorrido = R.passarVez(combate, ctx.fichas, ctx.uid);
-  for (const f of Object.values(ctx.fichas)) {
-    if (f.pv !== antes[f.uid]) db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), ctx.codigo, f.uid);
-  }
-  salvarMesa(ctx.codigo, { combate: JSON.stringify(combate) });
-  if (ocorrido.length) {
-    for (const o of ocorrido) registrar(ctx.codigo, { tipo: "roll", texto: o.log.texto, ok: o.log.ok ? 1 : 0 });
-  }
-  broadcast(ctx.codigo, "atualizar", {});
-  if (!OPENROUTER_KEY || !ocorrido.length) return;
-  const prox = R.vezAtual(combate);
-  // Tenta narrar o turno dos inimigos (com 1 retry se falhar)
-  for (let tentativa = 0; tentativa < 2; tentativa++) {
-    try {
-      const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(m, Object.values(ctx.fichas), [])}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados já rolados pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox ? `\nDepois disso é a vez de ${prox.nome}. A situação pede ação de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.3 + tentativa * 0.2);
-      if (r?.narracao) registrar(ctx.codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
-      break;
-    } catch (e) {
-      if (tentativa === 1) {
-        console.log(`[avancarCombate] Narração falhou: ${e.message}`);
-        registrar(ctx.codigo, { tipo: "sys", texto: `Turno dos inimigos processado (narração indisponível).` });
-      }
-    }
-  }
-  broadcast(ctx.codigo, "atualizar", {});
+  broadcast(codigo, "atualizar", {});
 }
 
-// ── WebSocket ──
+// ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);
 server.timeout = 120_000; // 2 min — Cloudflare tunnel proxyReadTimeout
 const wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws, req) => {
-  // Cliente envia a mesa que quer ouvir como primeira mensagem
+wss.on("connection", (ws) => {
+  ws.vivo = true;
+  ws.on("pong", () => { ws.vivo = true; });
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data);
-      if (msg.mesa) ws.mesa = String(msg.mesa).toUpperCase();
+      const codigo = codigoValido(msg.mesa);
+      const userId = codigo && usuarioDoToken({ headers: { authorization: `Bearer ${String(msg.token || "")}` } });
+      if (codigo && userId && ehMembro(codigo, userId)) { ws.mesa = codigo; ws.uid = userId; ws.send(JSON.stringify({ evento: "pronto", dados: {} })); }
+      else ws.send(JSON.stringify({ evento: "recusado", dados: {} }));
     } catch {}
   });
-  ws.on("close", () => {});
 });
+// Mantém a conexão viva atrás do túnel (que derruba conexões ociosas)
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.vivo) { ws.terminate(); continue; }
+    ws.vivo = false;
+    try { ws.ping(); } catch {}
+  }
+}, 25_000).unref();
 
 // ── Start ──
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n🎲 Mesa Viva — Servidor rodando em http://0.0.0.0:${PORT}`);
-  console.log(`   API key: ${OPENROUTER_KEY ? "✅ configurada" : "❌ OPENROUTER_API_KEY não encontrada"}`);
-  console.log(`   DB: ${DB_PATH}`);
-  console.log(`   WebSocket: ws://0.0.0.0:${PORT}\\n`);
-    // Periodic WAL checkpoint
-    setInterval(() => {
-      try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) {}
-    }, 600_000).unref(); // every 10 minutes
-  })
+if (require.main === module) {
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`\n🎲 Mesa Viva — Servidor rodando em http://0.0.0.0:${PORT}`);
+    console.log(`   API key: ${OPENROUTER_KEY ? "✅ configurada" : "❌ OPENROUTER_API_KEY não encontrada"}`);
+    console.log(`   Painel admin: ${ADMIN_PASS ? "✅ ativo" : "⛔ desativado (defina ADMIN_PASS)"}`);
+    console.log(`   DB: ${DB_PATH}\n`);
+    setInterval(() => { try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) {} }, 600_000).unref();
+  });
+}
+
+module.exports = { app, server, db };
