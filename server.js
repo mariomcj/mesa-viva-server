@@ -1037,24 +1037,25 @@ app.post("/api/acao-combate", authMw, limiteIA, async (req, res) => {
   const turno = turnoDe(c);
   if (turno.acaoUsada) return erro(res, 409, "Você já fez sua ação neste turno.");
 
+  const tema = ctx.mesa.tema;
   let arma = null, magia = null;
   if (tipo === "ataque") {
-    arma = R.ataqueDaFicha(f, nome);
-    if (!arma || R.chave(arma.nome) !== R.chave(nome)) return erro(res, 409, "Esse ataque não está na sua ficha.");
+    arma = ataquePorNome(f, nome, tema, true);
+    if (!arma) return erro(res, 409, "Esse ataque não está na sua ficha.");
   } else {
-    magia = R.magiaDaFicha(f, nome);
+    magia = magiaPorNome(f, nome, tema);
     if (!magia) return erro(res, 409, "Essa magia não está na sua ficha.");
-    if (magia.custo > f.mana) return erro(res, 409, msgSemMana(magia, f));
+    if (magia.custo > f.mana) return erro(res, 409, msgSemMana(magia, f, tema));
     if (magia.tipo === "dano") arma = armaDaMagia(f, magia);
   }
   if (!travarOuRecusar(ctx, f, res)) return;
   try {
     if (arma) {
-      const p = prepararAtaque(c, f, arma, alvoPedido, true);
+      const p = prepararAtaque(c, f, arma, alvoPedido, true, tema);
       if (p.erro) return erro(res, 409, p.erro);
       turno.acaoUsada = true;
       const alvo = c.inimigos.find((i) => i.id === p.rolagem.alvo);
-      registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: magia ? `Conjura ${magia.nome} em ${alvo.nome}.` : `Ataca ${alvo.nome} com ${arma.nome}.` });
+      registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: magia ? `Conjura ${noTema(tema, magia.nome)} em ${alvo.nome}.` : `Ataca ${alvo.nome} com ${noTema(tema, arma.nome)}.` });
       if (p.aviso) registrar(codigo, { tipo: "sys", texto: p.aviso });
       if (magia) f.mana -= magia.custo;
       salvarMesa(codigo, { combate: c, rolagem: p.rolagem });
@@ -1083,10 +1084,10 @@ app.post("/api/usar-magia", authMw, limiteIA, async (req, res) => {
   if (ctx.mesa.fase !== "jogo") return erro(res, 409, "A aventura ainda não começou.");
   if (ctx.mesa.combate) return erro(res, 409, "Em combate, conjure na sua vez, como a ação do turno.");
   if (f.pv <= 0) return erro(res, 409, `${f.nome} está caído.`);
-  const magia = R.magiaDaFicha(f, nome);
+  const magia = magiaPorNome(f, nome, ctx.mesa.tema);
   if (!magia) return erro(res, 409, "Essa magia não está na sua ficha.");
   if (magia.tipo === "dano") return erro(res, 409, "Magia de dano só no combate.");
-  if (magia.custo > f.mana) return erro(res, 409, msgSemMana(magia, f));
+  if (magia.custo > f.mana) return erro(res, 409, msgSemMana(magia, f, ctx.mesa.tema));
   if (!travarOuRecusar(ctx, f, res)) return;
   try {
     const r = await conjurarSemRolagem(ctx, f, magia, alvoPedido);
@@ -1177,6 +1178,7 @@ app.post("/api/evoluir", authMw, (req, res) => {
   const row = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(codigo, req.uid);
   if (!row) return erro(res, 400, "Crie seu personagem.");
   const f = R.normalizarFicha(json(row.dados), req.uid);
+  const tema = db.prepare("SELECT tema FROM mesas WHERE codigo = ?").get(codigo)?.tema;
   const p = f.pendencias;
   if (!p) return erro(res, 409, "Não há nada para evoluir agora.");
   const b = req.body || {};
@@ -1204,9 +1206,10 @@ app.post("/api/evoluir", authMw, (req, res) => {
     if (nomes.length > quantas) return { erro: quantas ? `Você pode escolher ${quantas} ${rotulo} agora.` : `Você não tem ${rotulo} para escolher agora.` };
     const saida = [];
     for (const n of nomes) {
-      const op = (pend?.opcoes || []).find((o) => R.chave(o.nome) === R.chave(n));
-      if (!op) return { erro: `${texto(n, 40) || "Essa escolha"} não está entre as opções.` };
-      if (saida.includes(op)) return { erro: `${op.nome} foi escolhido duas vezes.` };
+      // o nome mecânico (contrato) ou, por tolerância, o nome do tema
+      const op = (pend?.opcoes || []).find((o) => R.chave(o.nome) === R.chave(n)) || (pend?.opcoes || []).find((o) => R.chave(o.nome) === R.chave(T.nomeMecanico(tema, n)));
+      if (!op) return { erro: `${texto(noTema(tema, n), 40) || "Essa escolha"} não está entre as opções.` };
+      if (saida.includes(op)) return { erro: `${noTema(tema, op.nome)} foi escolhido duas vezes.` };
       saida.push(op);
     }
     return { saida };
@@ -1225,7 +1228,7 @@ app.post("/api/evoluir", authMw, (req, res) => {
   nova.mana = Math.max(0, Math.min(nova.manaMax, f.mana + (nova.manaMax - f.manaMax)));
   salvarFicha(codigo, nova);
   const partes = [...Object.entries(soma).map(([k, v]) => `+${v} ${k.toUpperCase()}`)];
-  const aprendeu = [...mg.saida, ...at.saida].map((o) => o.nome);
+  const aprendeu = [...mg.saida, ...at.saida].map((o) => noTema(tema, o.nome));
   if (aprendeu.length) partes.push(`aprendeu ${aprendeu.join(", ")}`);
   registrar(codigo, { tipo: "sys", texto: `${f.nome} evoluiu: ${partes.join(", ")}.`, ok: true });
   broadcast(codigo, "ficha", { uid: req.uid });
@@ -1257,7 +1260,7 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   mesa.dia = Math.max(1, Number(mesa.dia) || 1);
   if (mesa.combate) mesa.combate.turno = turnoDe(mesa.combate);     // combates antigos ganham o turno na leitura
   Object.assign(mesa, { tema: tema.id, temaNome: tema.nome, temaInspiracao: tema.inspiracao, temaIcone: tema.icone,
-    duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco });
+    duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco, nomes: tema.nomes });
   res.json(mesa);
 });
 
@@ -1389,7 +1392,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
   // Um teste de ataque só faz sentido com o combate já em andamento e na vez de quem agiu
   if (permitirTeste && r?.teste && typeof r.teste === "object" && minha && !(combateNovo && r.teste.tipo === "ataque")) {
     if (r.teste.tipo === "ataque") {
-      const at = ataqueDoMestre(combate, minha, r.teste);
+      const at = ataqueDoMestre(combate, minha, r.teste, ctx.mesa.tema);
       if (at.cancelar) { registrar(codigo, { tipo: "sys", texto: at.cancelar }); ataqueCancelado = true; }
       else {
         rolagem = at.rolagem;
@@ -1485,7 +1488,7 @@ function aplicarNovoDia(ctx, r, combate, narrAntes) {
   for (const f of Object.values(ctx.fichas)) { f.pv = f.pvMax; f.mana = f.manaMax; salvarFicha(codigo, f); }
   salvarMesa(codigo, { dia, diaNarr: Number(m.ultimaNarrativa) || 0 });
   ctx.mesa.dia = dia;
-  registrar(codigo, { tipo: "sys", texto: `Dia ${dia} começa: vida e mana recuperadas.`, ok: true });
+  registrar(codigo, { tipo: "sys", texto: `Dia ${dia} começa: vida e ${T.atributoMagiaDoTema(ctx.mesa.tema).toLowerCase()} recuperadas.`, ok: true });
 }
 
 // ── Turno do jogador no combate: mover, uma ação, um item rápido ──
@@ -1553,16 +1556,18 @@ function armaDaMagia(f, m) {
  * `estrito`: alvo pedido que não existe é erro (rota do app); senão (Mestre), vale o primeiro inimigo de pé.
  * Devolve { erro } ou { rolagem, aviso }. Pode mover o personagem em `c` (corpo a corpo que avança sozinho).
  */
-function prepararAtaque(c, f, arma, alvoPedido, estrito) {
+function prepararAtaque(c, f, arma, alvoPedido, estrito, tema) {
   const vivos = (c?.inimigos || []).filter((i) => i.pv > 0);
   let alvo = alvoPedido ? vivos.find((i) => i.id === alvoPedido || R.chave(i.nome) === R.chave(alvoPedido)) : null;
   if (!alvo && alvoPedido && estrito) return { erro: "Esse alvo não está de pé no combate." };
   alvo ||= vivos[0];
   if (!alvo) return { erro: "Não há inimigos de pé." };
-  const rolagem = { id: String(agora()), jogador: f.uid, tipo: "ataque", rotulo: `${arma.nome} vs ${alvo.nome}`, bonus: arma.bonus, cd: alvo.ca ?? 13, motivo: arma.nome, dano: arma.dano, alvo: alvo.id };
+  // rótulo com o nome do tema (só exibição); "motivo" guarda o nome mecânico
+  const exibido = noTema(tema, arma.nome);
+  const rolagem = { id: String(agora()), jogador: f.uid, tipo: "ataque", rotulo: `${exibido} vs ${alvo.nome}`, bonus: arma.bonus, cd: alvo.ca ?? 13, motivo: arma.nome, dano: arma.dano, alvo: alvo.id };
   let aviso = null;
   if (c.mapa) {
-    const conf = conferirAtaqueNoMapa(c, f, arma, rolagem);
+    const conf = conferirAtaqueNoMapa(c, f, arma, rolagem, exibido);
     if (conf.cancelar) return { erro: conf.cancelar };
     aviso = conf.aviso || null;
   }
@@ -1573,24 +1578,42 @@ function prepararAtaque(c, f, arma, alvoPedido, estrito) {
  * Teste de "ataque" pedido pelo Mestre: só vale um ataque da ficha (ou magia de dano da ficha, com mana).
  * Devolve { cancelar: texto } | { rolagem, aviso, custo }.
  */
-function ataqueDoMestre(combate, f, teste) {
-  let arma = R.ataqueDaFicha(f, teste.ataque), custo = 0;
+function ataqueDoMestre(combate, f, teste, tema) {
+  let arma = ataquePorNome(f, teste.ataque, tema, false), custo = 0;
   if (!arma) {
-    const m = R.magiaDaFicha(f, teste.ataque);
-    if (!m || m.tipo !== "dano") return { cancelar: `${f.nome} não tem “${texto(teste.ataque, 40) || "esse ataque"}” na ficha: não dá para usar.` };
-    if (m.custo > f.mana) return { cancelar: msgSemMana(m, f) };
+    const m = magiaPorNome(f, teste.ataque, tema);
+    if (!m || m.tipo !== "dano") return { cancelar: `${f.nome} não tem “${texto(noTema(tema, teste.ataque), 40) || "esse ataque"}” na ficha: não dá para usar.` };
+    if (m.custo > f.mana) return { cancelar: msgSemMana(m, f, tema) };
     arma = armaDaMagia(f, m);
     custo = m.custo;
   }
   if (!combate) {
-    const rolagem = { id: String(agora()), jogador: f.uid, tipo: "ataque", rotulo: `${arma.nome} vs alvo`, bonus: arma.bonus, cd: 13, motivo: arma.nome, dano: arma.dano };
+    const rolagem = { id: String(agora()), jogador: f.uid, tipo: "ataque", rotulo: `${noTema(tema, arma.nome)} vs alvo`, bonus: arma.bonus, cd: 13, motivo: arma.nome, dano: arma.dano };
     return { rolagem, custo };
   }
-  const p = prepararAtaque(combate, f, arma, teste.alvo, false);
+  const p = prepararAtaque(combate, f, arma, teste.alvo, false, tema);
   return p.erro ? { cancelar: p.erro } : { rolagem: p.rolagem, aviso: p.aviso, custo };
 }
 
-const msgSemMana = (m, f) => `Mana insuficiente: ${m.nome} custa ${m.custo} e você tem ${f.mana}.`;
+const msgSemMana = (m, f, tema) => `${T.atributoMagiaDoTema(tema)} insuficiente: ${noTema(tema, m.nome)} custa ${m.custo} e você tem ${f.mana}.`;
+
+// ── Nomes do tema: só a exibição muda; a ficha e as rotas usam os nomes mecânicos ──
+
+/** Nome mecânico (raça, classe, magia, técnica) → nome no tema da mesa; outro texto (arma, item) volta igual. */
+const noTema = (tema, nome) => T.nomeNoTema(tema, nome);
+
+/**
+ * Ataque da ficha pelo nome. Vale primeiro o nome exato da ficha (uma arma pode ter o mesmo nome que uma
+ * técnica tem no tema), depois o nome do tema convertido para o mecânico e, se `exato` for falso, um nome parecido.
+ */
+function ataquePorNome(f, nome, tema, exato) {
+  const igual = (n) => { const k = R.chave(n); return k ? (f.ataques || []).find((a) => R.chave(a.nome) === k) || null : null; };
+  return igual(nome) || igual(T.nomeMecanico(tema, nome)) || (exato ? null : R.ataqueDaFicha(f, nome));
+}
+/** Magia da ficha pelo nome mecânico ou pelo nome do tema. */
+function magiaPorNome(f, nome, tema) {
+  return R.magiaDaFicha(f, nome) || R.magiaDaFicha(f, T.nomeMecanico(tema, nome));
+}
 
 /**
  * Alvo de cura (magia ou item): o próprio personagem por padrão; um aliado ao lado (corpo) ou até 12 casas com linha de visão (distância).
@@ -1644,18 +1667,19 @@ async function conjurarSemRolagem(ctx, f, m, alvoPedido) {
   }
   f.mana -= m.custo;
   const sobre = alvo && alvo.uid !== f.uid ? ` em ${alvo.nome}` : "";
-  registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Conjura ${m.nome}${sobre}.` });
+  const nomeM = noTema(ctx.mesa.tema, m.nome);
+  registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Conjura ${nomeM}${sobre}.` });
   if (m.tipo === "cura") {
     cura = R.rolar(m.efeito || "1d4").total;
     alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
-    registrar(codigo, { tipo: "roll", texto: `${f.nome} conjura ${m.nome}: ${alvo.nome} recupera ${cura} PV`, ok: true });
+    registrar(codigo, { tipo: "roll", texto: `${f.nome} conjura ${nomeM}: ${alvo.nome} recupera ${cura} PV`, ok: true });
   }
   salvarFicha(codigo, f);
   if (alvo && alvo !== f && alvo.uid) salvarFicha(codigo, alvo);
   ganharXp(ctx, f, 5);
   await narrarCurto(ctx, f.uid, m.tipo === "cura"
-    ? `${f.nome} (id ${f.uid}) conjura ${m.nome} (${m.descricao || "magia de cura"}) e ${alvo.uid === f.uid ? "recupera" : `${alvo.nome} recupera`} ${cura} PV (já aplicado pelo código).`
-    : `${f.nome} (id ${f.uid}) conjura ${m.nome}${sobre}: ${m.descricao || "magia de utilidade"}. Diga o efeito na cena, sem dano nem cura.`);
+    ? `${f.nome} (id ${f.uid}) conjura ${nomeM} (${m.descricao || "magia de cura"}) e ${alvo.uid === f.uid ? "recupera" : `${alvo.nome} recupera`} ${cura} PV (já aplicado pelo código).`
+    : `${f.nome} (id ${f.uid}) conjura ${nomeM}${sobre}: ${m.descricao || "magia de utilidade"}. Diga o efeito na cena, sem dano nem cura.`);
   return { ok: true, cura };
 }
 
@@ -1704,11 +1728,11 @@ function acrescentarReforcos(c, lista) {
 }
 
 /**
- * Confere um ataque de jogador (`ataque`: {nome, alcance}) no mapa. Corpo a corpo longe do alvo: avança sozinho se der (gasta deslocamento),
+ * Confere um ataque de jogador (`ataque`: {nome, alcance}) no mapa (`nomeExibido`: o nome do tema, só para as mensagens). Corpo a corpo longe do alvo: avança sozinho se der (gasta deslocamento),
  * senão cancela. À distância: até 12 casas e com linha de visão; alvo com cobertura dá CA +2 nesta rolagem.
  * Devolve { cancelar: texto } | { aviso: texto } | {}. Altera `c` e `rol`.
  */
-function conferirAtaqueNoMapa(c, ficha, ataque, rol) {
+function conferirAtaqueNoMapa(c, ficha, ataque, rol, nomeExibido = ataque.nome) {
   MP.completarPosicoes(c);
   const alvo = (c.inimigos || []).find((i) => i.id === rol.alvo);
   const pa = c.posicoes?.[ficha.uid], pb = alvo && c.posicoes?.[alvo.id];
@@ -1723,7 +1747,7 @@ function conferirAtaqueNoMapa(c, ficha, ataque, rol) {
     d.usado += ap.custo;
     return { aviso: `${ficha.nome} avança até ${alvo.nome}.` };
   }
-  if (dist > MP.ALCANCE_DISTANCIA) return { cancelar: `${alvo.nome} está a ${MP.casas(dist)}: longe demais para ${ataque.nome} (alcance de ${MP.ALCANCE_DISTANCIA} casas).` };
+  if (dist > MP.ALCANCE_DISTANCIA) return { cancelar: `${alvo.nome} está a ${MP.casas(dist)}: longe demais para ${nomeExibido} (alcance de ${MP.ALCANCE_DISTANCIA} casas).` };
   if (!MP.linhaDeVisao(c.mapa, pa, pb)) return { cancelar: `Sem linha de visão até ${alvo.nome}.` };
   if (MP.temCobertura(c.mapa, pa, pb)) { rol.cd += 2; rol.rotulo += " (cobertura +2)"; }
   return {};

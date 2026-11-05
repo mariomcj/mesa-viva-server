@@ -202,9 +202,16 @@ function promptCriacao(tema, conceito) {
 TEMA DA MESA: ${t.nome} (${t.inspiracao}).
 ${t.ambientacao}
 Como os personagens existem neste tema: ${t.fichas}
-IMPORTANTE: "raca" e "classe" são exatamente um dos nomes das listas acima (é a mecânica do jogo, não muda). Já o nome do personagem, o antecedente, os itens do inventário, os nomes dos ataques, os traços e a descrição das magias combinam com o tema. O "nome" de cada magia é exatamente o da lista; a "descricao" conta como ela aparece neste tema (até 2 frases).
+${blocoCriacao(t)}IMPORTANTE: "raca" e "classe" são exatamente um dos nomes das listas acima (é a mecânica do jogo, não muda). Já o nome do personagem, o antecedente, os itens do inventário, os nomes dos ataques, os traços e a descrição das magias combinam com o tema. O "nome" de cada magia é exatamente o da lista; a "descricao" conta como ela aparece neste tema (até 2 frases), combinando com o nome do tema.
 
 Conceito: ${conceito}`;
+}
+
+/** Nomes do tema na criação: todas as raças e classes , as magias de nível 1 e as técnicas (os nomes das armas não podem repeti-los). */
+function blocoCriacao(t) {
+  const mecanicos = [...Object.keys(t.nomes.racas), ...Object.keys(t.nomes.classes), ...C.magiasDaClasse("Mago", 1), ...C.magiasDaClasse("Clérigo", 1), ...C.TECNICAS].map((x) => x.nome || x);
+  const bloco = blocoNomes(t, mecanicos);
+  return bloco ? `${bloco} Não dê a armas e itens os nomes que as técnicas e magias têm neste tema.\n` : "";
 }
 
 /** Prompt da imagem do mapa de batalha visto de cima (em inglês, sem pessoas nem grade), no estilo do tema. */
@@ -221,13 +228,31 @@ function promptImagem(tema, cena) {
 }
 
 const NOME_ALCANCE = { corpo: "corpo a corpo", distancia: "à distância", pessoal: "pessoal" };
-function resumoFicha(f) {
+/**
+ * Uma linha por personagem para o contexto. Com `tema`, o que tem outro nome no tema ganha "no tema: …"
+ * logo depois do nome mecânico (o nome da ficha continua primeiro: é o que vale no campo "ataque" de um teste).
+ */
+function resumoFicha(f, tema) {
+  const noTema = (nome) => { const t = tema ? T.nomeNoTema(tema, nome) : nome; return t !== nome ? `no tema: ${t}; ` : ""; };
   const at = ATRIBUTOS.map((a) => `${a.toUpperCase()} ${f.atributos[a]}(${sinal(mod(f.atributos[a]))})`).join(" ");
-  const atq = (f.ataques || []).map((a) => `${a.nome} (${sinal(a.bonus)}, ${a.dano})`).join("; ") || "nenhum";
-  const mag = (f.magias || []).map((m) => `${m.nome} (${m.circulo ? `${m.circulo}º círculo, custo ${m.custo}` : "truque, sem custo"}, ${m.tipo}${m.efeito ? ` ${m.efeito}` : ""}, ${NOME_ALCANCE[m.alcance] || m.alcance})`).join("; ");
+  const atq = (f.ataques || []).map((a) => `${a.nome} (${noTema(a.nome)}${sinal(a.bonus)}, ${a.dano})`).join("; ") || "nenhum";
+  const mag = (f.magias || []).map((m) => `${m.nome} (${noTema(m.nome)}${m.circulo ? `${m.circulo}º círculo, custo ${m.custo}` : "truque, sem custo"}, ${m.tipo}${m.efeito ? ` ${m.efeito}` : ""}, ${NOME_ALCANCE[m.alcance] || m.alcance})`).join("; ");
   const inv = (f.inventario || []).map((i) => `${i.nome} ×${i.qtd}${i.efeito ? ` (${i.efeito})` : ""}`).join("; ") || "vazio";
-  const mana = f.manaMax ? ` Mana ${f.mana}/${f.manaMax}.` : "";
-  return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe} nível ${f.nivel || 1}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${f.ca}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}${mana} Inventário: ${inv}.`;
+  const rotuloMana = tema ? T.atributoMagiaDoTema(tema) : "Mana";
+  const mana = f.manaMax ? ` ${rotuloMana === "Mana" ? "Mana" : `Mana (no tema: ${rotuloMana})`} ${f.mana}/${f.manaMax}.` : "";
+  const rc = tema ? `${T.nomeNoTema(tema, f.raca)} ${T.nomeNoTema(tema, f.classe)}` : "";
+  const origem = rc && rc !== `${f.raca} ${f.classe}` ? ` (no tema: ${T.nomeNoTema(tema, f.raca)}, ${T.nomeNoTema(tema, f.classe)})` : "";
+  return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe}${origem} nível ${f.nivel || 1}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${f.ca}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}${mana} Inventário: ${inv}.`;
+}
+
+/**
+ * Bloco dos nomes do tema para o Mestre: como raças, classes, magias e técnicas aparecem na ficha dos jogadores.
+ * `mecanicos`: os nomes a explicar (padrão: raças e classes). "" quando nada muda (clássico).
+ */
+function blocoNomes(tema, mecanicos) {
+  const frase = T.nomesParaMestre(tema, mecanicos);
+  if (!frase) return "";
+  return `NOMES DO TEMA NA TELA DOS JOGADORES: ${frase} Na narração, use SEMPRE estes nomes do tema (os jogadores veem esses nomes na ficha e na lista de ações); os nomes mecânicos só valem nos campos do JSON ("raca", "classe", o "nome" das magias e o "ataque" de um teste).`;
 }
 
 // ── Arco da história ──
@@ -350,7 +375,7 @@ function promptArco({ tema, duracao, fichas, tom, vetos, desejos, semente, tempe
   const grupo = (fichas || []).map((f) => {
     const tr = f.tracos || {};
     const extras = [f.antecedente && `antecedente: ${f.antecedente}`, tr.vinculo && `vínculo: ${tr.vinculo}`, tr.defeito && `defeito: ${tr.defeito}`].filter(Boolean).join("; ");
-    return `* ${f.nome}: ${f.raca} ${f.classe}${extras ? ` (${extras})` : ""}`;
+    return `* ${f.nome}: ${T.nomeNoTema(t, f.raca)} ${T.nomeNoTema(t, f.classe)}${extras ? ` (${extras})` : ""}`;
   }).join("\n") || "* (grupo ainda sem detalhes)";
   return `Você é um designer de narrativa de RPG de mesa, especialista em aventuras memoráveis, com ritmo e escolhas reais.
 TAREFA: CRIAR O ARCO DA AVENTURA — o plano secreto de começo, meio e fim que o Mestre vai seguir (e adaptar às escolhas dos jogadores) durante o jogo. Os personagens são de nível 1, num jogo d20 simplificado.
@@ -442,9 +467,12 @@ function contexto(mesa, fichas, recentes) {
   const ato = numAto(mesa.ato);
   const concluido = !!Number(mesa.arcoConcluido);
   const ajustes = (campoJson(mesa.arcoAjustes) || []).filter((x) => typeof x === "string");
+  // nomes do tema que aparecem nas fichas do grupo (raças e classes, sempre; ataques e magias de cada um)
+  const nomes = blocoNomes(tema, [...Object.keys(tema.nomes.racas), ...Object.keys(tema.nomes.classes),
+    ...fichas.flatMap((f) => [...(f.ataques || []), ...(f.magias || [])].map((x) => x.nome))]);
   return `${REGRAS}
 
-${blocoTema(tema)}
+${blocoTema(tema)}${nomes ? `\n${nomes}` : ""}
 
 ${blocoArco(arco, ato, concluido, ajustes, duracao, mesa._narracoesNoAto)}
 
@@ -453,7 +481,7 @@ CONTEXTO DA SESSÃO:
 - Duração: ${DURACAO_TEXTO[duracao].nome}
 ${arco ? `- Ato atual: ${ato} de 3${concluido ? " (história concluída — epílogo)" : ""}\n` : ""}- Tom: ${tom}${mesa.vetos ? `\n- Temas vetados (nunca use): ${mesa.vetos}` : ""}${mesa.desejos ? `\n- Rumo da história desejado pelo grupo: ${mesa.desejos}` : ""}
 - Personagens:
-${fichas.map(resumoFicha).join("\n") || "(sem personagens)"}
+${fichas.map((f) => resumoFicha(f, tema)).join("\n") || "(sem personagens)"}
 - Resumo: ${mesa.resumo || "(início da aventura)"}
 - Dia na história: ${Math.max(1, Number(mesa.dia) || 1)}
 - Cena atual: ${mesa.cena || "(ainda não definida)"}
@@ -614,6 +642,6 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
 module.exports = {
-  REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, lerJson,
+  REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, blocoNomes, lerJson,
   promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };

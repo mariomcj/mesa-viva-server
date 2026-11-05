@@ -9,6 +9,7 @@ catalogo.js   Catálogo de magias (Mago e Clérigo, truques ao 5º círculo) e t
 mapa.js       Mapa de batalha visto de cima: grade, terreno, caminhos, linha de visão, posições e movimento dos inimigos (lógica pura)
 mestre.js     Contexto da mesa, arco da história e chamadas à IA (texto e imagens)
 temas.js      Os 20 temas da história, o tema "Surpresa" e as durações da aventura
+nomes-temas.js Nomes do tema: como raças, classes, magias e técnicas aparecem em cada tema (só exibição)
 test/         Testes automáticos (npm test), com um Mestre falso que não gasta créditos
 public/       Página do jogo, painel admin e APK para download
 ```
@@ -54,7 +55,7 @@ Ao começar a aventura, a IA cria o **arco**: título, vilão, 3 atos (objetivo 
 | `GET /api/temas` | Lista de temas (com "Surpresa" primeiro) e de durações |
 | `POST /api/mesa/criar` | Aceita `tema` e `duracao` (inválidos viram `classico` e `curta`) |
 | `POST /api/configurar-mesa` | Aceita `tema` e `duracao` (só no saguão; depois, 409) e `desejos` (rumo da história, 300 caracteres, em qualquer fase) |
-| `GET /api/mesa/:codigo` | Estado da mesa com `tema`, `temaNome`, `temaInspiracao`, `temaIcone`, `duracao`, `desejos` e `arco` público |
+| `GET /api/mesa/:codigo` | Estado da mesa com `tema`, `temaNome`, `temaInspiracao`, `temaIcone`, `duracao`, `desejos`, `arco` público e `nomes` (nomes do tema para raças, classes, magias, técnicas e o rótulo da mana; mesa sem tema = clássico). Rotas e ficha continuam com os nomes mecânicos |
 | `GET /api/user/mesas` | Cada mesa com `tema`, `temaNome`, `temaIcone` e `titulo` da história |
 | `POST /api/reiniciar-mesa` | Volta ao saguão e apaga o arco; tema, duração e rumo da história ficam |
 | `POST /api/criar-personagem` | Usa o tema da mesa se vier `codigo` (ou o `tema` do corpo) |

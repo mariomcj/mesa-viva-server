@@ -17,6 +17,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const { NOMES } = require("./nomes-temas");
 
 const TEMAS = [
   {
@@ -509,6 +510,9 @@ const TEMPEROS = [
   "dois vilões disputam a mesma coisa, e o grupo fica no meio",
 ];
 
+// Nomes do tema (só exibição; a mecânica continua com os nomes do catálogo): veja nomes-temas.js
+for (const t of TEMAS) t.nomes = NOMES[t.id];
+
 const POR_ID = new Map(TEMAS.map((t) => [t.id, t]));
 const sortear = (lista) => lista[crypto.randomInt(lista.length)];
 
@@ -533,10 +537,75 @@ function listaPublica() {
   };
 }
 
+// ── Nomes do tema ──
+
+/** Compara nomes sem diferenciar maiúsculas, acentos e espaços extras (igual a regras.chave). */
+const chave = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+const CATEGORIAS = ["racas", "classes", "magias", "tecnicas"];
+const nomeDe = (v) => (typeof v === "string" ? v : v?.nome);
+
+/** Por tema: chave do nome mecânico → nome no tema, e chave do nome no tema → nome mecânico. */
+const INDICES = new Map(TEMAS.map((t) => {
+  const exibe = new Map(), mecanico = new Map();
+  for (const cat of CATEGORIAS) {
+    for (const [mec, v] of Object.entries(t.nomes[cat])) {
+      exibe.set(chave(mec), nomeDe(v));
+      mecanico.set(chave(mec), mec);
+    }
+  }
+  // o nome mecânico tem prioridade: um nome do tema nunca esconde outro mecânico
+  for (const cat of CATEGORIAS) {
+    for (const [mec, v] of Object.entries(t.nomes[cat])) if (!mecanico.has(chave(nomeDe(v)))) mecanico.set(chave(nomeDe(v)), mec);
+  }
+  return [t.id, { exibe, mecanico }];
+}));
+const indiceDe = (tema) => INDICES.get(temaPorId(tema?.id || tema).id);
+
+/** Os nomes do tema (formato do contrato); tema ausente ou desconhecido (mesas antigas) = clássico. */
+function nomesDoTema(tema) { return temaPorId(tema?.id || tema).nomes; }
+
+/** Como um nome mecânico (raça, classe, magia ou técnica) aparece no tema; outro texto volta igual. */
+function nomeNoTema(tema, nome) {
+  if (typeof nome !== "string") return nome;
+  return indiceDe(tema).exibe.get(chave(nome)) ?? nome;
+}
+
+/** O nome mecânico de um nome do tema (ou do próprio mecânico); outro texto volta igual. */
+function nomeMecanico(tema, nome) {
+  if (typeof nome !== "string") return nome;
+  return indiceDe(tema).mecanico.get(chave(nome)) ?? nome;
+}
+
+/** Rótulo da barra de mana no tema ("Mana", "Bateria", "Fé"…). */
+function atributoMagiaDoTema(tema) { return nomesDoTema(tema).atributoMagia; }
+
+/**
+ * Frase para o Mestre com os nomes do tema que aparecem na ficha ("Na ficha, Mago aparece como Hacker;
+ * Bola de Fogo como Granada Incendiária…"). `mecanicos`: os nomes a explicar (padrão: todas as raças e classes).
+ * Só os que mudam no tema; "" quando nada muda (clássico).
+ */
+function nomesParaMestre(tema, mecanicos) {
+  const n = nomesDoTema(tema);
+  const lista = mecanicos || [...Object.keys(n.racas), ...Object.keys(n.classes)];
+  const pares = [];
+  const vistos = new Set();
+  for (const mec of lista) {
+    const k = chave(mec);
+    if (!k || vistos.has(k)) continue;
+    vistos.add(k);
+    const exibido = nomeNoTema(tema, mec);
+    if (chave(exibido) !== k) pares.push(`${nomeMecanico(tema, mec)} ${pares.length ? "como" : "aparece como"} ${exibido}`);
+  }
+  const mana = n.atributoMagia !== "Mana" ? `a mana aparece como ${n.atributoMagia}` : "";
+  if (!pares.length && !mana) return "";
+  return `Na ficha, ${[...pares, mana].filter(Boolean).join("; ")}.`;
+}
+
 function sortearSemente(tema) { return sortear(temaPorId(tema?.id || tema).sementes); }
 function sortearTempero() { return sortear(TEMPEROS); }
 
 module.exports = {
   TEMAS, SURPRESA, DURACOES, TEMPEROS,
   temaPorId, resolverTema, duracaoValida, ehTemaValido, ehDuracaoValida, listaPublica, sortearSemente, sortearTempero,
+  nomesDoTema, nomeNoTema, nomeMecanico, atributoMagiaDoTema, nomesParaMestre,
 };
