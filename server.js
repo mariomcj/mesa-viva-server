@@ -616,7 +616,7 @@ app.post("/api/criar-personagem", authMw, limiteIA, async (req, res) => {
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
   const tema = temaDoPedido(req);
   try {
-    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 2000);
+    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 4000);
     const v = r && typeof r === "object" && !Array.isArray(r) ? r : {};
     const classe = R.CLASSES.includes(v.classe) ? v.classe : "Guerreiro";
     const ficha = R.normalizarFicha({ ...v, pv: undefined, mana: undefined, xp: 0, nivel: 1, pendencias: null,
