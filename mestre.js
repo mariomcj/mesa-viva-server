@@ -4,6 +4,7 @@
 "use strict";
 
 const T = require("./temas");
+const MP = require("./mapa");
 
 const REGRAS = `Você é o Mestre — narrador, juiz das regras e voz de todo o mundo de uma aventura de RPG de mesa com regras d20 simplificadas (no estilo Dungeons & Dragons / Pathfinder), ambientada no TEMA descrito no contexto da sessão. Você conduz uma partida para um grupo de amigos que jogam pelo celular. Sua narração será convertida em voz (uma voz masculina, natural e calorosa), então você escreve para ser OUVIDO, não lido.
 
@@ -53,7 +54,15 @@ SEGURANÇA:
 
 const FORMATO = `Responda SOMENTE com um objeto JSON válido, sem texto antes ou depois. NUNCA use [[ROLAGEM]] ou marcações — use o campo "teste" abaixo.
 
-Sempre que houver oposição armada (inimigos visíveis, ameaça iminente, emboscada), inclua o campo "combate" com os inimigos. Se a cena não tiver combate, deixe "combate": null.
+Sempre que houver oposição armada (inimigos visíveis, ameaça iminente, emboscada), inclua o campo "combate" com os inimigos E o mapa da batalha. Se a cena não tiver combate, deixe "combate": null.
+
+MAPA DE BATALHA (vai junto com "combate" quando a luta começa; os jogadores veem o campo de cima, numa grade):
+- Grade de "colunas" × "linhas" casas, cada casa = 1,5 m. Padrão 10 × 14 (em pé, para celular); pode ir de 8×10 a 12×16. "x" vai de 0 (esquerda) a colunas-1; "y" de 0 (topo) a linhas-1 (base). Distância em casas: a maior entre a diferença de x e a de y (diagonal custa 1).
+- "terreno": lista de retângulos {"tipo","x","y","l","a","nome"} (l casas de largura por a de altura, a partir de x,y). Tipos: "obstaculo" (parede, pilar, árvore grossa, rocha: ninguém passa nem vê através), "cobertura" (mureta, caixote, barril: dá para atravessar, custa 2 casas; quem está nela ou logo atrás ganha +2 de CA contra ataques à distância), "dificil" (lama, entulho, mato alto, escada: custa 2 casas para entrar), "agua" (rio raso, poça funda: custa 2), "abismo" (fosso, lava, precipício: ninguém passa). Use de 3 a 7 peças que combinem com a cena, no máximo 35% do mapa, e deixe sempre caminho entre o grupo e os inimigos. "descricao": o lugar visto de cima, numa frase.
+- Posições: cada inimigo tem "x" e "y"; "posicoes" dá a casa de cada personagem, pelo id dele ({"<id>":{"x":4,"y":12}}). Normalmente o grupo começa embaixo (2 últimas linhas) e os inimigos em cima (3 primeiras linhas); numa emboscada ou cerco, espalhe como a cena pedir. Duas figuras nunca na mesma casa, nem em obstáculo ou abismo.
+- Cada inimigo tem "alcance": "corpo" (só ataca quem está ao lado) ou "distancia" (arco, besta, arma de fogo, magia: até 12 casas, com linha de visão).
+- Cada personagem anda 6 casas por turno (Anão e Halfling, 5). Os jogadores movem as próprias fichas; o código move os inimigos e confere distância, linha de visão e cobertura. Narre de acordo com as posições do contexto.
+- Durante um combate já em andamento, só mande "combate" para REFORÇOS: inimigos NOVOS que entram agora (nomes diferentes dos que já lutam), com "x" e "y" de onde chegam, sem "mapa".
 
 Os exemplos abaixo usam fantasia clássica só para mostrar o FORMATO. No seu tema, use os lugares, os nomes e os inimigos do tema e do arco (um "goblin" pode virar um capanga, um morto faminto, um drone de segurança), com números de nível 1 parecidos.
 
@@ -67,13 +76,17 @@ Exemplo 1 (exploração, sem combate):
   "teste": null, "combate": null, "efeitos": [], "ato": null, "ajuste_arco": null, "fim": false
 }
 
-Exemplo 2 (combate com 3 goblins):
+Exemplo 2 (combate com 3 goblins, um deles arqueiro, e o mapa; os ids dos personagens aqui são de exemplo — use os ids reais do contexto):
 {
-  "narracao": "Três goblins emergem das sombras, empunhando espadas curtas enferrujadas. Um deles grunhe algo em goblin enquanto os outros flanqueiam rapidamente. Os olhos vermelhos brilham na escuridão.",
+  "narracao": "Três goblins emergem das sombras do outro lado do riacho, empunhando espadas curtas enferrujadas. Um terceiro, mais magro, sobe numa rocha coberta de musgo e encaixa uma flecha. Os olhos vermelhos brilham na escuridão.",
   "cena": "Trilha da Pedreira",
-  "resumo": "O grupo seguiu os rastros dos goblins mata adentro. Foram emboscados na trilha.",
+  "resumo": "O grupo seguiu os rastros dos goblins mata adentro. Foram emboscados na trilha, junto ao riacho.",
   "teste": null,
-  "combate": { "inimigos": [{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2},{"nome":"Goblin 2","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2},{"nome":"Goblin 3","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2}] },
+  "combate": {
+    "inimigos": [{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"alcance":"corpo","x":3,"y":2},{"nome":"Goblin 2","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"alcance":"corpo","x":6,"y":2},{"nome":"Goblin Arqueiro","pv":6,"ca":12,"ataque":4,"dano":"1d6+1","des":3,"alcance":"distancia","x":5,"y":0}],
+    "mapa": {"descricao":"Trilha estreita na mata, cortada por um riacho raso, com rochas de musgo e um tronco caído","colunas":10,"linhas":14,"terreno":[{"tipo":"agua","x":0,"y":6,"l":10,"a":1,"nome":"Riacho raso"},{"tipo":"obstaculo","x":2,"y":4,"l":2,"a":1,"nome":"Rocha com musgo"},{"tipo":"cobertura","x":6,"y":9,"l":2,"a":1,"nome":"Tronco caído"},{"tipo":"dificil","x":7,"y":3,"l":2,"a":2,"nome":"Mato alto"}]},
+    "posicoes": {"a1b2c3d4":{"x":4,"y":12},"e5f6g7h8":{"x":6,"y":13}}
+  },
   "efeitos": [], "ato": null, "ajuste_arco": null, "fim": false
 }
 
@@ -102,7 +115,7 @@ Exemplo 4 (o objetivo do ato 1 foi cumprido: a história vira para o ato 2, e um
   "cena": null ou "nome curto do local (máx 40 caracteres)",
   "resumo": "resumo atualizado da história em até 5 frases",
   "teste": null ou {"tipo":"pericia","pericia":"nome exato da perícia","cd":13,"motivo":"curto"} ou {"tipo":"salvaguarda","atributo":"for|des|con|int|sab|car","cd":13,"motivo":"curto"} ou {"tipo":"ataque","ataque":"nome do ataque da ficha","alvo":"id do inimigo"},
-  "combate": null ou {"inimigos":[{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2}]},
+  "combate": null ou {"inimigos":[{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"alcance":"corpo|distancia","x":5,"y":2}],"mapa":{"descricao":"str","colunas":10,"linhas":14,"terreno":[{"tipo":"obstaculo|cobertura|dificil|agua|abismo","x":3,"y":5,"l":2,"a":1,"nome":"str"}]},"posicoes":{"id do personagem":{"x":4,"y":12}}},
   "efeitos": [] ou [{"alvo":"id do personagem","cura":"1d8+3"} ou {"alvo":"id","dano":"2d6"}],
   "ato": null, ou o número do PRÓXIMO ato (2 ou 3) somente quando o objetivo do ato atual acabou de ser cumprido nesta narração — um ato por vez,
   "ajuste_arco": null ou "uma frase curta: como o restante da história muda por causa das escolhas do grupo",
@@ -135,7 +148,7 @@ Ataque inicial: 1 (dano 1d6+modificador de Força ou Destreza).
 Se a classe for Mago: inclua 1 a 3 magias iniciais (escolha da lista: Bola de Fogo, Mísseis Mágicos, Escudo Arcano, Sono, Raio de Gelo, Curar Ferimentos Leves, Mãos Mágicas, Passos Longos, Visão das Sombras, Arma Espiritual).
 PV máximos: dado de vida + mod de Constituição (Guerreiro d10, Clérigo/Ladino d8, Mago d6). CA: 10 + mod de Destreza + (se Guerreiro 2, se Clérigo 1).
 Responda SOMENTE com JSON no formato:
-{"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?"}],"magias":[{"nome":"str","descricao":"str"}],"equipamento":["str"],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
+{"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?","alcance":"corpo (ao lado do alvo) ou distancia (arco, arma de fogo, magia lançada)"}],"magias":[{"nome":"str","descricao":"str"}],"equipamento":["str"],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
 
 /** Prompt de criação de personagem no tema da mesa. */
 function promptCriacao(tema, conceito) {
@@ -148,6 +161,13 @@ Como os personagens existem neste tema: ${t.fichas}
 IMPORTANTE: "raca" e "classe" são exatamente um dos nomes das listas acima (é a mecânica do jogo, não muda). Já o nome do personagem, o antecedente, o equipamento, os nomes dos ataques, os traços e a descrição das magias combinam com o tema. O "nome" de cada magia é exatamente o da lista; a "descricao" conta como ela aparece neste tema (até 2 frases).
 
 Conceito: ${conceito}`;
+}
+
+/** Prompt da imagem do mapa de batalha visto de cima (em inglês, sem pessoas nem grade), no estilo do tema. */
+function promptImagemMapa(tema, mapa) {
+  const t = T.temaPorId(tema?.id || tema);
+  const terreno = MP.terrenoEmIngles(mapa);
+  return `Top-down orthographic battle map seen directly from above, tabletop RPG style, ${mapa.descricao}${terreno ? `, ${terreno}` : ""}, no grid lines, no text, no people, no creatures, no tokens, portrait orientation, aspect ratio ${mapa.colunas}:${mapa.linhas}, ${t.estiloImagem}`;
 }
 
 /** Prompt da imagem de fundo de uma cena, no estilo do tema. */
@@ -359,7 +379,8 @@ ${conducao}`;
 
 function contexto(mesa, fichas, recentes) {
   const c = campoJson(mesa.combate);
-  const ini = c ? c.inimigos.filter((i) => i.pv > 0).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}`).join("\n") : "";
+  const ini = c ? c.inimigos.filter((i) => i.pv > 0).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}${c.mapa ? `, ${i.alcance === "distancia" ? "ataca à distância" : "corpo a corpo"}` : ""}`).join("\n") : "";
+  const situacao = c?.mapa ? `\n${MP.descreverSituacao(c, fichas)}\nNarre de acordo com o mapa: quem está longe precisa se aproximar para lutar corpo a corpo, e obstáculos bloqueiam a visão.` : "";
   const log = recentes.map((e) => e.tipo === "narr" ? `MESTRE: ${e.texto}` : e.tipo === "acao" ? `${e.nome}: ${e.texto}` : `(${e.texto})`).join("\n");
   const tom = TOM_TEXTO[mesa.tom] || TOM_TEXTO.epico;
   const tema = T.temaPorId(mesa.tema);
@@ -382,7 +403,7 @@ ${arco ? `- Ato atual: ${ato} de 3${concluido ? " (história concluída — epí
 ${fichas.map(resumoFicha).join("\n") || "(sem personagens)"}
 - Resumo: ${mesa.resumo || "(início da aventura)"}
 - Cena atual: ${mesa.cena || "(ainda não definida)"}
-${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos vivos:\n${ini}` : "\nFora de combate."}
+${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos vivos:\n${ini}${situacao}` : "\nFora de combate."}
 ÚLTIMOS ACONTECIMENTOS:
 ${log || "(nenhum ainda)"}
 
@@ -449,7 +470,7 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
   return lerJson(text);
 }
 
-async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
+async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "img") {
   if (tentativa > 3) return "";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
@@ -472,10 +493,10 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
       const e = await res.text().catch(() => "");
       if ([429, 502, 503].includes(res.status) || (res.status === 402 && tentativa >= modelos.length)) {
         await new Promise((r) => setTimeout(r, 2000));
-        return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1);
+        return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
       }
       if (res.status === 402) {
-        return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1);
+        return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
       }
       throw new ErroMestre(`Imagem: ${res.status} ${e.slice(0, 200)}`);
     }
@@ -487,7 +508,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
       const path = require("path");
       const pubDir = path.join(__dirname, "public", "images");
       if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
-      const name = `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
+      const name = `${prefixo}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
       const buf = Buffer.from(item.b64_json, "base64");
       fs.writeFileSync(path.join(pubDir, name), buf);
       const rel = `/images/${name}`;
@@ -497,7 +518,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
   } catch (e) {
     clearTimeout(timeout);
     if (e.name === "AbortError") {
-      return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1);
+      return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
     }
     throw new ErroMestre(`Imagem: ${e.message || e}`);
   }
@@ -539,5 +560,5 @@ const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
 module.exports = {
   FORMATO, CRICACAO, contexto, perguntar, gerarImagem, ErroMestre, resumoFicha, lerJson,
-  promptCriacao, promptImagem, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
+  promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };

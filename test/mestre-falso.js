@@ -5,7 +5,8 @@
 "use strict";
 
 const contagem = { texto: 0, imagem: 0, arco: 0 };
-const registro = { ultimoPrompt: "", imagens: [] };
+// portaoImagem: se for uma Promise, as imagens esperam por ela (para testar imagem que chega atrasada)
+const registro = { ultimoPrompt: "", imagens: [], portaoImagem: null };
 const fetchReal = globalThis.fetch;
 const resposta = (obj) => new Response(JSON.stringify(obj), { status: 200, headers: { "Content-Type": "application/json" } });
 
@@ -23,6 +24,31 @@ function arcoFalso(prompt) {
       { nome: "O Último Toque", objetivo: "Recuperar o sino antes da meia-noite.", segredo: "SEGREDO-3", cenas: ["CENA-3a"] },
     ],
     desfechos: ["DESFECHO-vitoria", "DESFECHO-derrota", "DESFECHO-meio"],
+  };
+}
+
+const GOBLINS = [{ nome: "Goblin 1", pv: 7, ca: 13, ataque: 4, dano: "1d6+2", des: 2 }, { nome: "Goblin 2", pv: 7, ca: 13, ataque: 4, dano: "1d6+2", des: 2 }];
+
+/** Combate com mapa: o grupo na linha 13 (y=12), os goblins 4 casas acima (y=8), ao alcance de um avanço de 5 casas. */
+function combateComMapa(ids) {
+  return {
+    inimigos: GOBLINS.map((g, i) => ({ ...g, alcance: "corpo", x: 4 + i, y: 8 })),
+    mapa: { descricao: "Trilha de pedra entre pilares caídos", colunas: 10, linhas: 14, terreno: [
+      { tipo: "obstaculo", x: 0, y: 4, l: 2, a: 2, nome: "Pilar caído" },
+      { tipo: "cobertura", x: 8, y: 5, l: 1, a: 1, nome: "Caixotes" },
+      { tipo: "agua", x: 0, y: 1, l: 3, a: 1, nome: "Poça funda" }] },
+    posicoes: Object.fromEntries(ids.map((id, i) => [id, { x: 4 + i, y: 12 }])),
+  };
+}
+/** Mapa errado de propósito: grade grande demais, tipo inválido, muralha que isola, posições fora e sobrepostas. */
+function combateTorto(ids) {
+  return {
+    inimigos: GOBLINS.map((g) => ({ ...g, alcance: "longe", x: 3, y: 3 })),
+    mapa: { descricao: "Muralha", colunas: 50, linhas: 2, terreno: [
+      { tipo: "lava", x: 1, y: 1, l: 2, a: 2, nome: "Lava" },
+      { tipo: "obstaculo", x: -2, y: 7, l: 30, a: 1, nome: "Muralha" },
+      { tipo: "dificil", x: 20, y: 20, l: 2, a: 2, nome: "Fora" }] },
+    posicoes: Object.fromEntries(ids.map((id) => [id, { x: 4, y: 40 }])),
   };
 }
 
@@ -61,8 +87,11 @@ function decidir(prompt) {
     if (a.includes("falhar")) throw new Error("falha simulada");
     if (emCombate && a.includes("golpeio")) return { narracao: "Você golpeia!", teste: { tipo: "ataque", ataque: ataque.toUpperCase(), alvo } };
     if (emCombate && /atac|ataco/.test(a)) return { narracao: "Você avança!", teste: { tipo: "ataque", ataque, alvo } };
-    if (!emCombate && a.includes("goblin")) return { narracao: "Dois goblins saltam das sombras!", combate: { inimigos: [
-      { nome: "Goblin 1", pv: 7, ca: 13, ataque: 4, dano: "1d6+2", des: 2 }, { nome: "Goblin 2", pv: 7, ca: 13, ataque: 4, dano: "1d6+2", des: 2 }] } };
+    const ids = [...prompt.matchAll(/^- .+? \[id (\w+)\]: /gm)].map((x) => x[1]).filter((id) => !id.startsWith("ini_"));
+    if (!emCombate && a.includes("goblin") && a.includes("sem mapa")) return { narracao: "Dois goblins saltam das sombras!", combate: { inimigos: GOBLINS } };
+    if (!emCombate && a.includes("goblin") && a.includes("torto")) return { narracao: "Dois goblins saltam do muro!", combate: combateTorto(ids) };
+    if (!emCombate && a.includes("goblin")) return { narracao: "Dois goblins saltam das sombras!", combate: combateComMapa(ids) };
+    if (emCombate && a.includes("refor")) return { narracao: "Mais goblins chegam!", combate: { inimigos: [...GOBLINS, { nome: "Goblin 3", pv: 7, ca: 13, ataque: 4, dano: "1d6+2", des: 2, alcance: "distancia", x: 9, y: 0 }] } };
     if (a.includes("cumpro o objetivo")) return { narracao: "A história dá uma virada.", ato: atoAtual + 1 };
     if (a.includes("salto para o fim")) return { narracao: "Tudo acontece de uma vez!", ato: 3 };
     if (a.includes("encerro a história")) return { narracao: "E assim a história termina.", fim: true };
@@ -75,7 +104,12 @@ function decidir(prompt) {
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
-  if (u.startsWith("https://openrouter.ai/api/v1/images")) { contagem.imagem++; registro.imagens.push(JSON.parse(opts.body).prompt); return resposta({ data: [{ url: "https://imagens.exemplo/cena.png" }] }); }
+  if (u.startsWith("https://openrouter.ai/api/v1/images")) {
+    const n = ++contagem.imagem;
+    registro.imagens.push(JSON.parse(opts.body).prompt);
+    if (registro.portaoImagem) await registro.portaoImagem;
+    return resposta({ data: [{ url: `https://imagens.exemplo/img${n}.png` }] });
+  }
   if (u.startsWith("https://openrouter.ai/api/v1/chat")) {
     contagem.texto++;
     const prompt = JSON.parse(opts.body).messages.map((x) => x.content).join("\n");

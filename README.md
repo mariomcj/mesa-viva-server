@@ -5,6 +5,7 @@ Servidor do Mesa Viva: RPG de mesa com IA como mestre. Node.js com Express, SQLi
 ```
 server.js     Rotas HTTP, login, mesas, jogo, painel admin, WebSocket
 regras.js     Motor de regras d20 (fichas, testes, dano, iniciativa, turnos)
+mapa.js       Mapa de batalha visto de cima: grade, terreno, caminhos, linha de visão, posições e movimento dos inimigos (lógica pura)
 mestre.js     Contexto da mesa, arco da história e chamadas à IA (texto e imagens)
 temas.js      Os 20 temas da história, o tema "Surpresa" e as durações da aventura
 test/         Testes automáticos (npm test), com um Mestre falso que não gasta créditos
@@ -28,13 +29,14 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 | `MODELO_RAPIDO`, `MODELO_CAPRICHADO` | não | Modelos do OpenRouter para cada modo do Mestre |
 | `QUALIDADE_ARCO` | não | `rapido` usa o modelo rápido para criar o arco da história (padrão: o caprichado, uma chamada por aventura) |
 | `IMAGENS_DE_FUNDO` | não | `0` desliga a imagem de fundo gerada a cada cena nova (economiza créditos) |
+| `IMAGENS_DE_MAPA` | não | `0` desliga a imagem do mapa de batalha gerada a cada combate novo (economiza créditos; o app desenha um tabuleiro no lugar) |
 | `LIMITE_IA_MAX` | não | Pedidos à IA por conta a cada 10 min (padrão 40) |
 
 ## Rodar
 
 ```bash
 npm install
-npm test        # 41 testes: regras, login, segurança, fluxo do jogo, combate, temas e arco da história
+npm test        # 65 testes: regras, login, segurança, fluxo do jogo, combate, mapa de batalha, temas e arco da história
 npm start
 ```
 
@@ -55,6 +57,23 @@ Ao começar a aventura, a IA cria o **arco**: título, vilão, 3 atos (objetivo 
 | `GET /api/user/mesas` | Cada mesa com `tema`, `temaNome`, `temaIcone` e `titulo` da história |
 | `POST /api/reiniciar-mesa` | Volta ao saguão e apaga o arco; tema, duração e rumo da história ficam |
 | `POST /api/criar-personagem` | Usa o tema da mesa se vier `codigo` (ou o `tema` do corpo) |
+
+## Mapa de batalha
+
+Quando um combate começa, a IA manda, junto dos inimigos, o mapa visto de cima: uma grade de `colunas` × `linhas` casas (cada casa = 1,5 m; padrão 10 × 14, de 8×10 a 12×16), o terreno em retângulos e a casa de cada figura. O servidor confere e corrige tudo (limites, tipos, retângulos dentro da grade, no máximo 35% de terreno, ninguém isolado, posições livres e sem sobreposição) e coloca automaticamente quem ficou sem casa: jogadores nas 2 últimas linhas, inimigos nas 3 primeiras. Sem mapa da IA, monta um campo aberto com 2 a 4 obstáculos ou coberturas.
+
+- Terreno: `obstaculo` (bloqueia passagem e visão), `cobertura` (custa 2; +2 de CA contra ataques à distância para quem está nela ou logo atrás), `dificil` e `agua` (custam 2 para entrar), `abismo` (bloqueia).
+- Distância de Chebyshev (diagonal custa 1). Deslocamento: 6 casas por turno (Anão e Halfling, 5), em quantas etapas quiser; zera quando a vez passa. Atravessa aliados, nunca inimigos; não termina em casa ocupada.
+- Ataques: corpo a corpo só contra quem está ao lado (o personagem avança sozinho até o alvo se o deslocamento der; senão o ataque é cancelado e a vez continua); à distância até 12 casas e com linha de visão. O alcance vem do campo `alcance` do ataque ou de palavras do nome (arco, besta, pistola, raio, magia…).
+- Inimigos: os corpo a corpo andam até 6 casas rumo ao personagem mais próximo e só atacam se terminarem ao lado; os de longe se reposicionam para ter linha de visão e atiram no mais próximo.
+- A imagem do mapa é gerada em segundo plano (como a do fundo) e só é gravada se ainda for o mesmo combate.
+- Combates antigos, sem mapa, continuam funcionando como antes.
+
+O estado da mesa (`GET /api/mesa/:codigo`) traz em `combate`: `mapa` (`colunas`, `linhas`, `descricao`, `terreno`, `imagem`), `posicoes` (`{id: {x, y}}`) e `deslocamento` (`{id: {total, usado}}`); cada inimigo ganha `alcance`.
+
+| Rota | O que faz |
+| --- | --- |
+| `POST /api/mover` | `{codigo, x, y}`: move a própria ficha na sua vez (sem pausa nem rolagem pendente, personagem de pé), pelo caminho mais curto, até o deslocamento restante. Responde `{ok, posicao, restante}`; erros 409 com a mensagem ("Não é a sua vez.", "O combate está pausado.", "Longe demais: você ainda tem N casas de deslocamento.", "Essa casa está ocupada.", "Não dá para passar por ali.") |
 
 ## Como o jogo protege as contas e os créditos
 

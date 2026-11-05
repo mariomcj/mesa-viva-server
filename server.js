@@ -17,6 +17,7 @@ const { WebSocketServer } = require("ws");
 const R = require("./regras");
 const M = require("./mestre");
 const T = require("./temas");
+const MP = require("./mapa");
 
 // ── Config ──
 // .env primeiro, para as variáveis valerem abaixo
@@ -277,6 +278,12 @@ function carregar(codigo, uid) {
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
   "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio"]);
 function salvarMesa(codigo, campos) {
+  // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
+  const c = campos.combate;
+  if (c && typeof c === "object" && c.id && c.mapa && !c.mapa.imagem) {
+    const atual = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo)?.combate);
+    if (atual?.id === c.id && atual.mapa?.imagem) c.mapa.imagem = atual.mapa.imagem;
+  }
   const pares = Object.entries(campos).filter(([k]) => COLUNAS_MESA.has(k));
   if (!pares.length) return;
   const sets = pares.map(([k]) => `${k} = ?`).join(", ");
@@ -786,11 +793,11 @@ app.post("/api/agir", authMw, limiteIA, async (req, res) => {
   if (msgTrava) return erro(res, 409, msgTrava);
   const [idAcao] = registrar(codigo, { tipo: "acao", autor: req.uid, nome: f.nome, texto: acao });
   try {
-    const extra = combate ? `É o turno de ${f.nome} no combate. Se for um ataque, peça um teste do tipo "ataque" usando o nome exato de um ataque da ficha e o id do inimigo.` : "";
+    const extra = combate ? `É o turno de ${f.nome} no combate. Se for um ataque, peça um teste do tipo "ataque" usando o nome exato de um ataque da ficha e o id do inimigo.${combate.mapa ? " O código confere o mapa: corpo a corpo só contra quem está ao lado (se der, o personagem avança sozinho até o alvo); à distância precisa de linha de visão. Narre a tentativa sem decidir se acerta." : ""}` : "";
     const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: ${f.nome} (id ${req.uid}) declara a ação: "${acao.replace(/"/g, "'")}"\n${extra}`, ctx.mesa.qualidade || "rapido", 3000, 0.7);
-    const { rolagem, combateNovo } = await aplicar(ctx, r, true, req.uid);
+    const { rolagem, combateNovo, ataqueCancelado } = await aplicar(ctx, r, true, req.uid);
     if (combateNovo) await avancarCombate(ctx, null);          // inimigos que ganharam a iniciativa agem já
-    else if (!rolagem && combate) await avancarCombate(ctx, req.uid);
+    else if (!rolagem && combate && !ataqueCancelado) await avancarCombate(ctx, req.uid); // ataque fora de alcance: a vez continua, para se aproximar
     res.json({ rolagem });
   } catch (e) {
     // a IA falhou: tira a ação do diário para o jogador poder tentar de novo
@@ -853,6 +860,51 @@ app.post("/api/ideias", authMw, limiteIA, async (req, res) => {
     const lista = Array.isArray(r) ? r : Array.isArray(r?.ideias) ? r.ideias : [];
     res.json({ ideias: lista.slice(0, 3).map((s) => texto(s, 160)).filter(Boolean) });
   } catch (e) { erro(res, 502, msgErro(e)); }
+});
+
+// ── API: Mapa de batalha ──
+
+/** Move a ficha de quem chama no mapa do combate (só na própria vez, até o deslocamento restante). */
+app.post("/api/mover", authMw, (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const x = req.body?.x, y = req.body?.y;
+  if (!Number.isInteger(x) || !Number.isInteger(y)) return erro(res, 400, "Casa inválida.");
+  const ctx = carregar(codigo, req.uid);
+  const c = ctx.mesa.combate;
+  if (!c) return erro(res, 409, "Não há combate agora.");
+  if (!c.mapa) return erro(res, 409, "Este combate não tem mapa.");
+  if (c.pausado) return erro(res, 409, "O combate está pausado.");
+  const vez = R.vezAtual(c);
+  if (!vez || vez.id !== req.uid) return erro(res, 409, "Não é a sua vez.");
+  if (ctx.mesa.rolagem) return erro(res, 409, "Há uma rolagem pendente: role o dado antes de se mover.");
+  const p = ctx.mesa.processando;
+  if (p && agora() - p.desde < TRAVA_MS) return erro(res, 409, "O Mestre está narrando. Espere um pouco.");
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 409, "Crie seu personagem.");
+  if (f.pv <= 0) return erro(res, 409, `${f.nome} está caído e não pode se mover.`);
+  MP.completarPosicoes(c);
+  const origem = c.posicoes[req.uid];
+  if (!origem) return erro(res, 409, "Seu personagem não está no mapa.");
+  const d = deslocamentoDe(c, f);
+  const restante = Math.max(0, d.total - d.usado);
+  const plano = MP.planejarMovimento(c.mapa, MP.ocupantes(c), req.uid, origem, { x, y }, restante);
+  if (!plano.ok) {
+    const msg = {
+      fora: "Essa casa fica fora do mapa.",
+      bloqueada: "Não dá para passar por ali.",
+      "sem-caminho": "Não dá para passar por ali.",
+      ocupada: "Essa casa está ocupada.",
+      longe: `Longe demais: você ainda tem ${MP.casas(restante)} de deslocamento.`,
+    }[plano.motivo] || "Não dá para ir até lá.";
+    return erro(res, 409, msg);
+  }
+  if (plano.custo > 0) {
+    c.posicoes[req.uid] = { x, y };
+    d.usado += plano.custo;
+    salvarMesa(codigo, { combate: c });
+    broadcast(codigo, "atualizar", {});
+  }
+  res.json({ ok: true, posicao: { x, y }, restante: Math.max(0, d.total - d.usado) });
 });
 
 // ── API: Leitura (polling do app) ──
@@ -941,7 +993,7 @@ app.post("/api/mesa/:codigo/combate/pausar", authMw, (req, res) => {
 
 // ── Helpers de jogo ──
 
-/** Aplica a resposta do Mestre. Devolve { rolagem, combateNovo }. */
+/** Aplica a resposta do Mestre. Devolve { rolagem, combateNovo, ataqueCancelado }. */
 async function aplicar(ctx, r, permitirTeste, uidAtor) {
   const codigo = ctx.codigo;
   const campos = {};
@@ -976,27 +1028,131 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
   }
 
   let combateNovo = false;
-  if (Array.isArray(r?.combate?.inimigos) && r.combate.inimigos.length && !combate) {
+  const inimigosIA = Array.isArray(r?.combate?.inimigos) ? r.combate.inimigos.filter((i) => i && typeof i === "object" && !Array.isArray(i)) : [];
+  if (inimigosIA.length && !combate) {
     const jogadores = Object.values(ctx.fichas).filter((f) => f.pv > 0);
     if (jogadores.length) {
-      combate = R.iniciarCombate(jogadores, r.combate.inimigos.slice(0, 8));
+      const lista = inimigosIA.slice(0, 8).map((i) => ({ ...i, nome: texto(i.nome, 40) || "Inimigo" }));
+      combate = R.iniciarCombate(jogadores, lista);
+      combate.id = uid();                                   // a imagem do mapa só vale para este combate
+      MP.prepararCombate(combate, r.combate, { cena: campos.cena || ctx.mesa.cena, inimigosIA: lista });
+      zerarDeslocamento(combate, ctx.fichas);
       campos.combate = combate;
       combateNovo = true;
       registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + combate.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · ") });
     }
+  } else if (inimigosIA.length && combate) {
+    const novos = acrescentarReforcos(combate, inimigosIA);
+    if (novos.length) {
+      campos.combate = combate;
+      registrar(codigo, { tipo: "sys", texto: `Reforços: ${novos.map((i) => i.nome).join(", ")} ${novos.length > 1 ? "entram" : "entra"} no combate.` });
+    }
   }
 
-  let rolagem = null;
+  let rolagem = null, ataqueCancelado = false;
   const minha = ctx.fichas[uidAtor];
   // Um teste de ataque só faz sentido com o combate já em andamento e na vez de quem agiu
   if (permitirTeste && r?.teste && minha && !(combateNovo && r.teste.tipo === "ataque")) {
     rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
+    if (rolagem?.tipo === "ataque" && combate?.mapa) {
+      const conf = conferirAtaqueNoMapa(combate, minha, r.teste, rolagem);
+      if (conf.cancelar) { registrar(codigo, { tipo: "sys", texto: conf.cancelar }); rolagem = null; ataqueCancelado = true; }
+      else if (conf.aviso) { registrar(codigo, { tipo: "sys", texto: conf.aviso }); campos.combate = combate; }
+    }
     if (rolagem) campos.rolagem = rolagem;
   }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
   ctx.mesa.combate = combate;
   if (campos.cena) ctx.mesa.cena = campos.cena;
-  return { rolagem, combateNovo };
+  if (combateNovo) gerarImagemMapa(codigo, T.temaPorId(ctx.mesa.tema), combate);
+  return { rolagem, combateNovo, ataqueCancelado };
+}
+
+// ── Mapa de batalha (a lógica de grade fica em mapa.js) ──
+
+/** Deslocamento do personagem neste turno ({total, usado}); cria se faltar. */
+function deslocamentoDe(c, ficha) {
+  c.deslocamento ||= {};
+  if (!c.deslocamento[ficha.uid]) c.deslocamento[ficha.uid] = { total: MP.deslocamentoBase(ficha), usado: 0 };
+  return c.deslocamento[ficha.uid];
+}
+/** Zera o deslocamento: só quem está na vez (se for um personagem) tem um, inteiro. */
+function zerarDeslocamento(c, fichas) {
+  if (!c.mapa) return;
+  const v = R.vezAtual(c);
+  c.deslocamento = {};
+  if (v?.tipo === "pj" && fichas[v.id]) deslocamentoDe(c, fichas[v.id]);
+}
+
+/**
+ * Inimigos que a IA mandou durante um combate: entram só os de nome novo (a IA costuma repetir os que já lutam),
+ * com iniciativa própria, sem mexer na vez atual nem nas posições de quem já está no mapa. Devolve os novos.
+ */
+function acrescentarReforcos(c, lista) {
+  const nomes = new Set((c.inimigos || []).map((i) => R.chave(i.nome)));
+  let prox = Math.max(-1, ...(c.inimigos || []).map((i) => Number(String(i.id).replace(/^ini_/, "")) || 0)) + 1;
+  const novos = [];
+  for (const dados of lista) {
+    if ((c.inimigos || []).length >= 12) break;
+    const nome = texto(dados.nome, 40);
+    if (!nome || nomes.has(R.chave(nome))) continue;
+    nomes.add(R.chave(nome));
+    const ini = R.criarInimigo(`ini_${prox++}`, { ...dados, nome });
+    c.inimigos.push(ini);
+    const ordem = c.ordem || (c.ordem = []);
+    const atual = ordem.length ? (Number(c.vez) || 0) % ordem.length : 0;
+    const item = { id: ini.id, tipo: "ini", nome: ini.nome, ini: R.d(20) + ini.des };
+    let pos = ordem.findIndex((o) => o.ini < item.ini);
+    if (pos < 0) pos = ordem.length;
+    ordem.splice(pos, 0, item);
+    c.vez = ordem.length > 1 && pos <= atual ? atual + 1 : atual;   // quem está na vez continua na vez
+    novos.push({ ini, pedida: { x: dados.x, y: dados.y } });
+  }
+  if (c.mapa && novos.length) MP.posicionarNovos(c.mapa, c.posicoes || (c.posicoes = {}), novos.map((n) => ({ id: n.ini.id, lado: "ini", pedida: n.pedida })));
+  return novos.map((n) => n.ini);
+}
+
+/**
+ * Confere um ataque de jogador no mapa. Corpo a corpo longe do alvo: avança sozinho se der (gasta deslocamento),
+ * senão cancela. À distância: até 12 casas e com linha de visão; alvo com cobertura dá CA +2 nesta rolagem.
+ * Devolve { cancelar: texto } | { aviso: texto } | {}. Altera `c` e `rol`.
+ */
+function conferirAtaqueNoMapa(c, ficha, pedido, rol) {
+  MP.completarPosicoes(c);
+  const alvo = (c.inimigos || []).find((i) => i.id === rol.alvo);
+  const pa = c.posicoes?.[ficha.uid], pb = alvo && c.posicoes?.[alvo.id];
+  if (!alvo || !pa || !pb) return {};
+  const ataque = R.acharAtaque(ficha, pedido.ataque);
+  const dist = MP.distancia(pa, pb);
+  if (MP.alcanceDoAtaque(ataque) === "corpo") {
+    if (dist <= 1) return {};
+    const d = deslocamentoDe(c, ficha);
+    const ap = MP.aproximar(c.mapa, MP.ocupantes(c), ficha.uid, pa, pb, Math.max(0, d.total - d.usado));
+    if (!ap) return { cancelar: `${alvo.nome} está a ${MP.casas(dist)}: longe demais para um ataque corpo a corpo. Aproxime-se no mapa.` };
+    c.posicoes[ficha.uid] = { ...ap.destino };
+    d.usado += ap.custo;
+    return { aviso: `${ficha.nome} avança até ${alvo.nome}.` };
+  }
+  if (dist > MP.ALCANCE_DISTANCIA) return { cancelar: `${alvo.nome} está a ${MP.casas(dist)}: longe demais para ${ataque.nome} (alcance de ${MP.ALCANCE_DISTANCIA} casas).` };
+  if (!MP.linhaDeVisao(c.mapa, pa, pb)) return { cancelar: `Sem linha de visão até ${alvo.nome}.` };
+  if (MP.temCobertura(c.mapa, pa, pb)) { rol.cd += 2; rol.rotulo += " (cobertura +2)"; }
+  return {};
+}
+
+/** Imagem do mapa visto de cima (em segundo plano, como o fundo da cena). Só grava se ainda for o mesmo combate. */
+function gerarImagemMapa(codigo, tema, c) {
+  if (!c?.mapa || !c.id || !OPENROUTER_KEY || process.env.IMAGENS_DE_MAPA === "0") return;
+  const id = c.id;
+  M.gerarImagem(OPENROUTER_KEY, M.promptImagemMapa(tema, c.mapa), SERVER_BASE_URL, 1, "mapa")
+    .then((url) => {
+      if (!url) return;
+      const atual = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo)?.combate);
+      if (!atual || atual.id !== id || !atual.mapa) return;     // o combate acabou ou é outro: a imagem não serve mais
+      atual.mapa.imagem = url;
+      salvarMesa(codigo, { combate: atual });
+      broadcast(codigo, "atualizar", {});
+    })
+    .catch(() => {});
 }
 
 /** Imagem de fundo da cena, no estilo do tema (em segundo plano; cada imagem custa créditos). */
@@ -1092,15 +1248,20 @@ async function avancarCombate(ctx, quemAgiu) {
 
   if (!R.combateAcabou(combate, ctx.fichas)) {
     const antes = Object.fromEntries(Object.values(ctx.fichas).map((f) => [f.uid, f.pv]));
-    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu);
+    const chaveVez = () => `${combate.rodada}:${(Number(combate.vez) || 0) % (combate.ordem?.length || 1)}`;
+    const vezAntes = chaveVez();
+    if (combate.mapa) MP.completarPosicoes(combate);
+    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu, combate.mapa ? { tatica: MP.criarTatica(combate) } : {});
+    if (chaveVez() !== vezAntes || (combate.mapa && !combate.deslocamento)) zerarDeslocamento(combate, ctx.fichas); // a vez mudou: deslocamento novo
     for (const f of Object.values(ctx.fichas)) if (f.pv !== antes[f.uid]) salvarFicha(codigo, f);
     salvarMesa(codigo, { combate });
     ctx.mesa.combate = combate;
-    for (const o of ocorrido) registrar(codigo, { tipo: "roll", texto: o.log.texto, ok: !o.log.ok }); // ok = bom para o grupo
+    // ok = bom para o grupo; movimentos (ok null) são neutros
+    for (const o of ocorrido) registrar(codigo, { tipo: o.log.tipo || "roll", texto: o.log.texto, ok: o.log.ok == null ? null : !o.log.ok });
     if (ocorrido.length && OPENROUTER_KEY) {
       const prox = R.vezAtual(combate);
       try {
-        const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto({ ...m, combate }, Object.values(ctx.fichas), [])}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados já rolados pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox && prox.tipo === "pj" ? `\nDepois disso é a vez de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.4);
+        const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto({ ...m, combate }, Object.values(ctx.fichas), [])}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados (movimentos no mapa e ataques) já resolvidos pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox && prox.tipo === "pj" ? `\nDepois disso é a vez de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.4);
         if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
         aplicarArco(codigo, r);
       } catch (e) {

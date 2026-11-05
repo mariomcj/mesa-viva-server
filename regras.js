@@ -18,7 +18,9 @@ const SEXOS = ["Masculino", "Feminino", "Outro"];
 const DADO_DE_VIDA = { Guerreiro: 10, Clérigo: 8, Ladino: 8, Mago: 6 };
 
 function _ataquesPorClasse(classe, fornecidos) {
-  const validos = fornecidos.map((a) => ({ nome: safeStr(a.nome, "", 30), bonus: Math.max(-5, Math.min(15, Number(a.bonus) || 0)), dano: String(a.dano || "1d4") })).slice(0, 6);
+  // "alcance" (corpo|distancia) é opcional: sem ele, vale a regra das palavras do nome (mapa.alcanceDoAtaque)
+  const validos = fornecidos.map((a) => ({ nome: safeStr(a.nome, "", 30), bonus: Math.max(-5, Math.min(15, Number(a.bonus) || 0)), dano: String(a.dano || "1d4"),
+    ...(a.alcance === "corpo" || a.alcance === "distancia" ? { alcance: a.alcance } : {}) })).slice(0, 6);
   if (validos.length > 0) return validos;
   const PADRAO = {
     Guerreiro: [
@@ -175,6 +177,7 @@ function criarInimigo(id, dados) {
     id, nome: dados.nome, pv: Math.max(1, dados.pv || 7),
     pvMax: Math.max(1, dados.pv || 7), ca: Math.max(10, dados.ca || 13),
     ataque: Number(dados.ataque) || 4, dano: dados.dano || "1d6+2", des: Number(dados.des) || 2,
+    alcance: dados.alcance === "distancia" ? "distancia" : "corpo",
   };
 }
 
@@ -205,15 +208,20 @@ function combateAcabou(combate, fichas) {
   return false;
 }
 
+/** O ataque da ficha com esse nome (sem diferenciar maiúsculas e acentos); senão o primeiro; senão golpe desarmado. */
+function acharAtaque(ficha, nome) {
+  const ataques = ficha.ataques || [];
+  const k = chave(nome);
+  return ataques.find((at) => chave(at.nome) === k)
+    || (k ? ataques.find((at) => chave(at.nome).includes(k) || k.includes(chave(at.nome))) : null)
+    || ataques[0]
+    || { nome: "Golpe desarmado", bonus: mod(ficha.atributos?.for) + 2, dano: "1d4" };
+}
+
 function montarRolagem(ficha, pedido, combate, id) {
   if (!pedido || typeof pedido !== "object") return null;
   if (pedido.tipo === "ataque") {
-    const ataques = ficha.ataques || [];
-    const k = chave(pedido.ataque);
-    const a = ataques.find((at) => chave(at.nome) === k)
-      || (k ? ataques.find((at) => chave(at.nome).includes(k) || k.includes(chave(at.nome))) : null)
-      || ataques[0]
-      || { nome: "Golpe desarmado", bonus: mod(ficha.atributos?.for) + 2, dano: "1d4" };
+    const a = acharAtaque(ficha, pedido.ataque);
     const vivos = (combate?.inimigos || []).filter((i) => i.pv > 0);
     const alvo = vivos.find((i) => i.id === pedido.alvo || chave(i.nome) === chave(pedido.alvo)) || vivos[0];
     return {
@@ -257,8 +265,11 @@ function resolverRolagem(rol, natural, combate, nomeAtacante) {
 /**
  * Passa a vez depois que `quemAgiu` terminou (null = ninguém agiu ainda, ex.: combate acabou de começar)
  * e resolve os turnos dos inimigos até chegar a um jogador de pé. Altera `c` e a vida em `fichas`.
+ * `opcoes.tatica(inimigo, alvosVivos)` (combate com mapa): move o inimigo e devolve { alvo|null, linhas, bonusCA };
+ * sem alvo, o inimigo só se move. Sem tática (combate antigo), ataca um personagem de pé ao acaso.
+ * Cada item de `ocorrido`: { linha, log: { texto, ok, tipo? } } (ok null = movimento, neutro).
  */
-function passarVez(c, fichas, quemAgiu) {
+function passarVez(c, fichas, quemAgiu, opcoes = {}) {
   const ocorrido = [];
   const lista = Object.values(fichas);
   const avancar = () => { c.vez = (Number(c.vez) || 0) + 1; if (c.vez >= c.ordem.length) { c.vez = 0; c.rodada = (c.rodada || 1) + 1; } };
@@ -280,16 +291,26 @@ function passarVez(c, fichas, quemAgiu) {
     if (!inimigo || inimigo.pv <= 0) { avancar(); continue; }
     const alvos = lista.filter((f) => f.pv > 0);
     if (!alvos.length) break;
-    const alvo = alvos[Math.floor(Math.random() * alvos.length)];
+    let alvo, bonusCA = 0;
+    if (opcoes.tatica) {
+      const plano = opcoes.tatica(inimigo, alvos) || {};
+      for (const l of plano.linhas || []) ocorrido.push({ linha: l, log: { texto: l, ok: null, tipo: "sys" } });
+      alvo = plano.alvo;
+      bonusCA = Number(plano.bonusCA) || 0;
+      if (!alvo) { avancar(); continue; }   // não chegou perto: só se moveu
+    } else {
+      alvo = alvos[Math.floor(Math.random() * alvos.length)];
+    }
+    const ca = alvo.ca + bonusCA;
     const nat = d(20);
     const total = nat + inimigo.ataque;
-    const acertou = nat === 20 || (nat !== 1 && total >= alvo.ca);
+    const acertou = nat === 20 || (nat !== 1 && total >= ca);
     let dano = 0;
     if (acertou) {
       dano = rolar(inimigo.dano, nat === 20).total;
       alvo.pv = Math.max(0, alvo.pv - dano);
     }
-    const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${alvo.ca} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
+    const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${ca}${bonusCA ? ` (cobertura +${bonusCA})` : ""} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
     ocorrido.push({ linha, log: { texto: linha, ok: acertou } });
     avancar();
   }
@@ -301,5 +322,5 @@ module.exports = {
   ATRIBUTOS, NOME_ATRIBUTO, PERICIAS, RACAS, CLASSES, SEXOS, DADO_DE_VIDA,
   mod, sinal, d, rolar, bonusPericia, normalizarFicha, inicio: iniciativa,
   criarInimigo, iniciarCombate, vezAtual, combateAcabou,
-  montarRolagem, resolverRolagem, passarVez, chave,
+  montarRolagem, resolverRolagem, passarVez, chave, acharAtaque,
 };
