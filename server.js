@@ -16,6 +16,7 @@ const { WebSocketServer } = require("ws");
 
 const R = require("./regras");
 const M = require("./mestre");
+const T = require("./temas");
 
 // ── Config ──
 // .env primeiro, para as variáveis valerem abaixo
@@ -57,7 +58,7 @@ db.exec(`
     vetos TEXT DEFAULT '',
     qualidade TEXT DEFAULT 'rapido',
     cdVisivel INTEGER DEFAULT 1,
-    cena TEXT DEFAULT 'Taverna Javali Cego',
+    cena TEXT DEFAULT '',
     resumo TEXT DEFAULT '',
     combate TEXT,
     rolagem TEXT,
@@ -101,6 +102,15 @@ try { db.exec("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, userId
 try { db.exec("ALTER TABLE tokens ADD COLUMN expiraEm INTEGER DEFAULT 0"); } catch (e) {}
 try { db.exec("CREATE TABLE IF NOT EXISTS aparelhos (deviceUid TEXT PRIMARY KEY, userId TEXT NOT NULL, vinculadoEm INTEGER NOT NULL)"); } catch (e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_log_codigo ON log (codigo, id)"); } catch (e) {}
+// Temas e arco da história. Mesas antigas ficam com tema clássico e duração curta.
+try { db.exec("ALTER TABLE mesas ADD COLUMN tema TEXT DEFAULT 'classico'"); } catch (e) {}
+try { db.exec("ALTER TABLE mesas ADD COLUMN duracao TEXT DEFAULT 'curta'"); } catch (e) {}
+try { db.exec("ALTER TABLE mesas ADD COLUMN desejos TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE mesas ADD COLUMN arco TEXT"); } catch (e) {}                          // arco inteiro (privado), JSON
+try { db.exec("ALTER TABLE mesas ADD COLUMN arcoAjustes TEXT DEFAULT '[]'"); } catch (e) {}       // últimos 6 ajustes do Mestre, JSON
+try { db.exec("ALTER TABLE mesas ADD COLUMN ato INTEGER DEFAULT 1"); } catch (e) {}
+try { db.exec("ALTER TABLE mesas ADD COLUMN arcoConcluido INTEGER DEFAULT 0"); } catch (e) {}
+try { db.exec("ALTER TABLE mesas ADD COLUMN atoInicio INTEGER DEFAULT 0"); } catch (e) {}          // id do diário em que o ato atual começou
 
 // ── Helpers ──
 function uid() { return crypto.randomUUID().slice(0, 8); }
@@ -252,6 +262,11 @@ function carregar(codigo, uid) {
   m.combate = json(m.combate);
   m.rolagem = json(m.rolagem);
   m.processando = json(m.processando);
+  m.arco = json(m.arco);
+  m.arcoAjustes = json(m.arcoAjustes) || [];
+  m.tema = T.temaPorId(m.tema).id;
+  m.duracao = T.duracaoValida(m.duracao);
+  m._narracoesNoAto = db.prepare("SELECT COUNT(*) c FROM log WHERE codigo = ? AND tipo = 'narr' AND id > ?").get(codigo, m.atoInicio || 0).c;
   m.membros = Object.fromEntries(db.prepare("SELECT uid, nome FROM membros WHERE codigo = ?").all(codigo).map((r) => [r.uid, r.nome]));
   const fichas = {};
   for (const f of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) fichas[f.uid] = R.normalizarFicha(json(f.dados), f.uid);
@@ -259,7 +274,8 @@ function carregar(codigo, uid) {
   return { codigo, uid, mesa: m, fichas, recentes };
 }
 
-const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo"]);
+const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio"]);
 function salvarMesa(codigo, campos) {
   const pares = Object.entries(campos).filter(([k]) => COLUNAS_MESA.has(k));
   if (!pares.length) return;
@@ -398,21 +414,30 @@ app.get("/api/user/dados", authMw, (req, res) => {
 });
 
 app.get("/api/user/mesas", authMw, (req, res) => {
-  const mesas = db.prepare(`
-    SELECT me.codigo, me.fase, me.criadaEm, CASE WHEN me.dono = ? THEN 'dono' ELSE 'membro' END as papel
+  const linhas = db.prepare(`
+    SELECT me.codigo, me.fase, me.criadaEm, CASE WHEN me.dono = ? THEN 'dono' ELSE 'membro' END as papel, me.tema, me.arco
     FROM membros m JOIN mesas me ON m.codigo = me.codigo
     WHERE m.uid = ? ORDER BY me.criadaEm DESC
   `).all(req.uid, req.uid);
+  const mesas = linhas.map(({ arco, tema, ...m }) => {
+    const t = T.temaPorId(tema);
+    return { ...m, tema: t.id, temaNome: t.nome, temaIcone: t.icone, titulo: M.arcoPublico({ fase: m.fase, tema: t.id, arco })?.titulo || "" };
+  });
   res.json({ mesas });
 });
+
+// ── API: Temas da história ──
+app.get("/api/temas", authMw, (req, res) => res.json(T.listaPublica()));
 
 // ── API: Mesa (criar / entrar / sair) ──
 function criarMesa(req, res) {
   const nome = texto(req.body?.nome, 30) || "Jogador";
+  const tema = T.resolverTema(req.body?.tema);          // "surpresa" sorteia; inválido = clássico
+  const duracao = T.duracaoValida(req.body?.duracao);   // inválida = curta
   for (let tentativa = 0; tentativa < 6; tentativa++) {
     const codigo = Array.from({ length: 5 }, () => ALFABETO[crypto.randomInt(ALFABETO.length)]).join("");
     if (db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo)) continue;
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm) VALUES (?, ?, ?)").run(codigo, req.uid, agora());
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, tema, duracao, cena) VALUES (?, ?, ?, ?, ?, '')").run(codigo, req.uid, agora(), tema, duracao);
     db.prepare("INSERT INTO membros (codigo, uid, nome, ultimaAtividade) VALUES (?, ?, ?, ?)").run(codigo, req.uid, nome, agora());
     return res.json({ codigo, uid: req.uid });
   }
@@ -522,6 +547,17 @@ app.post("/api/configurar-mesa", authMw, (req, res) => {
   if (typeof d.vetos === "string") campos.vetos = texto(d.vetos, 300);
   if (["rapido", "caprichado"].includes(d.qualidade)) campos.qualidade = d.qualidade;
   if (typeof d.cdVisivel === "boolean") campos.cdVisivel = d.cdVisivel ? 1 : 0;
+  if (typeof d.desejos === "string") campos.desejos = texto(d.desejos, 300);   // "Rumo da história": vale em qualquer fase
+  // Tema e duração só antes de começar. Mandar o mesmo valor de novo não é troca (o app pode reenviar tudo).
+  const atual = db.prepare("SELECT fase, tema, duracao FROM mesas WHERE codigo = ?").get(codigo);
+  const temaAtual = T.temaPorId(atual.tema).id, duracaoAtual = T.duracaoValida(atual.duracao);
+  const trocaTema = T.ehTemaValido(d.tema) && d.tema !== temaAtual;
+  const trocaDuracao = T.ehDuracaoValida(d.duracao) && d.duracao !== duracaoAtual;
+  if (trocaTema || trocaDuracao) {
+    if (atual.fase !== "lobby") return erro(res, 409, "A aventura já começou: o tema não muda mais.");
+    if (trocaTema) campos.tema = T.resolverTema(d.tema);
+    if (trocaDuracao) campos.duracao = d.duracao;
+  }
   if (Object.keys(campos).length) { salvarMesa(codigo, campos); broadcast(codigo, "atualizar", {}); }
   res.json({ ok: true });
 });
@@ -537,19 +573,32 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
       ficha.pv = ficha.pvMax;
       salvarFicha(codigo, ficha);
     }
-    salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "Taverna Javali Cego", fundo: "" });
+    // tema, duração e rumo da história ficam; o arco é apagado e será criado de novo no próximo começo
+    salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "", fundo: "",
+      arco: null, arcoAjustes: [], ato: 1, arcoConcluido: 0, atoInicio: 0 });
   })();
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
 
 // ── API: Personagem ──
+/**
+ * Tema para pedidos fora do jogo (criar personagem, gerar imagem): o da mesa, se vier o código
+ * de uma mesa da qual a pessoa é membro; senão o `tema` do corpo; senão o clássico.
+ */
+function temaDoPedido(req) {
+  const cod = codigoValido(req.body?.codigo);
+  if (cod && ehMembro(cod, req.uid)) return T.temaPorId(db.prepare("SELECT tema FROM mesas WHERE codigo = ?").get(cod)?.tema);
+  return T.temaPorId(req.body?.tema);
+}
+
 app.post("/api/criar-personagem", authMw, limiteIA, async (req, res) => {
   const conceito = texto(req.body?.conceito, 300);
   if (!conceito) return erro(res, 400, "Descreva seu personagem.");
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  const tema = temaDoPedido(req);
   try {
-    const r = await M.perguntar(OPENROUTER_KEY, `${M.CRICACAO}\n\nConceito: ${conceito}`, "rapido", 2000);
+    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 2000);
     const ficha = R.normalizarFicha({ ...r, pv: undefined, xp: 0, nivel: 1 }, req.uid, conceito);
     res.json({ ficha });
   } catch (e) { erro(res, 502, msgErro(e)); }
@@ -582,7 +631,7 @@ app.post("/api/gerar-imagem", authMw, limiteIA, async (req, res) => {
   const prompt = texto(req.body?.prompt, 500);
   if (!prompt) return erro(res, 400, "Descreva a imagem.");
   try {
-    const url = await M.gerarImagem(OPENROUTER_KEY, `Ilustração para RPG de fantasia: ${prompt}`, SERVER_BASE_URL);
+    const url = await M.gerarImagem(OPENROUTER_KEY, `Ilustração para RPG de mesa, ${temaDoPedido(req).estiloImagem}: ${prompt}`, SERVER_BASE_URL);
     if (!url) return erro(res, 502, "Não foi possível gerar a imagem agora.");
     res.json({ url });
   } catch (e) { erro(res, 502, "Não foi possível gerar a imagem agora."); }
@@ -626,7 +675,7 @@ app.post("/api/admin/mesas", adminMw, (req, res) => {
   const cod = String(codigo || Math.random().toString(36).slice(2, 7)).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
   if (cod.length < 3) return erro(res, 400, "Código inválido.");
   if (db.prepare("SELECT codigo FROM mesas WHERE codigo = ?").get(cod)) return erro(res, 409, "Código já existe.");
-  db.prepare("INSERT INTO mesas (codigo, dono, cena, tom) VALUES (?, 'admin', ?, ?)").run(cod, cena || "Taverna Javali Cego", tom || "epico");
+  db.prepare("INSERT INTO mesas (codigo, dono, cena, tom) VALUES (?, 'admin', ?, ?)").run(cod, cena || "", tom || "epico");
   res.json({ ok: true, codigo: cod });
 });
 
@@ -685,11 +734,24 @@ app.post("/api/comecar-aventura", authMw, limiteIA, async (req, res) => {
   const msgTrava = travar(codigo, req.uid, ctx.mesa.membros[req.uid] || "alguém");
   if (msgTrava) return erro(res, 409, msgTrava);
   try {
-    const prompt = `${M.contexto({ ...ctx.mesa, resumo: "", combate: null }, Object.values(ctx.fichas), [])}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e coloque o grupo na taverna Javali Cego, quando Odila Ventoforte se aproxima. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
+    const fichas = Object.values(ctx.fichas);
+    const tema = T.temaPorId(ctx.mesa.tema);
+    // 1) o arco da história (começo, meio e fim), privado
+    const arco = await gerarArco(ctx.mesa, fichas);
+    salvarMesa(codigo, { processando: { por: req.uid, nome: ctx.mesa.membros[req.uid] || "alguém", desde: agora() } }); // renova a trava
+    // 2) a abertura, narrada a partir do ato 1
+    const a1 = arco.atos[0];
+    const mesaAbertura = { ...ctx.mesa, resumo: "", combate: null, cena: "", arco, ato: 1, arcoConcluido: 0, arcoAjustes: [], _narracoesNoAto: 0 };
+    const prompt = `${M.contexto(mesaAbertura, fichas, [])}\n\nEVENTO: Abertura da sessão. Comece a história pelo ato 1, "${a1.nome}" (objetivo: ${a1.objetivo})${a1.cenas?.[0] ? `, a partir desta cena sugerida: ${a1.cenas[0]}` : ""}.\nFaça uma abertura curta e marcante: situe o lugar com os sentidos, apresente cada personagem do grupo pelo nome, já do jeito do tema, e termine com o gancho da história acontecendo diante deles. Não pergunte o que fazem — apenas narre a cena. Dê um nome curto à cena em "cena".\nNão peça testes nem inicie combate. Deixe "ato", "ajuste_arco" e "fim" vazios.`;
     const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
-    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: texto(r?.cena, 60) || "Taverna Javali Cego", fundo: "", resumo: texto(r?.resumo, 900), combate: null, rolagem: null });
+    const cena = texto(r?.cena, 60) || tema.nome;
+    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena, fundo: "", resumo: texto(r?.resumo, 900), combate: null, rolagem: null,
+      arco, arcoAjustes: [], ato: 1, arcoConcluido: 0 });
     registrar(codigo, { tipo: "sys", texto: "A sessão começou." });
+    const [idAto] = registrar(codigo, { tipo: "sys", texto: `Ato 1 — ${a1.nome}` });
+    salvarMesa(codigo, { atoInicio: idAto });
     if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
+    gerarFundo(codigo, tema, cena);
     res.json({ ok: true });
   } catch (e) { erro(res, 502, msgErro(e)); }
   finally { destravar(codigo); }
@@ -783,7 +845,10 @@ app.post("/api/ideias", authMw, limiteIA, async (req, res) => {
   const f = ctx.fichas[req.uid];
   if (!f) return erro(res, 400, "Crie seu personagem.");
   try {
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem. Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.`;
+    const tema = T.temaPorId(ctx.mesa.tema);
+    const arco = M.arcoEfetivo(ctx.mesa);
+    const rumo = arco && !Number(ctx.mesa.arcoConcluido) ? ` Pelo menos uma delas deve aproximar o grupo do objetivo do ato atual ("${arco.atos[M.numAto(ctx.mesa.ato) - 1]?.objetivo || ""}"), sem revelar segredos.` : "";
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem, no clima do tema ${tema.nome}.${rumo} Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.`;
     const r = await M.perguntar(OPENROUTER_KEY, prompt, "rapido", 2000);
     const lista = Array.isArray(r) ? r : Array.isArray(r?.ideias) ? r.ideias : [];
     res.json({ ideias: lista.slice(0, 3).map((s) => texto(s, 160)).filter(Boolean) });
@@ -808,6 +873,12 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   mesa.digitando = {};
   if (digitando.has(codigo)) for (const [u, v] of digitando.get(codigo)) mesa.digitando[u] = v.nome;
   mesa.agora = t; // relógio do servidor, para o app não depender do relógio do celular
+  // Tema e arco PÚBLICO: os segredos, cenas, desfechos e ajustes do arco nunca saem do servidor
+  const tema = T.temaPorId(mesa.tema);
+  const arco = M.arcoPublico(mesa);
+  for (const k of ["arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio"]) delete mesa[k];
+  Object.assign(mesa, { tema: tema.id, temaNome: tema.nome, temaInspiracao: tema.inspiracao, temaIcone: tema.icone,
+    duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco });
   res.json(mesa);
 });
 
@@ -876,13 +947,10 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
   const campos = {};
   if (r?.cena) campos.cena = texto(r.cena, 60);
   // Imagem de fundo só quando a cena muda (cada imagem custa créditos)
-  if (r?.cena && OPENROUTER_KEY && process.env.IMAGENS_DE_FUNDO !== "0" && (!ctx.mesa?.fundo || campos.cena !== ctx.mesa.cena)) {
-    M.gerarImagem(OPENROUTER_KEY, `Ambiente de RPG de fantasia: ${campos.cena}, ilustração de fundo para chat, atmosférico, desfoque suave`, SERVER_BASE_URL)
-      .then((url) => { if (url) { salvarMesa(codigo, { fundo: url }); broadcast(codigo, "atualizar", {}); } })
-      .catch(() => {});
-  }
+  if (r?.cena && (!ctx.mesa?.fundo || campos.cena !== ctx.mesa.cena)) gerarFundo(codigo, T.temaPorId(ctx.mesa.tema), campos.cena);
   if (r?.resumo) campos.resumo = texto(r.resumo, 900);
   if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
+  aplicarArco(codigo, r);
 
   // XP: +5 para quem agiu, a cada ação narrada
   const ator = ctx.fichas[uidAtor];
@@ -931,6 +999,76 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
   return { rolagem, combateNovo };
 }
 
+/** Imagem de fundo da cena, no estilo do tema (em segundo plano; cada imagem custa créditos). */
+function gerarFundo(codigo, tema, cena) {
+  if (!cena || !OPENROUTER_KEY || process.env.IMAGENS_DE_FUNDO === "0") return;
+  M.gerarImagem(OPENROUTER_KEY, M.promptImagem(tema, cena), SERVER_BASE_URL)
+    .then((url) => { if (url) { salvarMesa(codigo, { fundo: url }); broadcast(codigo, "atualizar", {}); } })
+    .catch(() => {});
+}
+
+const QUALIDADE_ARCO = process.env.QUALIDADE_ARCO === "rapido" ? "rapido" : "caprichado";
+
+/**
+ * Gera o arco da história com a IA (temperatura alta + semente e tempero sorteados, para variar).
+ * Duas tentativas; se ambas falharem (ou a primeira estourar o tempo), usa o arco de reserva:
+ * "A Mina de Pedra-Funda" no tema clássico, um arco mínimo de improviso nos outros.
+ */
+async function gerarArco(mesa, fichas) {
+  const tema = T.temaPorId(mesa.tema);
+  const semente = T.sortearSemente(tema), tempero = T.sortearTempero();
+  const prompt = M.promptArco({ tema, duracao: mesa.duracao, fichas, tom: mesa.tom, vetos: mesa.vetos, desejos: mesa.desejos, semente, tempero });
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    try {
+      const arco = M.normalizarArco(await M.perguntar(OPENROUTER_KEY, prompt, QUALIDADE_ARCO, 3000, 1.0));
+      if (arco) return { ...arco, semente, tempero };
+      console.log(`[arco] tentativa ${tentativa}: arco incompleto`);
+    } catch (e) {
+      console.log(`[arco] tentativa ${tentativa} falhou: ${e.message}`);
+      if (/demorou demais/.test(e.message)) break; // não há tempo para outra tentativa antes de o app desistir
+    }
+  }
+  const reserva = tema.id === "classico" ? M.arcoPedraFunda() : M.arcoMinimo(tema, semente);
+  return { ...reserva, semente, tempero, reserva: true };
+}
+
+/**
+ * Campos do arco na resposta do Mestre: "ato" (avança só +1), "ajuste_arco" (guarda os 6 últimos)
+ * e "fim" (só no ato 3). Chamado em toda resposta narrada do Mestre durante o jogo.
+ */
+function aplicarArco(codigo, r) {
+  if (!r || typeof r !== "object" || Array.isArray(r)) return;
+  const m = db.prepare("SELECT fase, tema, arco, arcoAjustes, ato, arcoConcluido FROM mesas WHERE codigo = ?").get(codigo);
+  if (!m || m.fase !== "jogo") return;
+  const campos = {};
+  let arco = json(m.arco);
+  if (!arco) { arco = M.arcoEfetivo(m); campos.arco = arco; }   // mesa antiga, sem arco gravado: fixa o de reserva
+  const ato = M.numAto(m.ato);
+  const concluido = !!Number(m.arcoConcluido);
+  const entradas = [];
+
+  const ajuste = typeof r.ajuste_arco === "string" ? texto(r.ajuste_arco, 240) : "";
+  if (ajuste) campos.arcoAjustes = [...(json(m.arcoAjustes) || []), ajuste].slice(-6);
+
+  let novoAto = null;
+  if (!concluido) {
+    const pedido = Number(r.ato);
+    if (Number.isFinite(pedido) && pedido > ato && ato < 3) {
+      novoAto = ato + 1;                                          // nunca pula atos
+      campos.ato = novoAto;
+      entradas.push({ tipo: "sys", texto: `Ato ${novoAto} — ${arco.atos[novoAto - 1]?.nome || ["O Começo", "O Meio", "O Fim"][novoAto - 1]}` });
+    } else if ((r.fim === true || r.fim === "true") && ato === 3) {
+      campos.arcoConcluido = 1;
+      entradas.push({ tipo: "sys", texto: `Fim da aventura: ${arco.titulo}` });
+    }
+  }
+  if (Object.keys(campos).length) salvarMesa(codigo, campos);
+  if (entradas.length) {
+    const ids = registrar(codigo, ...entradas);
+    if (novoAto) salvarMesa(codigo, { atoInicio: ids[0] });
+  }
+}
+
 function ganharXp(ctx, f, quanto) {
   f.xp = (f.xp || 0) + quanto;
   while (f.xp >= (f.nivel || 1) * 100) {
@@ -964,6 +1102,7 @@ async function avancarCombate(ctx, quemAgiu) {
       try {
         const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto({ ...m, combate }, Object.values(ctx.fichas), [])}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados já rolados pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox && prox.tipo === "pj" ? `\nDepois disso é a vez de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.4);
         if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
+        aplicarArco(codigo, r);
       } catch (e) {
         console.log(`[avancarCombate] narração falhou: ${e.message}`);
       }
