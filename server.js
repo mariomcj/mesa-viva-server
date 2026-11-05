@@ -15,6 +15,7 @@ const http = require("http");
 const { WebSocketServer } = require("ws");
 
 const R = require("./regras");
+const C = require("./catalogo");
 const M = require("./mestre");
 const T = require("./temas");
 const MP = require("./mapa");
@@ -32,6 +33,7 @@ const TOKEN_VALIDADE_MS = 90 * 24 * 3600_000;      // login vale 90 dias
 const TRAVA_MS = 150_000;                          // tempo máximo de uma narração em andamento
 const ONLINE_WINDOW_MS = 90_000;                   // 90 s sem atividade = offline
 const TYPING_TTL_MS = 6_000;                       // 6 s sem batida = parou de digitar
+const TEMPO_VEZ_MS = 600_000;                      // 10 min sem jogar: a vez pode ser passada por outro jogador
 const LIMITE_IA = { max: Number(process.env.LIMITE_IA_MAX) || 40, janelaMs: 10 * 60_000 }; // por conta: 40 pedidos à IA a cada 10 min
 
 // ── Admin: sem ADMIN_PASS definido, o painel fica desligado (nunca uma senha padrão) ──
@@ -112,6 +114,12 @@ try { db.exec("ALTER TABLE mesas ADD COLUMN arcoAjustes TEXT DEFAULT '[]'"); } c
 try { db.exec("ALTER TABLE mesas ADD COLUMN ato INTEGER DEFAULT 1"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN arcoConcluido INTEGER DEFAULT 0"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN atoInicio INTEGER DEFAULT 0"); } catch (e) {}          // id do diário em que o ato atual começou
+// Dia na história e elementos visíveis da cena. Mesas antigas começam no dia 1.
+try { db.exec("ALTER TABLE mesas ADD COLUMN dia INTEGER DEFAULT 1"); } catch (e) {}
+try { db.exec("ALTER TABLE mesas ADD COLUMN diaNarr INTEGER DEFAULT 0"); } catch (e) {}            // narração em que o último dia começou
+try { db.exec("ALTER TABLE mesas ADD COLUMN elementos TEXT DEFAULT '[]'"); } catch (e) {}          // JSON, privado
+// Última ficha criada pelo Mestre para cada conta: o inventário e as magias iniciais só podem vir daqui
+try { db.exec("CREATE TABLE IF NOT EXISTS criacoes (uid TEXT PRIMARY KEY, dados TEXT NOT NULL, criadoEm INTEGER NOT NULL)"); } catch (e) {}
 
 // ── Helpers ──
 function uid() { return crypto.randomUUID().slice(0, 8); }
@@ -265,6 +273,8 @@ function carregar(codigo, uid) {
   m.processando = json(m.processando);
   m.arco = json(m.arco);
   m.arcoAjustes = json(m.arcoAjustes) || [];
+  m.elementos = json(m.elementos) || [];
+  m.dia = Math.max(1, Number(m.dia) || 1);
   m.tema = T.temaPorId(m.tema).id;
   m.duracao = T.duracaoValida(m.duracao);
   m._narracoesNoAto = db.prepare("SELECT COUNT(*) c FROM log WHERE codigo = ? AND tipo = 'narr' AND id > ?").get(codigo, m.atoInicio || 0).c;
@@ -276,7 +286,7 @@ function carregar(codigo, uid) {
 }
 
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
-  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio"]);
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos"]);
 function salvarMesa(codigo, campos) {
   // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
   const c = campos.combate;
@@ -578,11 +588,12 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
     for (const f of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) {
       const ficha = R.normalizarFicha(json(f.dados), f.uid);
       ficha.pv = ficha.pvMax;
+      ficha.mana = ficha.manaMax;
       salvarFicha(codigo, ficha);
     }
     // tema, duração e rumo da história ficam; o arco é apagado e será criado de novo no próximo começo
     salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "", fundo: "",
-      arco: null, arcoAjustes: [], ato: 1, arcoConcluido: 0, atoInicio: 0 });
+      arco: null, arcoAjustes: [], ato: 1, arcoConcluido: 0, atoInicio: 0, dia: 1, diaNarr: 0, elementos: [] });
   })();
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
@@ -606,27 +617,117 @@ app.post("/api/criar-personagem", authMw, limiteIA, async (req, res) => {
   const tema = temaDoPedido(req);
   try {
     const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 2000);
-    const ficha = R.normalizarFicha({ ...r, pv: undefined, xp: 0, nivel: 1 }, req.uid, conceito);
+    const v = r && typeof r === "object" && !Array.isArray(r) ? r : {};
+    const classe = R.CLASSES.includes(v.classe) ? v.classe : "Guerreiro";
+    const ficha = R.normalizarFicha({ ...v, pv: undefined, mana: undefined, xp: 0, nivel: 1, pendencias: null,
+      magias: magiasIniciais(classe, v.magias), inventario: inventarioInicial(v.inventario, v.equipamento) }, req.uid, conceito);
+    // guarda o que o Mestre criou: o salvar-ficha só aceita inventário e magias que vieram daqui (ou que já estavam na ficha)
+    db.prepare("INSERT OR REPLACE INTO criacoes (uid, dados, criadoEm) VALUES (?, ?, ?)").run(req.uid, JSON.stringify({ inventario: ficha.inventario, magias: ficha.magias }), agora());
     res.json({ ficha });
   } catch (e) { erro(res, 502, msgErro(e)); }
 });
 
+/** Magias da criação: só do catálogo de nível 1 da classe (Mago 3, com 1 ou 2 truques; Clérigo 2; demais nenhuma). */
+function magiasIniciais(classe, lista) {
+  const n = R.MAGIAS_INICIAIS[classe] || 0;
+  if (!n) return [];
+  const permitidas = C.magiasDaClasse(classe, 1);
+  const escolhidas = [];
+  for (const m of Array.isArray(lista) ? lista : []) {
+    const cat = permitidas.find((p) => R.chave(p.nome) === R.chave(typeof m === "object" ? m?.nome : m));
+    if (cat && !escolhidas.some((e) => e.cat === cat)) escolhidas.push({ cat, descricao: typeof m === "object" ? texto(m?.descricao, 300) : "" });
+  }
+  const maxTruques = classe === "Mago" ? 2 : n;
+  const truques = (l) => l.filter((e) => e.cat.circulo === 0).length;
+  let sel = [...escolhidas.filter((e) => e.cat.circulo === 0).slice(0, maxTruques), ...escolhidas.filter((e) => e.cat.circulo > 0)].slice(0, n);
+  if (classe === "Mago" && !truques(sel)) sel = [{ cat: permitidas.find((p) => p.circulo === 0) }, ...sel].slice(0, n);
+  for (const p of permitidas) {
+    if (sel.length >= n) break;
+    if (sel.some((e) => e.cat === p) || (p.circulo === 0 && truques(sel) >= maxTruques)) continue;
+    sel.push({ cat: p });
+  }
+  return sel.map((e) => ({ nome: e.cat.nome, descricao: e.descricao || "" }));
+}
+
+/** Inventário da criação: o do Mestre (ou o equipamento antigo), sempre com pelo menos 2 Poções de cura. */
+function inventarioInicial(lista, equipamento) {
+  const base = Array.isArray(lista) ? lista : (Array.isArray(equipamento) ? equipamento : []).map((nome) => ({ nome, qtd: 1, tipo: "equipamento" }));
+  return garantirPocoes(R.juntarItens(base));
+}
+function garantirPocoes(inv) {
+  const pocoes = inv.filter((i) => i.tipo === "pocao" && /^cura /.test(i.efeito));
+  const total = pocoes.reduce((s, i) => s + i.qtd, 0);
+  if (total >= 2) return inv;
+  if (pocoes.length) { pocoes[0].qtd += 2 - total; return inv; }
+  return [...inv, { ...R.POCAO_DE_CURA }].slice(-R.MAX_ITENS);
+}
+
+function ultimaCriacao(uidConta) {
+  return json(db.prepare("SELECT dados FROM criacoes WHERE uid = ?").get(uidConta)?.dados);
+}
+
+/** Inventário no saguão: só itens que o Mestre criou ou que já estavam na ficha, até a quantidade de lá. */
+function inventarioPermitido(recebida, antiga, criacao) {
+  if (!Array.isArray(recebida.inventario)) return antiga?.inventario ?? criacao?.inventario ?? undefined; // undefined: converte o equipamento do app antigo
+  const fontes = new Map();
+  for (const it of [...(antiga?.inventario || []), ...(criacao?.inventario || [])]) {
+    const k = R.chave(it.nome);
+    if (!fontes.has(k) || fontes.get(k).qtd < it.qtd) fontes.set(k, it);
+  }
+  const saida = [];
+  for (const it of recebida.inventario) {
+    const ref = fontes.get(R.chave(it?.nome));
+    if (!ref) continue;
+    fontes.delete(R.chave(it.nome));
+    saida.push({ ...ref, qtd: Math.max(1, Math.min(ref.qtd, Math.floor(Number(it.qtd)) || ref.qtd)) });
+  }
+  return antiga ? saida : garantirPocoes(saida);
+}
+
+/** Magias no saguão: as que já estavam na ficha ou na criação do Mestre, ou do catálogo de nível 1 da classe. */
+function magiasPermitidas(recebida, antiga, criacao) {
+  if (!Array.isArray(recebida.magias)) return antiga?.magias ?? criacao?.magias ?? [];
+  const classe = R.CLASSES.includes(recebida.classe) ? recebida.classe : "Guerreiro";
+  const conhecidas = new Set([...(antiga?.magias || []), ...(criacao?.magias || []), ...C.magiasDaClasse(classe, 1)].map((m) => R.chave(m.nome)));
+  const limite = Math.max(R.MAGIAS_INICIAIS[classe] || 0, antiga?.magias?.length || 0);
+  const vistas = new Set();
+  return recebida.magias.filter((m) => {
+    const k = R.chave(m?.nome);
+    if (!conhecidas.has(k) || vistas.has(k)) return false;
+    vistas.add(k);
+    return true;
+  }).slice(0, limite);
+}
+
+/** Anotações: o app novo manda "anotacoes", o antigo "notas"; vale a que mudou. */
+function anotacoesRecebidas(recebida, antiga) {
+  const atual = antiga?.anotacoes ?? "";
+  for (const k of ["anotacoes", "notas"]) if (typeof recebida[k] === "string" && recebida[k] !== atual) return recebida[k];
+  return atual;
+}
+
+// Depois de a aventura começar, o jogador só muda aparência e história; o resto muda pela história e por /api/evoluir
+const CAMPOS_LIVRES = ["nome", "sexo", "imagem", "antecedente"];
+
 app.post("/api/salvar-ficha", authMw, (req, res) => {
   const codigo = mesaDoMembro(req, res); if (!codigo) return;
-  const recebida = req.body?.ficha || {};
+  const recebida = req.body?.ficha && typeof req.body.ficha === "object" && !Array.isArray(req.body.ficha) ? req.body.ficha : {};
   const antigaRow = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(codigo, req.uid);
   const antiga = antigaRow ? R.normalizarFicha(json(antigaRow.dados), req.uid) : null;
-  const mesa = db.prepare("SELECT fase, combate FROM mesas WHERE codigo = ?").get(codigo);
-  // XP e nível são do servidor: o app não os altera
-  const nova = R.normalizarFicha({ ...recebida, xp: antiga?.xp ?? 0, nivel: antiga?.nivel ?? 1 }, req.uid);
-  if (!antiga || mesa.fase === "lobby") {
-    // fora da sessão: vida cheia, a não ser que o jogador mande outra
-    if (recebida.pv === undefined || recebida.pv === null) nova.pv = nova.pvMax;
+  const mesa = db.prepare("SELECT fase FROM mesas WHERE codigo = ?").get(codigo);
+  let nova;
+  if (antiga && mesa.fase !== "lobby") {
+    // ficha travada: atributos, PV, mana, ataques, magias, inventário, raça e classe ficam como estão
+    const livres = {};
+    for (const k of CAMPOS_LIVRES) if (recebida[k] !== undefined) livres[k] = recebida[k];
+    const tracos = recebida.tracos && typeof recebida.tracos === "object" ? recebida.tracos : {};
+    nova = R.normalizarFicha({ ...antiga, ...livres, tracos: { ...antiga.tracos, ...tracos }, anotacoes: anotacoesRecebidas(recebida, antiga) }, req.uid);
   } else {
-    // durante a sessão, o jogador só ajusta a vida de 1 em 1 (botões −1/+1) e nunca durante um combate
-    const pedida = Number(recebida.pv);
-    const ajusteManual = !json(mesa.combate) && Number.isFinite(pedida) && Math.abs(pedida - antiga.pv) <= 1;
-    nova.pv = ajusteManual ? Math.max(0, Math.min(nova.pvMax, pedida)) : Math.min(antiga.pv, nova.pvMax);
+    // saguão: livre dentro das regras de criação; XP, nível e pendências são do servidor; vida e mana cheias
+    const criacao = ultimaCriacao(req.uid);
+    nova = R.normalizarFicha({ ...recebida, xp: antiga?.xp ?? 0, nivel: antiga?.nivel ?? 1, pendencias: antiga?.pendencias ?? null,
+      pv: undefined, mana: undefined, anotacoes: anotacoesRecebidas(recebida, antiga),
+      magias: magiasPermitidas(recebida, antiga, criacao), inventario: inventarioPermitido(recebida, antiga, criacao) }, req.uid);
   }
   db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(codigo, req.uid, JSON.stringify(nova));
   broadcast(codigo, "ficha", { uid: req.uid });
@@ -749,11 +850,11 @@ app.post("/api/comecar-aventura", authMw, limiteIA, async (req, res) => {
     // 2) a abertura, narrada a partir do ato 1
     const a1 = arco.atos[0];
     const mesaAbertura = { ...ctx.mesa, resumo: "", combate: null, cena: "", arco, ato: 1, arcoConcluido: 0, arcoAjustes: [], _narracoesNoAto: 0 };
-    const prompt = `${M.contexto(mesaAbertura, fichas, [])}\n\nEVENTO: Abertura da sessão. Comece a história pelo ato 1, "${a1.nome}" (objetivo: ${a1.objetivo})${a1.cenas?.[0] ? `, a partir desta cena sugerida: ${a1.cenas[0]}` : ""}.\nFaça uma abertura curta e marcante: situe o lugar com os sentidos, apresente cada personagem do grupo pelo nome, já do jeito do tema, e termine com o gancho da história acontecendo diante deles. Não pergunte o que fazem — apenas narre a cena. Dê um nome curto à cena em "cena".\nNão peça testes nem inicie combate. Deixe "ato", "ajuste_arco" e "fim" vazios.`;
-    const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
+    const prompt = `${M.contexto(mesaAbertura, fichas, [])}\n\nEVENTO: Abertura da sessão. Comece a história pelo ato 1, "${a1.nome}" (objetivo: ${a1.objetivo})${a1.cenas?.[0] ? `, a partir desta cena sugerida: ${a1.cenas[0]}` : ""}.\nAbertura em até 4 frases curtas: o lugar em um detalhe concreto, cada personagem do grupo pelo nome em poucas palavras, já do jeito do tema, e o gancho da história acontecendo diante deles. Não pergunte o que fazem — apenas narre a cena. Dê um nome curto à cena em "cena" e liste em "elementos" o que está visível e pode ser usado.\nNão peça testes nem inicie combate. Deixe "ato", "ajuste_arco", "itens", "novo_dia" e "fim" vazios.`;
+    const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.7);
     const cena = texto(r?.cena, 60) || tema.nome;
     salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena, fundo: "", resumo: texto(r?.resumo, 900), combate: null, rolagem: null,
-      arco, arcoAjustes: [], ato: 1, arcoConcluido: 0 });
+      arco, arcoAjustes: [], ato: 1, arcoConcluido: 0, dia: 1, diaNarr: 0, elementos: elementosValidos(r?.elementos) || [] });
     registrar(codigo, { tipo: "sys", texto: "A sessão começou." });
     const [idAto] = registrar(codigo, { tipo: "sys", texto: `Ato 1 — ${a1.nome}` });
     salvarMesa(codigo, { atoInicio: idAto });
@@ -775,29 +876,23 @@ app.post("/api/agir", authMw, limiteIA, async (req, res) => {
   if (ctx.mesa.fase !== "jogo") return erro(res, 400, "A aventura ainda não começou.");
   if (ctx.mesa.rolagem) return erro(res, 400, "Há uma rolagem pendente.");
   const combate = ctx.mesa.combate;
-  const vez = R.vezAtual(combate);
-  if (vez) {
-    if (combate.pausado) return erro(res, 400, "Combate pausado. Retome para agir.");
-    const atu = ctx.fichas[vez.id];
-    const expirou = combate.inicioVez && agora() - combate.inicioVez > 600_000;
-    // Vez travada (inimigo, jogador caído/que saiu, ou 10 min sem jogar): resolve e devolve o controle
-    if (vez.tipo !== "pj" || !atu || atu.pv <= 0 || (expirou && vez.id !== req.uid)) {
-      registrar(codigo, { tipo: "sys", texto: vez.tipo === "pj" ? `${vez.nome} não pode agir agora — o combate segue.` : "O combate segue." });
-      await avancarCombate(ctx, vez.tipo === "pj" ? vez.id : null);
-      return erro(res, 409, "A vez mudou. Confira de quem é a vez e tente de novo.");
-    }
-    if (vez.id !== req.uid) return erro(res, 400, `Vez de ${vez.nome}.`);
-  }
+  if (combate && !(await conferirVez(ctx, req.uid, res, 400))) return;
   if (f.pv <= 0) return erro(res, 400, `${f.nome} está caído.`);
+  // no combate, "outra ação" (texto livre) é a ação do turno: uma só
+  if (combate && turnoDe(combate)?.acaoUsada) return erro(res, 409, "Você já fez sua ação neste turno.");
   const msgTrava = travar(codigo, req.uid, ctx.mesa.membros[req.uid] || f.nome);
   if (msgTrava) return erro(res, 409, msgTrava);
   const [idAcao] = registrar(codigo, { tipo: "acao", autor: req.uid, nome: f.nome, texto: acao });
   try {
-    const extra = combate ? `É o turno de ${f.nome} no combate. Se for um ataque, peça um teste do tipo "ataque" usando o nome exato de um ataque da ficha e o id do inimigo.${combate.mapa ? " O código confere o mapa: corpo a corpo só contra quem está ao lado (se der, o personagem avança sozinho até o alvo); à distância precisa de linha de visão. Narre a tentativa sem decidir se acerta." : ""}` : "";
+    const extra = combate ? `É a ação de ${f.nome} neste turno do combate (uma ação por turno). Se for um ataque, peça um teste do tipo "ataque" usando o nome exato de um ataque da ficha de ${f.nome} e o id do inimigo; se nenhum ataque da ficha servir, narre que não dá.${combate.mapa ? " O código confere o mapa: corpo a corpo só contra quem está ao lado (se der, o personagem avança sozinho até o alvo); à distância precisa de linha de visão. Narre a tentativa sem decidir se acerta." : ""}` : "";
     const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: ${f.nome} (id ${req.uid}) declara a ação: "${acao.replace(/"/g, "'")}"\n${extra}`, ctx.mesa.qualidade || "rapido", 3000, 0.7);
     const { rolagem, combateNovo, ataqueCancelado } = await aplicar(ctx, r, true, req.uid);
     if (combateNovo) await avancarCombate(ctx, null);          // inimigos que ganharam a iniciativa agem já
-    else if (!rolagem && combate && !ataqueCancelado) await avancarCombate(ctx, req.uid); // ataque fora de alcance: a vez continua, para se aproximar
+    else if (combate && !ataqueCancelado) {
+      // ação feita; ataque fora de alcance ou fora da ficha não gasta a ação (a vez continua)
+      marcarTurno(codigo, req.uid, "acaoUsada");
+      if (!rolagem) await talvezEncerrarTurno(ctx, req.uid);
+    }
     res.json({ rolagem });
   } catch (e) {
     // a IA falhou: tira a ação do diário para o jogador poder tentar de novo
@@ -839,7 +934,10 @@ app.post("/api/rolar", authMw, limiteIA, async (req, res) => {
         registrar(codigo, { tipo: "sys", texto: "O Mestre não conseguiu narrar este resultado, mas ele vale." });
       }
     }
-    if (combate) await avancarCombate(ctx, req.uid);
+    if (combate) {
+      marcarTurno(codigo, req.uid, "acaoUsada");   // rolagens de combate vêm sempre da ação do turno
+      await talvezEncerrarTurno(ctx, req.uid);
+    }
     res.json({ natural: r2.natural, total: r2.total, sucesso: r2.sucesso, dano: r2.dano ?? null });
   } catch (e) { console.error("[rolar]", e); erro(res, 502, msgErro(e)); }
   finally { destravar(codigo); }
@@ -877,6 +975,7 @@ app.post("/api/mover", authMw, (req, res) => {
   const vez = R.vezAtual(c);
   if (!vez || vez.id !== req.uid) return erro(res, 409, "Não é a sua vez.");
   if (ctx.mesa.rolagem) return erro(res, 409, "Há uma rolagem pendente: role o dado antes de se mover.");
+  if (turnoDe(c)?.acaoUsada) return erro(res, 409, "Você já fez sua ação: não dá mais para se mover neste turno.");
   const p = ctx.mesa.processando;
   if (p && agora() - p.desde < TRAVA_MS) return erro(res, 409, "O Mestre está narrando. Espere um pouco.");
   const f = ctx.fichas[req.uid];
@@ -907,6 +1006,232 @@ app.post("/api/mover", authMw, (req, res) => {
   res.json({ ok: true, posicao: { x, y }, restante: Math.max(0, d.total - d.usado) });
 });
 
+// ── API: Turno em etapas, magias, itens e evolução ──
+
+/** Trava o Mestre para a rota; devolve true se travou (senão a resposta 409 já foi enviada). */
+function travarOuRecusar(ctx, f, res) {
+  const msg = travar(ctx.codigo, f.uid, ctx.mesa.membros[f.uid] || f.nome);
+  if (msg) { erro(res, 409, msg); return false; }
+  return true;
+}
+
+/**
+ * Etapa 2 do turno: atacar com um ataque da ficha ou conjurar uma magia da ficha (lista fechada).
+ * Ataque e magia de dano criam a rolagem pendente (a narração vem depois do dado); cura e utilidade
+ * se resolvem aqui e o Mestre narra numa frase. Fora de alcance ou sem mana: 409 sem gastar a ação.
+ */
+app.post("/api/acao-combate", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const tipo = req.body?.tipo, nome = texto(req.body?.nome, 40), alvoPedido = texto(req.body?.alvo, 40);
+  if (tipo !== "ataque" && tipo !== "magia") return erro(res, 400, "Tipo de ação inválido: use \"ataque\" ou \"magia\".");
+  if (!nome) return erro(res, 400, "Escolha o ataque ou a magia.");
+  const ctx = carregar(codigo, req.uid);
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Crie seu personagem.");
+  if (ctx.mesa.fase !== "jogo") return erro(res, 409, "A aventura ainda não começou.");
+  const c = ctx.mesa.combate;
+  if (!c) return erro(res, 409, "Não há combate agora.");
+  if (ctx.mesa.rolagem) return erro(res, 409, "Há uma rolagem pendente.");
+  if (!(await conferirVez(ctx, req.uid, res))) return;
+  if (f.pv <= 0) return erro(res, 409, `${f.nome} está caído.`);
+  const turno = turnoDe(c);
+  if (turno.acaoUsada) return erro(res, 409, "Você já fez sua ação neste turno.");
+
+  let arma = null, magia = null;
+  if (tipo === "ataque") {
+    arma = R.ataqueDaFicha(f, nome);
+    if (!arma || R.chave(arma.nome) !== R.chave(nome)) return erro(res, 409, "Esse ataque não está na sua ficha.");
+  } else {
+    magia = R.magiaDaFicha(f, nome);
+    if (!magia) return erro(res, 409, "Essa magia não está na sua ficha.");
+    if (magia.custo > f.mana) return erro(res, 409, msgSemMana(magia, f));
+    if (magia.tipo === "dano") arma = armaDaMagia(f, magia);
+  }
+  if (!travarOuRecusar(ctx, f, res)) return;
+  try {
+    if (arma) {
+      const p = prepararAtaque(c, f, arma, alvoPedido, true);
+      if (p.erro) return erro(res, 409, p.erro);
+      turno.acaoUsada = true;
+      const alvo = c.inimigos.find((i) => i.id === p.rolagem.alvo);
+      registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: magia ? `Conjura ${magia.nome} em ${alvo.nome}.` : `Ataca ${alvo.nome} com ${arma.nome}.` });
+      if (p.aviso) registrar(codigo, { tipo: "sys", texto: p.aviso });
+      if (magia) f.mana -= magia.custo;
+      salvarMesa(codigo, { combate: c, rolagem: p.rolagem });
+      ganharXp(ctx, f, 5);
+      broadcast(codigo, "atualizar", {});
+      return res.json({ ok: true, rolagem: p.rolagem });
+    }
+    // cura ou utilidade: sem rolagem
+    const r = await conjurarSemRolagem(ctx, f, magia, alvoPedido);
+    if (r.erro) return erro(res, 409, r.erro);
+    marcarTurno(codigo, f.uid, "acaoUsada");
+    await talvezEncerrarTurno(ctx, f.uid);
+    res.json({ ok: true, ...(r.cura != null ? { cura: r.cura } : {}) });
+  } catch (e) { console.error("[acao-combate]", e); erro(res, 502, msgErro(e)); }
+  finally { destravar(codigo); }
+});
+
+/** Conjurar fora de combate: só cura e utilidade (mesmo corpo da ação de combate, sem as regras de turno). */
+app.post("/api/usar-magia", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const nome = texto(req.body?.nome, 40), alvoPedido = texto(req.body?.alvo, 40);
+  if (!nome) return erro(res, 400, "Escolha a magia.");
+  const ctx = carregar(codigo, req.uid);
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Crie seu personagem.");
+  if (ctx.mesa.fase !== "jogo") return erro(res, 409, "A aventura ainda não começou.");
+  if (ctx.mesa.combate) return erro(res, 409, "Em combate, conjure na sua vez, como a ação do turno.");
+  if (f.pv <= 0) return erro(res, 409, `${f.nome} está caído.`);
+  const magia = R.magiaDaFicha(f, nome);
+  if (!magia) return erro(res, 409, "Essa magia não está na sua ficha.");
+  if (magia.tipo === "dano") return erro(res, 409, "Magia de dano só no combate.");
+  if (magia.custo > f.mana) return erro(res, 409, msgSemMana(magia, f));
+  if (!travarOuRecusar(ctx, f, res)) return;
+  try {
+    const r = await conjurarSemRolagem(ctx, f, magia, alvoPedido);
+    if (r.erro) return erro(res, 409, r.erro);
+    broadcast(codigo, "ficha", { uid: f.uid });
+    res.json({ ok: true, ...(r.cura != null ? { cura: r.cura } : {}) });
+  } catch (e) { console.error("[usar-magia]", e); erro(res, 502, msgErro(e)); }
+  finally { destravar(codigo); }
+});
+
+/**
+ * Etapa 3 do turno (ou a qualquer hora fora de combate): usar uma poção ou item rápido do inventário.
+ * "cura NdM+K" o servidor aplica; os outros itens rápidos são gastos e o Mestre narra o efeito numa frase.
+ */
+app.post("/api/usar-item", authMw, limiteIA, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const nome = texto(req.body?.item, 40), alvoPedido = texto(req.body?.alvo, 40);
+  if (!nome) return erro(res, 400, "Escolha o item.");
+  const ctx = carregar(codigo, req.uid);
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Crie seu personagem.");
+  if (ctx.mesa.fase !== "jogo") return erro(res, 409, "A aventura ainda não começou.");
+  const item = R.itemDaFicha(f, nome);
+  if (!item) return erro(res, 409, "Você não tem esse item.");
+  if (!R.TIPOS_RAPIDOS.includes(item.tipo)) return erro(res, 409, `${item.nome} não é poção nem item rápido.`);
+  const c = ctx.mesa.combate;
+  let turno = null;
+  if (c) {
+    if (ctx.mesa.rolagem) return erro(res, 409, "Há uma rolagem pendente.");
+    if (!(await conferirVez(ctx, req.uid, res))) return;
+    turno = turnoDe(c);
+    if (turno.itemUsado) return erro(res, 409, "Você já usou um item neste turno.");
+  }
+  if (f.pv <= 0) return erro(res, 409, `${f.nome} está caído.`);
+  const a = alvoDeCura(ctx, f, alvoPedido, "corpo");       // poção em aliado: só ao lado (no mapa)
+  if (a.erro) return erro(res, 409, a.erro.replace("Esse aliado", "Esse alvo"));
+  const alvo = a.alvo;
+  if (!travarOuRecusar(ctx, f, res)) return;
+  try {
+    gastarItem(f, item, 1);
+    let cura = null;
+    const em = alvo.uid !== f.uid ? ` em ${alvo.nome}` : "";
+    if (/^cura /.test(item.efeito)) {
+      cura = R.rolar(item.efeito.slice(5)).total;
+      alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
+      registrar(codigo, { tipo: "roll", texto: `${f.nome} usa ${item.nome}${em}: ${alvo.nome} recupera ${cura} PV`, ok: true });
+    } else {
+      registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Usa ${item.nome}${em}.` });
+    }
+    salvarFicha(codigo, f);
+    if (alvo !== f) salvarFicha(codigo, alvo);
+    if (turno) marcarTurno(codigo, f.uid, "itemUsado");
+    if (cura === null) await narrarCurto(ctx, f.uid, `${f.nome} (id ${f.uid}) usa ${item.nome}${item.descricao ? ` (${item.descricao})` : ""}${em}. O item já foi gasto pelo código. Diga o efeito na cena, sem dano nem cura.`);
+    broadcast(codigo, "ficha", { uid: f.uid });
+    if (c) await talvezEncerrarTurno(ctx, f.uid);
+    res.json({ ok: true, ...(cura !== null ? { cura } : {}) });
+  } catch (e) { console.error("[usar-item]", e); erro(res, 502, msgErro(e)); }
+  finally { destravar(codigo); }
+});
+
+/** Encerra o próprio turno (sem esperar o fim automático). */
+app.post("/api/encerrar-turno", authMw, async (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const ctx = carregar(codigo, req.uid);
+  const f = ctx.fichas[req.uid];
+  if (!f) return erro(res, 400, "Crie seu personagem.");
+  const c = ctx.mesa.combate;
+  if (!c) return erro(res, 409, "Não há combate agora.");
+  if (c.pausado) return erro(res, 409, "O combate está pausado.");
+  const vez = R.vezAtual(c);
+  if (!vez || vez.id !== req.uid) return erro(res, 409, "Não é a sua vez.");
+  if (ctx.mesa.rolagem) return erro(res, 409, "Há uma rolagem pendente: role o dado antes.");
+  if (!travarOuRecusar(ctx, f, res)) return;
+  try {
+    registrar(codigo, { tipo: "sys", texto: `${f.nome} encerra o turno.` });
+    await avancarCombate(ctx, req.uid);
+    res.json({ ok: true });
+  } catch (e) { console.error("[encerrar-turno]", e); erro(res, 502, msgErro(e)); }
+  finally { destravar(codigo); }
+});
+
+/**
+ * Evolução de nível: distribui pontos de atributo e escolhe magias e técnicas entre as opções das pendências.
+ * Pode ser parcial; valida tudo antes de mudar algo. Dentro ou fora de combate (não gasta ação).
+ */
+app.post("/api/evoluir", authMw, (req, res) => {
+  const codigo = mesaDoMembro(req, res); if (!codigo) return;
+  const row = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(codigo, req.uid);
+  if (!row) return erro(res, 400, "Crie seu personagem.");
+  const f = R.normalizarFicha(json(row.dados), req.uid);
+  const p = f.pendencias;
+  if (!p) return erro(res, 409, "Não há nada para evoluir agora.");
+  const b = req.body || {};
+  const atr = b.atributos === undefined || b.atributos === null ? {} : b.atributos;
+  if (typeof atr !== "object" || Array.isArray(atr)) return erro(res, 400, "Atributos inválidos.");
+  const listaDe = (v) => (v === undefined || v === null ? [] : Array.isArray(v) ? v : null);
+  const nomesMagias = listaDe(b.magias), nomesAtaques = listaDe(b.ataques);
+  if (!nomesMagias || !nomesAtaques) return erro(res, 400, "Magias e ataques vão em listas de nomes.");
+
+  // pontos de atributo
+  const soma = {};
+  let total = 0;
+  for (const [k, v] of Object.entries(atr)) {
+    if (!R.ATRIBUTOS.includes(k)) return erro(res, 400, `Atributo inválido: ${texto(k, 10)}.`);
+    if (!Number.isInteger(v) || v < 0) return erro(res, 400, "Os pontos são números inteiros positivos.");
+    if (!v) continue;
+    if (f.atributos[k] + v > 20) return erro(res, 409, `${R.NOME_ATRIBUTO[k]} passaria de 20.`);
+    soma[k] = v;
+    total += v;
+  }
+  if (total > (p.pontos || 0)) return erro(res, 409, p.pontos ? `Você tem ${p.pontos} ${p.pontos === 1 ? "ponto" : "pontos"} para distribuir.` : "Você não tem pontos de atributo para distribuir agora.");
+  // escolhas entre as opções
+  const escolher = (nomes, pend, rotulo) => {
+    const quantas = pend?.quantas || 0;
+    if (nomes.length > quantas) return { erro: quantas ? `Você pode escolher ${quantas} ${rotulo} agora.` : `Você não tem ${rotulo} para escolher agora.` };
+    const saida = [];
+    for (const n of nomes) {
+      const op = (pend?.opcoes || []).find((o) => R.chave(o.nome) === R.chave(n));
+      if (!op) return { erro: `${texto(n, 40) || "Essa escolha"} não está entre as opções.` };
+      if (saida.includes(op)) return { erro: `${op.nome} foi escolhido duas vezes.` };
+      saida.push(op);
+    }
+    return { saida };
+  };
+  const mg = escolher(nomesMagias, p.magias, "magias"); if (mg.erro) return erro(res, 409, mg.erro);
+  const at = escolher(nomesAtaques, p.ataques, "técnicas"); if (at.erro) return erro(res, 409, at.erro);
+  if (!total && !mg.saida.length && !at.saida.length) return erro(res, 400, "Escolha o que evoluir.");
+
+  const atributos = { ...f.atributos };
+  for (const [k, v] of Object.entries(soma)) atributos[k] += v;
+  const pendencias = { pontos: (p.pontos || 0) - total, magias: (p.magias?.quantas || 0) - mg.saida.length, ataques: (p.ataques?.quantas || 0) - at.saida.length };
+  const nova = R.normalizarFicha({ ...f, atributos, pendencias,
+    magias: [...f.magias, ...mg.saida.map(({ nome, descricao }) => ({ nome, descricao }))],
+    ataques: [...f.ataques, ...at.saida.map(({ nome, bonus, dano, alcance }) => ({ nome, bonus, dano, alcance }))] }, req.uid);
+  nova.pv = Math.max(0, Math.min(nova.pvMax, f.pv + (nova.pvMax - f.pvMax)));
+  nova.mana = Math.max(0, Math.min(nova.manaMax, f.mana + (nova.manaMax - f.manaMax)));
+  salvarFicha(codigo, nova);
+  const partes = [...Object.entries(soma).map(([k, v]) => `+${v} ${k.toUpperCase()}`)];
+  const aprendeu = [...mg.saida, ...at.saida].map((o) => o.nome);
+  if (aprendeu.length) partes.push(`aprendeu ${aprendeu.join(", ")}`);
+  registrar(codigo, { tipo: "sys", texto: `${f.nome} evoluiu: ${partes.join(", ")}.`, ok: true });
+  broadcast(codigo, "ficha", { uid: req.uid });
+  res.json({ ok: true, ficha: R.normalizarFicha(nova, req.uid) });
+});
+
 // ── API: Leitura (polling do app) ──
 
 app.get("/api/mesa/:codigo", authMw, (req, res) => {
@@ -928,7 +1253,9 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   // Tema e arco PÚBLICO: os segredos, cenas, desfechos e ajustes do arco nunca saem do servidor
   const tema = T.temaPorId(mesa.tema);
   const arco = M.arcoPublico(mesa);
-  for (const k of ["arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio"]) delete mesa[k];
+  for (const k of ["arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "diaNarr", "elementos"]) delete mesa[k];
+  mesa.dia = Math.max(1, Number(mesa.dia) || 1);
+  if (mesa.combate) mesa.combate.turno = turnoDe(mesa.combate);     // combates antigos ganham o turno na leitura
   Object.assign(mesa, { tema: tema.id, temaNome: tema.nome, temaInspiracao: tema.inspiracao, temaIcone: tema.icone,
     duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco });
   res.json(mesa);
@@ -997,9 +1324,13 @@ app.post("/api/mesa/:codigo/combate/pausar", authMw, (req, res) => {
 async function aplicar(ctx, r, permitirTeste, uidAtor) {
   const codigo = ctx.codigo;
   const campos = {};
+  const narrAntes = Number(db.prepare("SELECT ultimaNarrativa FROM mesas WHERE codigo = ?").get(codigo)?.ultimaNarrativa) || 0;
   if (r?.cena) campos.cena = texto(r.cena, 60);
   // Imagem de fundo só quando a cena muda (cada imagem custa créditos)
   if (r?.cena && (!ctx.mesa?.fundo || campos.cena !== ctx.mesa.cena)) gerarFundo(codigo, T.temaPorId(ctx.mesa.tema), campos.cena);
+  const elementos = elementosValidos(r?.elementos);
+  if (elementos) campos.elementos = elementos;
+  else if (campos.cena && campos.cena !== ctx.mesa.cena) campos.elementos = [];          // cena nova sem lista: só vale o que for narrado
   if (r?.resumo) campos.resumo = texto(r.resumo, 900);
   if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
   aplicarArco(codigo, r);
@@ -1011,7 +1342,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
   let combate = ctx.mesa.combate;
   for (const ef of Array.isArray(r?.efeitos) ? r.efeitos.slice(0, 6) : []) {
     const alvoId = ef?.alvo;
-    const f = ctx.fichas[alvoId] || Object.values(ctx.fichas).find((x) => R.chave(x.nome) === R.chave(alvoId));
+    const f = fichaPorAlvo(ctx, alvoId);
     if (f) {
       if (ef.cura) { const v = R.rolar(String(ef.cura)).total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: true }); }
       if (ef.dano) { const v = R.rolar(String(ef.dano)).total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano${f.pv <= 0 ? " e cai" : ""}`, ok: false }); }
@@ -1026,6 +1357,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
       campos.combate = combate;
     }
   }
+  aplicarItens(ctx, r?.itens);
 
   let combateNovo = false;
   const inimigosIA = Array.isArray(r?.combate?.inimigos) ? r.combate.inimigos.filter((i) => i && typeof i === "object" && !Array.isArray(i)) : [];
@@ -1037,6 +1369,8 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
       combate.id = uid();                                   // a imagem do mapa só vale para este combate
       MP.prepararCombate(combate, r.combate, { cena: campos.cena || ctx.mesa.cena, inimigosIA: lista });
       zerarDeslocamento(combate, ctx.fichas);
+      combate.turno = null;
+      turnoDe(combate);
       campos.combate = combate;
       combateNovo = true;
       registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + combate.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · ") });
@@ -1048,24 +1382,281 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
       registrar(codigo, { tipo: "sys", texto: `Reforços: ${novos.map((i) => i.nome).join(", ")} ${novos.length > 1 ? "entram" : "entra"} no combate.` });
     }
   }
+  aplicarNovoDia(ctx, r, combate, narrAntes);
 
   let rolagem = null, ataqueCancelado = false;
   const minha = ctx.fichas[uidAtor];
   // Um teste de ataque só faz sentido com o combate já em andamento e na vez de quem agiu
-  if (permitirTeste && r?.teste && minha && !(combateNovo && r.teste.tipo === "ataque")) {
-    rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
-    if (rolagem?.tipo === "ataque" && combate?.mapa) {
-      const conf = conferirAtaqueNoMapa(combate, minha, r.teste, rolagem);
-      if (conf.cancelar) { registrar(codigo, { tipo: "sys", texto: conf.cancelar }); rolagem = null; ataqueCancelado = true; }
-      else if (conf.aviso) { registrar(codigo, { tipo: "sys", texto: conf.aviso }); campos.combate = combate; }
-    }
+  if (permitirTeste && r?.teste && typeof r.teste === "object" && minha && !(combateNovo && r.teste.tipo === "ataque")) {
+    if (r.teste.tipo === "ataque") {
+      const at = ataqueDoMestre(combate, minha, r.teste);
+      if (at.cancelar) { registrar(codigo, { tipo: "sys", texto: at.cancelar }); ataqueCancelado = true; }
+      else {
+        rolagem = at.rolagem;
+        if (at.aviso) registrar(codigo, { tipo: "sys", texto: at.aviso });
+        if (combate) campos.combate = combate;
+        if (at.custo) { minha.mana -= at.custo; salvarFicha(codigo, minha); }
+      }
+    } else rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
     if (rolagem) campos.rolagem = rolagem;
   }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
   ctx.mesa.combate = combate;
   if (campos.cena) ctx.mesa.cena = campos.cena;
+  if (campos.elementos) ctx.mesa.elementos = campos.elementos;
   if (combateNovo) gerarImagemMapa(codigo, T.temaPorId(ctx.mesa.tema), combate);
   return { rolagem, combateNovo, ataqueCancelado };
+}
+
+/** A ficha de um personagem da mesa pelo id ou pelo nome. */
+function fichaPorAlvo(ctx, alvo) {
+  if (alvo === undefined || alvo === null || alvo === "") return null;
+  return ctx.fichas[alvo] || Object.values(ctx.fichas).find((x) => R.chave(x.nome) === R.chave(alvo)) || null;
+}
+
+/** "elementos" da resposta do Mestre: até 8 textos curtos; null se não veio uma lista. */
+function elementosValidos(v) {
+  if (!Array.isArray(v)) return null;
+  return v.filter((x) => typeof x === "string").map((x) => texto(x, 40)).filter(Boolean).slice(0, 8);
+}
+
+/** Item que o Mestre dá: nome, qtd 1–10, tipo da lista e efeito só "cura NdM+K" (e só em poção/item rápido). null = recusado. */
+function itemGanhoValido(g) {
+  if (!g || typeof g !== "object" || Array.isArray(g)) return null;
+  const nome = texto(g.nome, 40);
+  if (!nome) return null;
+  const qtd = g.qtd === undefined || g.qtd === null ? 1 : Number(g.qtd);
+  if (!Number.isInteger(qtd) || qtd < 1 || qtd > 10) return null;
+  const tipo = g.tipo === undefined || g.tipo === null || g.tipo === "" ? "outro" : g.tipo;
+  if (!R.TIPOS_ITEM.includes(tipo)) return null;
+  const efeito = R.efeitoDeItem(g.efeito);
+  if (efeito === null || (efeito && !R.TIPOS_RAPIDOS.includes(tipo))) return null;
+  return { nome, qtd, tipo, efeito, descricao: texto(g.descricao, 200) };
+}
+
+/** "itens" da resposta do Mestre: ganhar e perder itens na história (saque, compra, troca, item gasto ou quebrado). */
+function aplicarItens(ctx, lista) {
+  const entradas = [];
+  for (const mud of Array.isArray(lista) ? lista.slice(0, 8) : []) {
+    if (!mud || typeof mud !== "object") continue;
+    const f = fichaPorAlvo(ctx, mud.alvo);
+    if (!f) continue;
+    if (mud.ganha) {
+      const g = itemGanhoValido(mud.ganha);
+      if (!g) { console.log(`[itens] recusado: ${JSON.stringify(mud.ganha).slice(0, 200)}`); continue; }
+      const existente = R.itemDaFicha(f, g.nome);
+      if (existente) existente.qtd = Math.min(R.MAX_QTD, existente.qtd + g.qtd);
+      else if (f.inventario.length < R.MAX_ITENS) f.inventario.push(g);
+      else continue;
+      entradas.push({ tipo: "sys", texto: `${f.nome} ganhou ${g.qtd}× ${existente ? existente.nome : g.nome}.` });
+    } else if (mud.perde && typeof mud.perde === "object") {
+      const qtd = mud.perde.qtd === undefined || mud.perde.qtd === null ? 1 : Number(mud.perde.qtd);
+      if (!Number.isInteger(qtd) || qtd < 1 || qtd > 10) continue;
+      const it = R.itemDaFicha(f, mud.perde.nome);
+      if (!it) continue;
+      const tirar = Math.min(qtd, it.qtd);
+      gastarItem(f, it, tirar);
+      entradas.push({ tipo: "sys", texto: `${f.nome} perdeu ${tirar}× ${it.nome}.` });
+    } else continue;
+    salvarFicha(ctx.codigo, f);
+  }
+  if (entradas.length) registrar(ctx.codigo, ...entradas);
+}
+
+/** Tira `qtd` do item (some do inventário quando acaba) e atualiza o equipamento dos apps antigos. */
+function gastarItem(f, it, qtd = 1) {
+  it.qtd -= qtd;
+  if (it.qtd <= 0) f.inventario = f.inventario.filter((x) => x !== it);
+  f.equipamento = R.equipamentoDerivado(f.inventario);
+}
+
+/**
+ * "novo_dia" da resposta do Mestre: só fora de combate e nunca duas vezes seguidas sem a história andar
+ * (recusado se a última narração antes desta já foi a de um novo dia). Todos recuperam vida e mana.
+ */
+function aplicarNovoDia(ctx, r, combate, narrAntes) {
+  if (!(r?.novo_dia === true || r?.novo_dia === "true")) return;
+  const codigo = ctx.codigo;
+  const m = db.prepare("SELECT fase, dia, diaNarr, ultimaNarrativa FROM mesas WHERE codigo = ?").get(codigo);
+  if (!m || m.fase !== "jogo") return;
+  if (combate) { console.log("[novo_dia] recusado: em combate"); return; }
+  if (narrAntes && narrAntes === Number(m.diaNarr)) { console.log("[novo_dia] recusado: o dia acabou de começar"); return; }
+  const dia = Math.max(1, Number(m.dia) || 1) + 1;
+  for (const f of Object.values(ctx.fichas)) { f.pv = f.pvMax; f.mana = f.manaMax; salvarFicha(codigo, f); }
+  salvarMesa(codigo, { dia, diaNarr: Number(m.ultimaNarrativa) || 0 });
+  ctx.mesa.dia = dia;
+  registrar(codigo, { tipo: "sys", texto: `Dia ${dia} começa: vida e mana recuperadas.`, ok: true });
+}
+
+// ── Turno do jogador no combate: mover, uma ação, um item rápido ──
+
+/** O turno de quem está na vez ({id, acaoUsada, itemUsado}); cria um novo se a vez mudou. null na vez de um inimigo. */
+function turnoDe(c) {
+  const v = R.vezAtual(c);
+  if (!v || v.tipo !== "pj") { if (c) c.turno = null; return null; }
+  if (!c.turno || c.turno.id !== v.id) c.turno = { id: v.id, acaoUsada: false, itemUsado: false };
+  return c.turno;
+}
+
+/** Marca a etapa ("acaoUsada" | "itemUsado") no turno de `uidJogador`, se ainda for a vez dele. */
+function marcarTurno(codigo, uidJogador, etapa) {
+  const c = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo)?.combate);
+  if (!c) return;
+  const t = turnoDe(c);
+  if (!t || t.id !== uidJogador) return;
+  t[etapa] = true;
+  salvarMesa(codigo, { combate: c });
+}
+
+/** Fim automático do turno: ação feita e (item usado ou nenhum item rápido sobrando); ou o personagem caiu; ou o combate acabou. */
+async function talvezEncerrarTurno(ctx, uidJogador) {
+  const codigo = ctx.codigo;
+  const c = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo)?.combate);
+  if (!c) return;
+  const fichas = {};
+  for (const row of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) fichas[row.uid] = R.normalizarFicha(json(row.dados), row.uid);
+  if (R.combateAcabou(c, fichas)) return avancarCombate(ctx, uidJogador);
+  const v = R.vezAtual(c);
+  if (!v || v.id !== uidJogador) return;
+  const t = turnoDe(c), f = fichas[uidJogador];
+  if (!f || f.pv <= 0 || (t.acaoUsada && (t.itemUsado || !R.temItemRapido(f)))) await avancarCombate(ctx, uidJogador);
+}
+
+/**
+ * Confere a vez num combate em andamento. Vez travada (inimigo, jogador caído ou que saiu, ou 10 min sem jogar)
+ * é resolvida aqui e responde 409 para tentar de novo. Devolve true se é a vez de quem chama (nada respondido).
+ */
+async function conferirVez(ctx, uidJogador, res, status = 409) {
+  const combate = ctx.mesa.combate;
+  const vez = R.vezAtual(combate);
+  if (!vez) return true;
+  if (combate.pausado) { erro(res, status, "Combate pausado. Retome para agir."); return false; }
+  const atu = ctx.fichas[vez.id];
+  const expirou = combate.inicioVez && agora() - combate.inicioVez > TEMPO_VEZ_MS;
+  if (vez.tipo !== "pj" || !atu || atu.pv <= 0 || (expirou && vez.id !== uidJogador)) {
+    registrar(ctx.codigo, { tipo: "sys", texto: vez.tipo === "pj" ? `${vez.nome} não pode agir agora — o combate segue.` : "O combate segue." });
+    await avancarCombate(ctx, vez.tipo === "pj" ? vez.id : null);
+    erro(res, 409, "A vez mudou. Confira de quem é a vez e tente de novo.");
+    return false;
+  }
+  if (vez.id !== uidJogador) { erro(res, status, `Vez de ${vez.nome}.`); return false; }
+  return true;
+}
+
+/** Magia de dano como arma: bônus = proficiência + mod do atributo da classe; dano = o efeito, sem atributo. */
+function armaDaMagia(f, m) {
+  return { nome: m.nome, bonus: R.bonusMagia(f), dano: m.efeito || "1d4", alcance: m.alcance === "distancia" ? "distancia" : "corpo" };
+}
+
+/**
+ * Monta a rolagem de um ataque (arma da ficha ou magia de dano) contra um inimigo e confere o mapa.
+ * `estrito`: alvo pedido que não existe é erro (rota do app); senão (Mestre), vale o primeiro inimigo de pé.
+ * Devolve { erro } ou { rolagem, aviso }. Pode mover o personagem em `c` (corpo a corpo que avança sozinho).
+ */
+function prepararAtaque(c, f, arma, alvoPedido, estrito) {
+  const vivos = (c?.inimigos || []).filter((i) => i.pv > 0);
+  let alvo = alvoPedido ? vivos.find((i) => i.id === alvoPedido || R.chave(i.nome) === R.chave(alvoPedido)) : null;
+  if (!alvo && alvoPedido && estrito) return { erro: "Esse alvo não está de pé no combate." };
+  alvo ||= vivos[0];
+  if (!alvo) return { erro: "Não há inimigos de pé." };
+  const rolagem = { id: String(agora()), jogador: f.uid, tipo: "ataque", rotulo: `${arma.nome} vs ${alvo.nome}`, bonus: arma.bonus, cd: alvo.ca ?? 13, motivo: arma.nome, dano: arma.dano, alvo: alvo.id };
+  let aviso = null;
+  if (c.mapa) {
+    const conf = conferirAtaqueNoMapa(c, f, arma, rolagem);
+    if (conf.cancelar) return { erro: conf.cancelar };
+    aviso = conf.aviso || null;
+  }
+  return { rolagem, aviso };
+}
+
+/**
+ * Teste de "ataque" pedido pelo Mestre: só vale um ataque da ficha (ou magia de dano da ficha, com mana).
+ * Devolve { cancelar: texto } | { rolagem, aviso, custo }.
+ */
+function ataqueDoMestre(combate, f, teste) {
+  let arma = R.ataqueDaFicha(f, teste.ataque), custo = 0;
+  if (!arma) {
+    const m = R.magiaDaFicha(f, teste.ataque);
+    if (!m || m.tipo !== "dano") return { cancelar: `${f.nome} não tem “${texto(teste.ataque, 40) || "esse ataque"}” na ficha: não dá para usar.` };
+    if (m.custo > f.mana) return { cancelar: msgSemMana(m, f) };
+    arma = armaDaMagia(f, m);
+    custo = m.custo;
+  }
+  if (!combate) {
+    const rolagem = { id: String(agora()), jogador: f.uid, tipo: "ataque", rotulo: `${arma.nome} vs alvo`, bonus: arma.bonus, cd: 13, motivo: arma.nome, dano: arma.dano };
+    return { rolagem, custo };
+  }
+  const p = prepararAtaque(combate, f, arma, teste.alvo, false);
+  return p.erro ? { cancelar: p.erro } : { rolagem: p.rolagem, aviso: p.aviso, custo };
+}
+
+const msgSemMana = (m, f) => `Mana insuficiente: ${m.nome} custa ${m.custo} e você tem ${f.mana}.`;
+
+/**
+ * Alvo de cura (magia ou item): o próprio personagem por padrão; um aliado ao lado (corpo) ou até 12 casas com linha de visão (distância).
+ * Sem mapa (ou fora de combate), qualquer aliado da mesa. Devolve { alvo } ou { erro }.
+ */
+function alvoDeCura(ctx, f, alvoPedido, alcance) {
+  const alvo = alvoPedido ? fichaPorAlvo(ctx, alvoPedido) : f;
+  if (!alvo) return { erro: "Esse aliado não está na mesa." };
+  if (alvo.uid === f.uid) return { alvo };
+  if (alcance === "pessoal") return { erro: "Essa magia só funciona em você mesmo." };
+  const c = ctx.mesa.combate;
+  if (!c?.mapa) return { alvo };
+  MP.completarPosicoes(c);
+  const pa = c.posicoes?.[f.uid], pb = c.posicoes?.[alvo.uid];
+  if (!pa || !pb) return { alvo };
+  const dist = MP.distancia(pa, pb);
+  if (alcance === "distancia") {
+    if (dist > MP.ALCANCE_DISTANCIA) return { erro: `Fora de alcance: ${alvo.nome} está a ${MP.casas(dist)} (alcance de ${MP.ALCANCE_DISTANCIA} casas).` };
+    if (!MP.linhaDeVisao(c.mapa, pa, pb)) return { erro: `Sem linha de visão até ${alvo.nome}.` };
+    return { alvo };
+  }
+  if (dist > 1) return { erro: `Fora de alcance: chegue ao lado de ${alvo.nome} (está a ${MP.casas(dist)}).` };
+  return { alvo };
+}
+
+/** O Mestre narra em uma frase algo que o código já resolveu (cura, magia de utilidade, item rápido). */
+async function narrarCurto(ctx, uidJogador, evento) {
+  if (!OPENROUTER_KEY) return;
+  try {
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: ${evento}\nNarre em UMA frase curta o que acontece, no sabor do tema. Não peça teste e não inicie combate. Deixe "teste", "combate", "efeitos" e "novo_dia" vazios.`;
+    const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 1500, 0.6);
+    await aplicar(ctx, { ...r, teste: null, combate: null, efeitos: [], novo_dia: false }, false, uidJogador);
+  } catch (e) {
+    registrar(ctx.codigo, { tipo: "sys", texto: "O Mestre não conseguiu narrar isto, mas vale." });
+  }
+}
+
+/**
+ * Conjura uma magia de cura ou de utilidade (no combate como ação, ou fora dele). Gasta a mana, aplica a cura
+ * e pede ao Mestre uma frase. Devolve { erro } ou { ok, cura? }.
+ */
+async function conjurarSemRolagem(ctx, f, m, alvoPedido) {
+  const codigo = ctx.codigo;
+  let alvo = f, cura = null;
+  if (m.tipo === "cura") {
+    const a = alvoDeCura(ctx, f, alvoPedido, m.alcance);
+    if (a.erro) return { erro: a.erro };
+    alvo = a.alvo;
+  } else if (alvoPedido) {
+    alvo = fichaPorAlvo(ctx, alvoPedido) || ctx.mesa.combate?.inimigos?.find((i) => i.pv > 0 && (i.id === alvoPedido || R.chave(i.nome) === R.chave(alvoPedido))) || null;
+  }
+  f.mana -= m.custo;
+  const sobre = alvo && alvo.uid !== f.uid ? ` em ${alvo.nome}` : "";
+  registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Conjura ${m.nome}${sobre}.` });
+  if (m.tipo === "cura") {
+    cura = R.rolar(m.efeito || "1d4").total;
+    alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
+    registrar(codigo, { tipo: "roll", texto: `${f.nome} conjura ${m.nome}: ${alvo.nome} recupera ${cura} PV`, ok: true });
+  }
+  salvarFicha(codigo, f);
+  if (alvo && alvo !== f && alvo.uid) salvarFicha(codigo, alvo);
+  ganharXp(ctx, f, 5);
+  await narrarCurto(ctx, f.uid, m.tipo === "cura"
+    ? `${f.nome} (id ${f.uid}) conjura ${m.nome} (${m.descricao || "magia de cura"}) e ${alvo.uid === f.uid ? "recupera" : `${alvo.nome} recupera`} ${cura} PV (já aplicado pelo código).`
+    : `${f.nome} (id ${f.uid}) conjura ${m.nome}${sobre}: ${m.descricao || "magia de utilidade"}. Diga o efeito na cena, sem dano nem cura.`);
+  return { ok: true, cura };
 }
 
 // ── Mapa de batalha (a lógica de grade fica em mapa.js) ──
@@ -1113,16 +1704,15 @@ function acrescentarReforcos(c, lista) {
 }
 
 /**
- * Confere um ataque de jogador no mapa. Corpo a corpo longe do alvo: avança sozinho se der (gasta deslocamento),
+ * Confere um ataque de jogador (`ataque`: {nome, alcance}) no mapa. Corpo a corpo longe do alvo: avança sozinho se der (gasta deslocamento),
  * senão cancela. À distância: até 12 casas e com linha de visão; alvo com cobertura dá CA +2 nesta rolagem.
  * Devolve { cancelar: texto } | { aviso: texto } | {}. Altera `c` e `rol`.
  */
-function conferirAtaqueNoMapa(c, ficha, pedido, rol) {
+function conferirAtaqueNoMapa(c, ficha, ataque, rol) {
   MP.completarPosicoes(c);
   const alvo = (c.inimigos || []).find((i) => i.id === rol.alvo);
   const pa = c.posicoes?.[ficha.uid], pb = alvo && c.posicoes?.[alvo.id];
   if (!alvo || !pa || !pb) return {};
-  const ataque = R.acharAtaque(ficha, pedido.ataque);
   const dist = MP.distancia(pa, pb);
   if (MP.alcanceDoAtaque(ataque) === "corpo") {
     if (dist <= 1) return {};
@@ -1225,13 +1815,15 @@ function aplicarArco(codigo, r) {
   }
 }
 
+/** XP e subida de nível (100 × nível, até o 20): PV e mana máximos sobem sozinhos; pontos, magias e técnicas viram pendências. */
 function ganharXp(ctx, f, quanto) {
   f.xp = (f.xp || 0) + quanto;
-  while (f.xp >= (f.nivel || 1) * 100) {
+  while ((f.nivel || 1) < R.NIVEL_MAXIMO && f.xp >= (f.nivel || 1) * 100) {
     f.xp -= (f.nivel || 1) * 100;
     f.nivel = (f.nivel || 1) + 1;
-    const nova = R.normalizarFicha(f, f.uid);  // recalcula PV máximo e proficiência do novo nível
-    Object.assign(f, nova, { pv: Math.min(nova.pvMax, f.pv + (nova.pvMax - f.pvMax)) });
+    const pendencias = R.somarPendencias(f.pendencias, R.ganhosDoNivel(f.classe, f.nivel));
+    const nova = R.normalizarFicha({ ...f, pendencias }, f.uid);  // recalcula PV, mana, proficiência e opções do novo nível
+    Object.assign(f, nova, { pv: Math.min(nova.pvMax, f.pv + (nova.pvMax - f.pvMax)), mana: Math.min(nova.manaMax, f.mana + (nova.manaMax - f.manaMax)) });
     registrar(ctx.codigo, { tipo: "sys", texto: `${f.nome} subiu para o nível ${f.nivel}!`, ok: true });
   }
   salvarFicha(ctx.codigo, f);
@@ -1253,6 +1845,8 @@ async function avancarCombate(ctx, quemAgiu) {
     if (combate.mapa) MP.completarPosicoes(combate);
     const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu, combate.mapa ? { tatica: MP.criarTatica(combate) } : {});
     if (chaveVez() !== vezAntes || (combate.mapa && !combate.deslocamento)) zerarDeslocamento(combate, ctx.fichas); // a vez mudou: deslocamento novo
+    if (chaveVez() !== vezAntes) combate.turno = null;                                                               // e turno novo
+    turnoDe(combate);
     for (const f of Object.values(ctx.fichas)) if (f.pv !== antes[f.uid]) salvarFicha(codigo, f);
     salvarMesa(codigo, { combate });
     ctx.mesa.combate = combate;

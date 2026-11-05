@@ -4,6 +4,9 @@
  */
 "use strict";
 
+const C = require("./catalogo");
+const MP = require("./mapa");
+
 const ATRIBUTOS = ["for", "des", "con", "int", "sab", "car"];
 const NOME_ATRIBUTO = { for: "Força", des: "Destreza", con: "Constituição", int: "Inteligência", sab: "Sabedoria", car: "Carisma" };
 const PERICIAS = {
@@ -17,30 +20,50 @@ const CLASSES = ["Guerreiro", "Ladino", "Mago", "Clérigo"];
 const SEXOS = ["Masculino", "Feminino", "Outro"];
 const DADO_DE_VIDA = { Guerreiro: 10, Clérigo: 8, Ladino: 8, Mago: 6 };
 
-function _ataquesPorClasse(classe, fornecidos) {
-  // "alcance" (corpo|distancia) é opcional: sem ele, vale a regra das palavras do nome (mapa.alcanceDoAtaque)
-  const validos = fornecidos.map((a) => ({ nome: safeStr(a.nome, "", 30), bonus: Math.max(-5, Math.min(15, Number(a.bonus) || 0)), dano: String(a.dano || "1d4"),
-    ...(a.alcance === "corpo" || a.alcance === "distancia" ? { alcance: a.alcance } : {}) })).slice(0, 6);
-  if (validos.length > 0) return validos;
-  const PADRAO = {
-    Guerreiro: [
-      { nome: "Espada longa", bonus: 3, dano: "1d8+2" },
-      { nome: "Golpe de escudo", bonus: 2, dano: "1d6+1" },
-    ],
-    Ladino: [
-      { nome: "Adaga", bonus: 3, dano: "1d6" },
-      { nome: "Arco curto", bonus: 2, dano: "1d6+1" },
-    ],
-    Mago: [
-      { nome: "Cajado", bonus: 1, dano: "1d4" },
-      { nome: "Centelha Arcana", bonus: 3, dano: "1d6" },
-    ],
-    Clérigo: [
-      { nome: "Martelo", bonus: 2, dano: "1d6+1" },
-      { nome: "Luz Sagrada", bonus: 3, dano: "1d6" },
-    ],
-  };
-  return (PADRAO[classe] || PADRAO.Guerreiro).slice(0, 6);
+const PADRAO_ATAQUES = {
+  Guerreiro: [
+    { nome: "Espada longa", bonus: 3, dano: "1d8+2" },
+    { nome: "Golpe de escudo", bonus: 2, dano: "1d6+1" },
+  ],
+  Ladino: [
+    { nome: "Adaga", bonus: 3, dano: "1d6" },
+    { nome: "Arco curto", bonus: 2, dano: "1d6+1" },
+  ],
+  Mago: [
+    { nome: "Cajado", bonus: 1, dano: "1d4" },
+    { nome: "Centelha Arcana", bonus: 3, dano: "1d6" },
+  ],
+  Clérigo: [
+    { nome: "Martelo", bonus: 2, dano: "1d6+1" },
+    { nome: "Luz Sagrada", bonus: 3, dano: "1d6" },
+  ],
+};
+const MAX_ATAQUES = 16;
+
+/**
+ * Ataques da ficha, sempre com "alcance" (corpo|distancia): o campo, se válido; senão a regra das palavras do nome.
+ * Técnicas do catálogo são recalculadas pelo nível e atributos (bônus = proficiência + mod + extra; dano + mod).
+ */
+function _ataquesPorClasse(classe, fornecidos, at, prof) {
+  const vistos = new Set();
+  const validos = [];
+  for (const a of fornecidos) {
+    if (!a || typeof a !== "object") continue;
+    const nome = safeStr(a.nome, "", 30).trim();
+    if (!nome || vistos.has(chave(nome))) continue;
+    vistos.add(chave(nome));
+    const tec = C.tecnicaDoCatalogo(nome);
+    if (tec) { validos.push(ataqueDaTecnica(tec, at, prof)); continue; }
+    validos.push({ nome, bonus: Math.max(-5, Math.min(15, Number(a.bonus) || 0)), dano: safeStr(a.dano || "1d4", "1d4", 30) || "1d4", alcance: MP.alcanceDoAtaque(a) });
+  }
+  const lista = validos.length ? validos : (PADRAO_ATAQUES[classe] || PADRAO_ATAQUES.Guerreiro).map((a) => ({ ...a, alcance: MP.alcanceDoAtaque(a) }));
+  return lista.slice(0, MAX_ATAQUES);
+}
+
+/** Técnica do catálogo como ataque da ficha. */
+function ataqueDaTecnica(t, at, prof) {
+  const m = mod(at?.[t.atributo]);
+  return { nome: t.nome, bonus: Math.max(-5, Math.min(25, prof + m + (t.bonusExtra || 0))), dano: m ? `${t.dano}${sinal(m)}` : t.dano, alcance: t.alcance };
 }
 
 function safeStr(v, def, max) {
@@ -104,15 +127,147 @@ function bonusPericia(f, pericia) {
   return mod(f.atributos?.[atr]) + (treinada ? f.proficiencia || 2 : 0);
 }
 
+// ── Magias, mana, inventário e evolução ──
+const CONJURADORES = { Mago: "int", Clérigo: "sab" };     // classe que conjura → atributo da magia
+const NIVEIS_PONTOS = [4, 8, 12, 16, 19];                    // +2 pontos de atributo
+const NIVEIS_TECNICA = [2, 3, 5, 7, 9, 11, 13, 15, 17, 19];  // Guerreiro e Ladino: +1 técnica
+const MAGIAS_POR_NIVEL = { Mago: 2, Clérigo: 1 };
+const MAGIAS_INICIAIS = { Mago: 3, Clérigo: 2 };
+const NIVEL_MAXIMO = 20;
+const MAX_SOMA_ATRIBUTOS = 72;                               // na criação; cada nível de pontos soma +2
+const TIPOS_ITEM = ["pocao", "rapido", "equipamento", "municao", "outro"];
+const TIPOS_RAPIDOS = ["pocao", "rapido"];
+const MAX_ITENS = 30;
+const MAX_QTD = 99;
+const MAX_MAGIAS = 40;
+const POCAO_DE_CURA = { nome: "Poção de cura", qtd: 2, tipo: "pocao", efeito: "cura 2d4+2", descricao: "Um frasco que fecha ferimentos." };
+
+const circuloMaximo = (nivel) => Math.min(5, Math.ceil(Math.max(1, nivel) / 2));
+const pontosGanhos = (nivel) => 2 * NIVEIS_PONTOS.filter((n) => n <= nivel).length;
+const ehConjurador = (classe) => !!CONJURADORES[classe];
+function manaMaxima(classe, nivel, at) {
+  const atr = CONJURADORES[classe];
+  return atr ? Math.max(2, 2 + 2 * nivel + mod(at?.[atr])) : 0;
+}
+/** Bônus de ataque mágico = proficiência + mod(atributo da classe). */
+function bonusMagia(f) { return (f.proficiencia || 2) + mod(f.atributos?.[CONJURADORES[f.classe] || "int"]); }
+
 /**
- * Gera ficha a partir do JSON da IA + conceito.
+ * Efeito de item que o servidor aplica: "cura NdM+K" (N 1–10, M 4/6/8/10/12, K 0–20). Devolve o texto limpo,
+ * "" para vazio, ou null se for inválido.
+ */
+function efeitoDeItem(v) {
+  const s = String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!s) return "";
+  const m = s.match(/^cura (\d{1,2})d(\d{1,2})(?: ?\+ ?(\d{1,2}))?$/);
+  if (!m) return null;
+  const n = Number(m[1]), faces = Number(m[2]), k = Number(m[3] || 0);
+  if (n < 1 || n > 10 || ![4, 6, 8, 10, 12].includes(faces) || k > 20) return null;
+  return `cura ${n}d${faces}${k ? `+${k}` : ""}`;
+}
+
+/** Item guardado na ficha (leitura tolerante: tipo inválido vira "outro", efeito inválido some). null se não tem nome. */
+function normalizarItem(it) {
+  if (!it || typeof it !== "object") return null;
+  const nome = safeStr(it.nome, "", 40).trim();
+  if (!nome) return null;
+  const qtd = Math.max(1, Math.min(MAX_QTD, Math.floor(Number(it.qtd)) || 1));
+  const tipo = TIPOS_ITEM.includes(it.tipo) ? it.tipo : "outro";
+  const efeito = TIPOS_RAPIDOS.includes(tipo) ? efeitoDeItem(it.efeito) || "" : "";   // só poção e item rápido têm efeito
+  return { nome, qtd, tipo, efeito, descricao: safeStr(it.descricao, "", 200) };
+}
+
+/** Junta itens de mesmo nome (soma as quantidades) e limita a 30. */
+function juntarItens(lista) {
+  const saida = [];
+  for (const bruto of lista) {
+    const it = normalizarItem(bruto);
+    if (!it) continue;
+    const igual = saida.find((x) => chave(x.nome) === chave(it.nome));
+    if (igual) igual.qtd = Math.min(MAX_QTD, igual.qtd + it.qtd);
+    else if (saida.length < MAX_ITENS) saida.push(it);
+  }
+  return saida;
+}
+
+/** Inventário: o da ficha; ficha antiga (sem inventário) converte o equipamento e ganha 2 Poções de cura, uma vez. */
+function inventarioDe(v) {
+  if (Array.isArray(v.inventario)) return juntarItens(v.inventario);
+  const equip = (Array.isArray(v.equipamento) ? v.equipamento : []).map((s) => ({ nome: safeStr(s, "", 40), qtd: 1, tipo: "equipamento" }));
+  return juntarItens([...equip, { ...POCAO_DE_CURA }]);
+}
+
+/** Lista de textos para os apps antigos, derivada do inventário. */
+const equipamentoDerivado = (inv) => inv.map((i) => (i.qtd > 1 ? `${i.nome} (×${i.qtd})` : i.nome)).slice(0, MAX_ITENS);
+
+/** Magia guardada: as do catálogo valem pelo catálogo; as desconhecidas (fichas antigas) viram utilidade de 1º círculo. */
+function normalizarMagia(m, nivel) {
+  if (!m || typeof m !== "object") return null;
+  const nome = safeStr(m.nome, "", 30).trim();
+  if (!nome) return null;
+  const desc = safeStr(m.descricao, "", 300);
+  const cat = C.magiaDoCatalogo(nome);
+  if (cat) return C.magiaParaFicha(cat, nivel, desc);
+  return { nome, circulo: 1, tipo: "utilidade", efeito: "", alcance: "pessoal", custo: C.custoDe(1), descricao: desc };
+}
+
+/** Quantas pendências guardadas (aceita o formato público, com "quantas"). */
+const qtdPendencia = (p) => Math.max(0, Math.floor(Number(typeof p === "object" && p ? p.quantas : p)) || 0);
+
+/** Opções de evolução para a ficha: magias da classe até o círculo do nível e técnicas até o nível, sem as já conhecidas. */
+function opcoesDeMagia(f) {
+  const conhecidas = new Set((f.magias || []).map((m) => chave(m.nome)));
+  return C.magiasDaClasse(f.classe, circuloMaximo(f.nivel)).filter((m) => !conhecidas.has(chave(m.nome))).map((m) => C.magiaParaFicha(m, f.nivel));
+}
+function opcoesDeAtaque(f) {
+  const conhecidos = new Set((f.ataques || []).map((a) => chave(a.nome)));
+  return C.tecnicasDaClasse(f.classe, f.nivel).filter((t) => !conhecidos.has(chave(t.nome)))
+    .map((t) => ({ ...ataqueDaTecnica(t, f.atributos, f.proficiencia), nivelMinimo: t.nivelMinimo, descricao: t.descricao }));
+}
+
+/** Pendências públicas (null quando não há): pontos e as opções prontas de magias e técnicas. */
+function pendenciasDe(guardadas, f) {
+  const p = guardadas && typeof guardadas === "object" ? guardadas : {};
+  const saida = {};
+  const folga = ATRIBUTOS.reduce((s, a) => s + (20 - f.atributos[a]), 0);
+  const pontos = Math.min(qtdPendencia(p.pontos), folga);
+  if (pontos > 0) saida.pontos = pontos;
+  const om = opcoesDeMagia(f), qm = Math.min(qtdPendencia(p.magias), om.length);
+  if (qm > 0) saida.magias = { quantas: qm, opcoes: om };
+  const oa = opcoesDeAtaque(f), qa = Math.min(qtdPendencia(p.ataques), oa.length);
+  if (qa > 0) saida.ataques = { quantas: qa, opcoes: oa };
+  return Object.keys(saida).length ? saida : null;
+}
+
+/** O que um personagem ganha ao chegar no nível `nivel`: { pontos, magias, ataques }. */
+function ganhosDoNivel(classe, nivel) {
+  return {
+    pontos: NIVEIS_PONTOS.includes(nivel) ? 2 : 0,
+    magias: MAGIAS_POR_NIVEL[classe] || 0,
+    ataques: (classe === "Guerreiro" || classe === "Ladino") && NIVEIS_TECNICA.includes(nivel) ? 1 : 0,
+  };
+}
+/** Soma os ganhos do nível às pendências guardadas (formato interno: só as quantidades). */
+function somarPendencias(guardadas, ganhos) {
+  const p = guardadas && typeof guardadas === "object" ? guardadas : {};
+  return {
+    pontos: qtdPendencia(p.pontos) + ganhos.pontos,
+    magias: qtdPendencia(p.magias) + ganhos.magias,
+    ataques: qtdPendencia(p.ataques) + ganhos.ataques,
+  };
+}
+
+/**
+ * Gera ficha a partir do JSON da IA + conceito. Também converte fichas antigas na leitura (sem gravar nada):
+ * equipamento → inventário (+2 Poções de cura), magias {nome, descricao} → formato do catálogo, mana e alcance dos ataques.
  */
 function normalizarFicha(dados, uid, conceito) {
   const v = dados || {};
+  const lvl = Math.max(1, Math.min(NIVEL_MAXIMO, Math.floor(Number(v.nivel)) || 1));
   const at = {};
   for (const a of ATRIBUTOS) at[a] = Math.max(3, Math.min(20, Number(v.atributos?.[a]) || 10));
-  // Enforce sum ≤ 72 — scale down progressively from highest attributes
-  const MAX_SOMA = 72;
+  // Soma máxima: 72 na criação, mais os pontos ganhos por nível — reduz aos poucos a partir dos maiores atributos
+  const MAX_SOMA = MAX_SOMA_ATRIBUTOS + pontosGanhos(lvl);
   let soma = ATRIBUTOS.reduce((s, a) => s + at[a], 0);
   if (soma > MAX_SOMA) {
     let excedente = soma - MAX_SOMA;
@@ -127,14 +282,22 @@ function normalizarFicha(dados, uid, conceito) {
     }
   }
   const classe = CLASSES.includes(v.classe) ? v.classe : "Guerreiro";
-  const lvl = Math.max(1, Math.min(20, Math.floor(Number(v.nivel)) || 1));
+  const prof = Math.ceil(1 + lvl / 4);
   const dv = DADO_DE_VIDA[classe] || 8;
   const pvMax = dv + mod(at.con) + (lvl - 1) * (Math.floor(dv / 2) + 1 + mod(at.con));
   const pvMaxFinal = Math.max(1, pvMax);
   // PV guardado vale, inclusive 0 (personagem caído). Só uma ficha nova, sem PV, começa com a vida cheia.
   const pvGuardado = v.pv === undefined || v.pv === null || v.pv === "" ? NaN : Number(v.pv);
   const pv = Number.isFinite(pvGuardado) ? Math.max(0, Math.min(Math.round(pvGuardado), pvMaxFinal)) : pvMaxFinal;
-  return {
+  const manaMax = manaMaxima(classe, lvl, at);
+  const manaGuardada = v.mana === undefined || v.mana === null || v.mana === "" ? NaN : Number(v.mana);
+  const mana = Number.isFinite(manaGuardada) ? Math.max(0, Math.min(Math.round(manaGuardada), manaMax)) : manaMax;
+  const vistas = new Set();
+  const magias = (Array.isArray(v.magias) ? v.magias : []).map((m) => normalizarMagia(m, lvl))
+    .filter((m) => m && !vistas.has(chave(m.nome)) && vistas.add(chave(m.nome))).slice(0, MAX_MAGIAS);
+  const inventario = inventarioDe(v);
+  const anotacoes = safeStr(v.anotacoes ?? v.notas, "", 1000);
+  const f = {
     uid,
     xp: Math.max(0, Math.floor(Number(v.xp)) || 0),
     nome: safeStr(v.nome, "Herói", 30),
@@ -143,16 +306,19 @@ function normalizarFicha(dados, uid, conceito) {
     classe,
     antecedente: safeStr(v.antecedente, "", 30),
     nivel: lvl,
-    proficiencia: Math.ceil(1 + lvl / 4),
+    proficiencia: prof,
     atributos: at,
     pvMax: pvMaxFinal,
     pv,
+    manaMax,
+    mana,
     ca: Math.max(10, Number(v.ca) || 10),
     imagem: safeStr(v.imagem, "", 500),
     pericias: (Array.isArray(v.pericias) ? v.pericias : []).filter((p) => PERICIAS[p]).slice(0, Math.max(1, 2 + mod(at.int))),
-    ataques: _ataquesPorClasse(classe, Array.isArray(v.ataques) ? v.ataques : []),
-    magias: (Array.isArray(v.magias) ? v.magias : []).map((m) => ({ nome: safeStr(m.nome, "", 30), descricao: safeStr(m.descricao, "", 300) })).slice(0, 10),
-    equipamento: (Array.isArray(v.equipamento) ? v.equipamento : []).map((s) => safeStr(s, "", 50)).slice(0, 12),
+    ataques: _ataquesPorClasse(classe, Array.isArray(v.ataques) ? v.ataques : [], at, prof),
+    magias,
+    inventario,
+    equipamento: equipamentoDerivado(inventario),
     tracos: {
       personalidade: safeStr(v.tracos?.personalidade, "", 200),
       ideal: safeStr(v.tracos?.ideal, "", 200),
@@ -161,9 +327,33 @@ function normalizarFicha(dados, uid, conceito) {
     },
     dica: safeStr(v.dica, "", 200),
     conceito: conceito || safeStr(v.conceito, "", 300),
-    notas: safeStr(v.notas, "", 1000),
+    notas: anotacoes,
+    anotacoes,
   };
+  f.pendencias = pendenciasDe(v.pendencias, f);
+  return f;
 }
+
+/** O ataque da ficha com esse nome (lista fechada: sem cair no primeiro). Aceita parte do nome com 4+ letras. */
+function ataqueDaFicha(ficha, nome) {
+  const k = chave(nome);
+  if (!k) return null;
+  const ataques = ficha.ataques || [];
+  return ataques.find((a) => chave(a.nome) === k)
+    || (k.length >= 4 ? ataques.find((a) => chave(a.nome).includes(k) || k.includes(chave(a.nome))) : null)
+    || null;
+}
+/** A magia da ficha com esse nome (só nome exato, sem acentos/maiúsculas). */
+function magiaDaFicha(ficha, nome) {
+  const k = chave(nome);
+  return k ? (ficha.magias || []).find((m) => chave(m.nome) === k) || null : null;
+}
+/** O item do inventário com esse nome. */
+function itemDaFicha(ficha, nome) {
+  const k = chave(nome);
+  return k ? (ficha.inventario || []).find((i) => chave(i.nome) === k) || null : null;
+}
+const temItemRapido = (ficha) => (ficha.inventario || []).some((i) => TIPOS_RAPIDOS.includes(i.tipo) && i.qtd > 0);
 
 /**
  * Rolagem de iniciativa (d20 + DES).
@@ -323,4 +513,7 @@ module.exports = {
   mod, sinal, d, rolar, bonusPericia, normalizarFicha, inicio: iniciativa,
   criarInimigo, iniciarCombate, vezAtual, combateAcabou,
   montarRolagem, resolverRolagem, passarVez, chave, acharAtaque,
+  CONJURADORES, NIVEIS_PONTOS, NIVEIS_TECNICA, NIVEL_MAXIMO, TIPOS_ITEM, TIPOS_RAPIDOS, MAX_ITENS, MAX_QTD, POCAO_DE_CURA, MAGIAS_INICIAIS,
+  circuloMaximo, manaMaxima, bonusMagia, ehConjurador, efeitoDeItem, normalizarItem, juntarItens, equipamentoDerivado,
+  ganhosDoNivel, somarPendencias, qtdPendencia, ataqueDaTecnica, ataqueDaFicha, magiaDaFicha, itemDaFicha, temItemRapido,
 };

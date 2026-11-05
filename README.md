@@ -4,7 +4,8 @@ Servidor do Mesa Viva: RPG de mesa com IA como mestre. Node.js com Express, SQLi
 
 ```
 server.js     Rotas HTTP, login, mesas, jogo, painel admin, WebSocket
-regras.js     Motor de regras d20 (fichas, testes, dano, iniciativa, turnos)
+regras.js     Motor de regras d20 (fichas, mana, inventário, evolução, testes, dano, iniciativa, turnos)
+catalogo.js   Catálogo de magias (Mago e Clérigo, truques ao 5º círculo) e técnicas de combate (Guerreiro e Ladino)
 mapa.js       Mapa de batalha visto de cima: grade, terreno, caminhos, linha de visão, posições e movimento dos inimigos (lógica pura)
 mestre.js     Contexto da mesa, arco da história e chamadas à IA (texto e imagens)
 temas.js      Os 20 temas da história, o tema "Surpresa" e as durações da aventura
@@ -36,7 +37,7 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 
 ```bash
 npm install
-npm test        # 65 testes: regras, login, segurança, fluxo do jogo, combate, mapa de batalha, temas e arco da história
+npm test        # 78 testes: regras, login, segurança, fluxo do jogo, combate, mapa de batalha, temas, arco, turno em etapas, magias, inventário, dia e evolução
 npm start
 ```
 
@@ -74,6 +75,25 @@ O estado da mesa (`GET /api/mesa/:codigo`) traz em `combate`: `mapa` (`colunas`,
 | Rota | O que faz |
 | --- | --- |
 | `POST /api/mover` | `{codigo, x, y}`: move a própria ficha na sua vez (sem pausa nem rolagem pendente, personagem de pé), pelo caminho mais curto, até o deslocamento restante. Responde `{ok, posicao, restante}`; erros 409 com a mensagem ("Não é a sua vez.", "O combate está pausado.", "Longe demais: você ainda tem N casas de deslocamento.", "Essa casa está ocupada.", "Não dá para passar por ali.") |
+
+## Turno em etapas, magias, inventário, dia e evolução
+
+- **Turno do jogador no combate** (inimigos como antes): 1) mover (`/api/mover`, só antes da ação); 2) uma ação — ataque ou magia da ficha (`/api/acao-combate`) ou ação livre em texto (`/api/agir`, julgada pelo Mestre); 3) um item rápido (`/api/usar-item`, antes ou depois da ação). O estado público fica em `combate.turno = {id, acaoUsada, itemUsado}`. O turno acaba sozinho quando a ação foi feita e o item também (ou não há poção/item rápido no inventário), com `/api/encerrar-turno`, ou pelos 10 min sem jogar. Só mover não encerra.
+- **Lista fechada**: só ataques e magias da ficha. Teste de "ataque" do Mestre com nome fora da ficha vira aviso, sem rolagem e sem gastar a ação. Fora de alcance (mapa) também não gasta a ação.
+- **Mana**: Mago (INT) e Clérigo (SAB) têm `manaMax = max(2, 2 + 2×nível + mod)`; truque custa 0, círculo N custa N+1; círculo máximo `min(5, ⌈nível/2⌉)`. Magia de dano rola ataque (proficiência + mod; dano sem atributo); cura e utilidade se resolvem na hora e o Mestre narra numa frase. Fora de combate, cura e utilidade por `/api/usar-magia`.
+- **Inventário** `[{nome, qtd, tipo: pocao|rapido|equipamento|municao|outro, efeito, descricao}]` (até 30). O servidor aplica `cura NdM+K`; outros itens rápidos são gastos e narrados. O Mestre dá e tira itens com `itens` (qtd 1–10, efeito só `cura NdM+K`). `equipamento` vira uma lista derivada, para apps antigos.
+- **Dia**: `mesa.dia` começa em 1. Com `novo_dia` do Mestre (só fora de combate, nunca duas vezes seguidas sem narração no meio), todos voltam com vida e mana cheias.
+- **Evolução**: ao subir de nível (até o 20), a ficha ganha `pendencias` com as opções prontas — `pontos` (+2 nos níveis 4, 8, 12, 16, 19; máx. 20 por atributo), `magias` (Mago +2, Clérigo +1 por nível) e `ataques` (técnicas de Guerreiro e Ladino nos níveis 2, 3, 5, 7… 19) — resolvidas por `/api/evoluir`, também em partes.
+- **Ficha travada**: depois de começar, `/api/salvar-ficha` só muda `nome`, `sexo`, `imagem`, `tracos`, `anotacoes` (ou `notas`) e `antecedente`. No saguão, inventário e magias só vêm da ficha criada pelo Mestre (ou do catálogo de nível 1 da classe); vida e mana ficam cheias.
+- **Fichas e mesas antigas** são convertidas na leitura, sem migração: `equipamento` vira itens (mais 2 Poções de cura, uma vez), magias `{nome, descricao}` são procuradas no catálogo (senão viram utilidade de 1º círculo), ataques ganham `alcance`, mesa sem dia fica no dia 1, combate sem `turno` ganha um.
+
+| Rota | O que faz |
+| --- | --- |
+| `POST /api/acao-combate` | `{codigo, tipo: "ataque"\|"magia", nome, alvo}`: a ação do turno. Ataque e magia de dano respondem `{ok, rolagem}` (role com `/api/rolar`); cura responde `{ok, cura}`; utilidade `{ok}`. 409: "Esse ataque não está na sua ficha.", "Essa magia não está na sua ficha.", "Mana insuficiente: Bola de Fogo custa 4 e você tem 2.", "Você já fez sua ação neste turno.", fora de alcance / sem linha de visão |
+| `POST /api/usar-item` | `{codigo, item, alvo?}`: poção ou item rápido; no combate, na própria vez e um por turno; em aliado só ao lado (no mapa). `{ok, cura?}` |
+| `POST /api/usar-magia` | `{codigo, nome, alvo?}`: cura ou utilidade fora de combate |
+| `POST /api/encerrar-turno` | `{codigo}`: encerra a própria vez |
+| `POST /api/evoluir` | `{codigo, atributos: {"for":1,"con":1}, magias: [nomes], ataques: [nomes]}`: resolve pendências (parcial vale). `{ok, ficha}` |
 
 ## Como o jogo protege as contas e os créditos
 

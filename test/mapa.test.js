@@ -28,10 +28,9 @@ test("rótulos, distância de Chebyshev, deslocamento por raça e alcance pelo n
   assert.equal(MP.alcanceDoAtaque({ nome: "Espada", alcance: "distancia" }), "distancia");   // o campo vale mais que o nome
   assert.equal(MP.alcanceDoAtaque({ nome: "Arco", alcance: "corpo" }), "corpo");
   assert.equal(MP.alcanceDoAtaque({ nome: "Arco", alcance: "longe" }), "distancia");        // campo inválido: palavras do nome
-  // a ficha guarda o alcance só quando é válido; inimigo sem alcance é corpo a corpo
-  const f = R.normalizarFicha({ ataques: [{ nome: "Sopro", bonus: 2, dano: "1d6", alcance: "distancia" }, { nome: "Soco", bonus: 1, dano: "1d4", alcance: "x" }] }, "a");
-  assert.equal(f.ataques[0].alcance, "distancia");
-  assert.ok(!("alcance" in f.ataques[1]));
+  // a ficha sempre tem o alcance: o campo quando é válido, senão a regra das palavras do nome; inimigo sem alcance é corpo a corpo
+  const f = R.normalizarFicha({ ataques: [{ nome: "Sopro", bonus: 2, dano: "1d6", alcance: "distancia" }, { nome: "Soco", bonus: 1, dano: "1d4", alcance: "x" }, { nome: "Besta leve", bonus: 1, dano: "1d8" }] }, "a");
+  assert.deepEqual(f.ataques.map((a) => a.alcance), ["distancia", "corpo", "distancia"]);
   assert.equal(R.criarInimigo("ini_0", { nome: "G" }).alcance, "corpo");
   assert.equal(R.criarInimigo("ini_0", { nome: "G", alcance: "distancia" }).alcance, "distancia");
 });

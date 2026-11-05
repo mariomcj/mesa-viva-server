@@ -37,6 +37,15 @@ async function api(metodo, rota, { corpo, token } = {}) {
 const post = (rota, corpo, o = {}) => api("POST", rota, { ...o, corpo });
 const get = (rota, o = {}) => api("GET", rota, o);
 const esperar = (ms) => new Promise((ok) => setTimeout(ok, ms));
+/**
+ * Começa um combate com os dados do servidor fixos em 1 (o servidor roda neste processo): inimigos que ganham
+ * a iniciativa erram sempre (1 natural) e um personagem sozinho nunca cai antes de o teste conferir o combate.
+ */
+async function comDadosEm1(fn) {
+  const real = Math.random;
+  Math.random = () => 0;
+  try { return await fn(); } finally { Math.random = real; }
+}
 
 async function conta(nome, email) {
   const r = await post("/api/auth/registrar", { nome, email, senha: "senha123" });
@@ -52,8 +61,18 @@ async function mesaEmJogo(jogadores, fichas = {}) {
   const { d } = await post("/api/mesa/criar", { nome: dono.nome }, { token: dono.token });
   for (const j of outros) await post(`/api/mesa/entrar/${d.codigo}`, { nome: j.nome }, { token: j.token });
   for (const j of jogadores) await post("/api/salvar-ficha", { codigo: d.codigo, ficha: fichaBase(j.nome, fichas[j.nome]) }, { token: j.token });
+  semItensRapidos(d.codigo);
   assert.equal((await post("/api/comecar-aventura", { codigo: d.codigo }, { token: dono.token })).st, 200);
   return d.codigo;
+}
+
+/** Sem itens rápidos no inventário, a vez passa sozinha logo depois da ação (como antes do turno em etapas). */
+function semItensRapidos(codigo) {
+  for (const r of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) {
+    const f = JSON.parse(r.dados);
+    f.inventario = [];
+    db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, r.uid);
+  }
 }
 
 const gob = (i, extra = {}) => ({ id: `ini_${i}`, nome: `Goblin ${i + 1}`, pv: 7, pvMax: 7, ca: 13, ataque: 4, dano: "1", des: 2, alcance: "corpo", ...extra });
@@ -124,7 +143,7 @@ test("IMAGENS_DE_MAPA=0 desliga a imagem do mapa", async () => {
   try {
     const codigo = await mesaEmJogo([mario]);
     const antes = contagem.imagem;
-    await post("/api/agir", { codigo, texto: "Vejo um goblin e ataco" }, { token: mario.token });
+    await comDadosEm1(() => post("/api/agir", { codigo, texto: "Vejo um goblin e ataco" }, { token: mario.token }));
     assert.ok(lerCombate(codigo).mapa);
     await esperar(30);
     assert.equal(contagem.imagem, antes);
@@ -334,14 +353,14 @@ test("a imagem do mapa só é gravada se ainda for o mesmo combate", async () =>
   try {
     const codigo = await mesaEmJogo([mario]);
     const antes = contagem.imagem;
-    await post("/api/agir", { codigo, texto: "Vejo um goblin e ataco" }, { token: mario.token });
+    await comDadosEm1(() => post("/api/agir", { codigo, texto: "Vejo um goblin e ataco" }, { token: mario.token }));
     assert.equal(contagem.imagem, antes + 1);                       // pedido feito, resposta presa no portão
     const outro = { ...lerCombate(codigo), id: "outro-combate" };   // o combate acabou e começou outro
     outro.mapa.imagem = "";
     injetar(codigo, outro);
     // e numa segunda mesa o combate simplesmente acabou
     const segunda = await mesaEmJogo([mario]);
-    await post("/api/agir", { codigo: segunda, texto: "Vejo um goblin e ataco" }, { token: mario.token });
+    await comDadosEm1(() => post("/api/agir", { codigo: segunda, texto: "Vejo um goblin e ataco" }, { token: mario.token }));
     injetar(segunda, null);
     abrir();
     await esperar(60);
@@ -350,7 +369,7 @@ test("a imagem do mapa só é gravada se ainda for o mesmo combate", async () =>
   } finally { registro.portaoImagem = null; }
   // a imagem que chega depois não é apagada por quem grava o combate lido antes dela
   const codigo = await mesaEmJogo([mario]);
-  await post("/api/agir", { codigo, texto: "Vejo um goblin e ataco" }, { token: mario.token });
+  await comDadosEm1(() => post("/api/agir", { codigo, texto: "Vejo um goblin e ataco" }, { token: mario.token }));
   const url = await esperarImagem(codigo);
   assert.ok(url);
   const c = lerCombate(codigo);

@@ -63,6 +63,16 @@ function decidir(prompt) {
   const nomes = [...prompt.matchAll(/^- (.+?) \[id /gm)].map((m) => m[1]);
   const atoAtual = Number((prompt.match(/^- Ato atual: (\d)/m) || [])[1] || 1);
   if (prompt.includes("Conceito:") && !prompt.includes("EVENTO:")) {
+    // uma maga com escolhas erradas de propósito: magia de 3º círculo, magia inventada, 3 truques e itens inválidos
+    if (/Conceito: .*maga/.test(prompt)) {
+      return { nome: "Lia Sombra-Clara", sexo: "Feminino", raca: "Elfo", classe: "Mago", antecedente: "Sábia",
+        atributos: { for: 8, des: 14, con: 12, int: 16, sab: 12, car: 10 }, ca: 12, pericias: ["Arcanismo", "História"],
+        ataques: [{ nome: "Cajado", bonus: 1, dano: "1d6-1", alcance: "corpo" }],
+        magias: [{ nome: "Bola de Fogo", descricao: "fogo" }, { nome: "Mísseis Mágicos", descricao: "Dardos de luz azul." }, { nome: "Desejo Supremo" },
+          { nome: "Mãos Mágicas" }, { nome: "Raio de Gelo" }, { nome: "Toque Chocante" }],
+        inventario: [{ nome: "Grimório", qtd: 1, tipo: "equipamento", efeito: "cura 9d99" }, { nome: "Dinamite", qtd: 3, tipo: "explosivo", efeito: "dano 6d6" },
+          { nome: "Tônico de cura", qtd: 1, tipo: "pocao", efeito: "cura 2d4+2", descricao: "Erva amarga." }], dica: "Fique longe da linha de frente." };
+    }
     return { nome: "Thorin Pé-de-Ferro", sexo: "Masculino", raca: "Anão", classe: "Guerreiro", antecedente: "Ferreiro",
       atributos: { for: 16, des: 12, con: 15, int: 8, sab: 12, car: 9 }, ca: 16, pericias: ["Atletismo", "Intimidação"],
       ataques: [{ nome: "Machado de batalha", bonus: 5, dano: "1d8+3" }], dica: "Use a força para abrir caminho." };
@@ -70,6 +80,10 @@ function decidir(prompt) {
   if (prompt.includes("sugira 3 ações")) return ["Pergunto a Odila sobre a mina.", "Procuro rastros.", "Pago uma rodada."];
   if (ev.includes("Abertura da sessão")) return { narracao: `No começo da história, ${nomes.join(" e ")} ouvem passos.`, cena: "Praça do Sino", resumo: "O grupo chegou à praça.", ato: 3, fim: true };
   if (prompt.includes("Turno dos inimigos")) return { narracao: "Os goblins atacam com fúria." };
+  if (ev.includes("Narre em UMA frase curta")) {
+    if (ev.includes("Bomba de fumaça")) return { narracao: "A fumaça cinza cobre o campo.", elementos: ["fumaça espessa"] };
+    return { narracao: "O efeito se espalha pela cena." };
+  }
   if (ev.includes("Resultado de um teste")) {
     // uma ação com "torre do sino" cumpre o objetivo do ato no resultado da rolagem
     if (prompt.includes("torre do sino")) return { narracao: "Do alto da torre, vocês veem tudo.", ato: atoAtual + 1, ajuste_arco: "O grupo viu o esconderijo do alto da torre." };
@@ -85,6 +99,23 @@ function decidir(prompt) {
     const alvo = (prompt.match(/\[id (ini_\d+)\]: PV [1-9]/) || [])[1];
     if (a.includes("prefacio")) return "Claro! Aqui está:\n" + JSON.stringify({ narracao: "Você olha ao redor." });
     if (a.includes("falhar")) throw new Error("falha simulada");
+    if (emCombate && a.includes("bazuca")) return { narracao: "Você procura a bazuca.", teste: { tipo: "ataque", ataque: "Bazuca", alvo } };
+    if (emCombate && a.includes("bola de fogo")) return { narracao: "As chamas crescem nas suas mãos.", teste: { tipo: "ataque", ataque: "Bola de Fogo", alvo } };
+    if (a.includes("durmo")) return { narracao: "Vocês dormem até o sol nascer.", novo_dia: true };
+    if (a.includes("saqueio")) return { narracao: "No baú há poções e uma corda.", itens: [
+      { alvo: uid, ganha: { nome: "Poção de cura", qtd: 2, tipo: "pocao", efeito: "cura 2d4+2", descricao: "Frasco vermelho" } },
+      { alvo: uid, ganha: { nome: "Corda", qtd: 1, tipo: "equipamento", efeito: "", descricao: "15 metros" } },
+      { alvo: uid, ganha: { nome: "Bomba de fumaça", qtd: 1, tipo: "rapido", efeito: "" } }] };
+    if (a.includes("item invalido")) return { narracao: "Você acha coisas estranhas.", itens: [
+      { alvo: uid, ganha: { nome: "Poção do dragão", qtd: 1, tipo: "pocao", efeito: "dano 9d9" } },
+      { alvo: uid, ganha: { nome: "Poção enorme", qtd: 1, tipo: "pocao", efeito: "cura 50d100" } },
+      { alvo: uid, ganha: { nome: "Flecha", qtd: 50, tipo: "municao" } },
+      { alvo: uid, ganha: { nome: "Espada mágica", qtd: 1, tipo: "arma" } },
+      { alvo: uid, ganha: { nome: "Pedra curativa", qtd: 1, tipo: "equipamento", efeito: "cura 1d4" } },
+      { alvo: "ninguem", ganha: { nome: "Ouro", qtd: 1, tipo: "outro" } },
+      { alvo: uid, ganha: { nome: "Moeda de prata", qtd: 3, tipo: "outro", efeito: "" } }] };
+    if (a.includes("quebro a corda")) return { narracao: "A corda arrebenta.", itens: [{ alvo: uid, perde: { nome: "corda", qtd: 1 } }, { alvo: uid, perde: { nome: "Lança", qtd: 1 } }] };
+    if (a.includes("dinamite")) return { narracao: "Você revira a mochila, mas não há dinamite nenhuma ali." };
     if (emCombate && a.includes("golpeio")) return { narracao: "Você golpeia!", teste: { tipo: "ataque", ataque: ataque.toUpperCase(), alvo } };
     if (emCombate && /atac|ataco/.test(a)) return { narracao: "Você avança!", teste: { tipo: "ataque", ataque, alvo } };
     const ids = [...prompt.matchAll(/^- .+? \[id (\w+)\]: /gm)].map((x) => x[1]).filter((id) => !id.startsWith("ini_"));

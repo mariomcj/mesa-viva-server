@@ -49,7 +49,16 @@ async function mesaPronta(jogadores) {
   const { d } = await post("/api/mesa/criar", { nome: dono.nome }, { token: dono.token });
   for (const j of outros) await post(`/api/mesa/entrar/${d.codigo}`, { nome: j.nome }, { token: j.token });
   for (const j of jogadores) await post("/api/salvar-ficha", { codigo: d.codigo, ficha: fichaBase(j.nome) }, { token: j.token });
+  semItensRapidos(d.codigo);
   return d.codigo;
+}
+/** Sem itens rápidos no inventário, a vez passa sozinha logo depois da ação (como antes do turno em etapas). */
+function semItensRapidos(codigo) {
+  for (const r of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) {
+    const f = JSON.parse(r.dados);
+    f.inventario = [];
+    db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, r.uid);
+  }
 }
 
 let mario, lucia;
@@ -255,6 +264,7 @@ async function mesaComTema(corpo, jogadores = [mario]) {
   const { d } = await post("/api/mesa/criar", { nome: dono.nome, ...corpo }, { token: dono.token });
   for (const j of outros) await post(`/api/mesa/entrar/${d.codigo}`, { nome: j.nome }, { token: j.token });
   for (const j of jogadores) await post("/api/salvar-ficha", { codigo: d.codigo, ficha: fichaBase(j.nome) }, { token: j.token });
+  semItensRapidos(d.codigo);
   return d.codigo;
 }
 const sysDoLog = async (codigo) => (await get(`/api/mesa/${codigo}/log`, { token: mario.token })).d.filter((e) => e.tipo === "sys").map((e) => e.texto);

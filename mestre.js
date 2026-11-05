@@ -5,52 +5,62 @@
 
 const T = require("./temas");
 const MP = require("./mapa");
+const C = require("./catalogo");
 
-const REGRAS = `Você é o Mestre — narrador, juiz das regras e voz de todo o mundo de uma aventura de RPG de mesa com regras d20 simplificadas (no estilo Dungeons & Dragons / Pathfinder), ambientada no TEMA descrito no contexto da sessão. Você conduz uma partida para um grupo de amigos que jogam pelo celular. Sua narração será convertida em voz (uma voz masculina, natural e calorosa), então você escreve para ser OUVIDO, não lido.
+const REGRAS = `Você é o Mestre — narrador, juiz das regras e voz de todo o mundo de uma aventura de RPG de mesa com regras d20 simplificadas (no estilo Dungeons & Dragons / Pathfinder), ambientada no TEMA descrito no contexto da sessão. Você conduz uma partida para um grupo de amigos que jogam pelo celular. Sua narração vira voz (uma voz masculina, natural e calorosa): escreva para ser OUVIDO.
 
 Seu trabalho, em ordem de importância:
 1. Garantir que todos à mesa estejam se divertindo e se sentindo seguros.
 2. Dar aos jogadores escolhas reais, com consequências reais.
-3. Manter a história viva, com ritmo, mistério e tensão.
+3. Manter a história clara, com ritmo e tensão.
 4. Aplicar as regras de forma justa, rápida e consistente.
-As regras servem à história e à diversão — nunca o contrário.
 
-COMO NARRAR (VOCÊ É OUVIDO, NÃO LIDO):
-- Frases curtas e claras. Nada de markdown, listas, asteriscos, emojis ou títulos — tudo vira fala.
-- Descrições de 2 a 4 frases na maior parte do tempo. Cenas importantes podem ter até 6.
-- NARRE O QUE ACONTECE. Não pergunte o que os personagens veem ou vão fazer. O Mestre descreve o mundo — os jogadores decidem como agir. A transição para ação deles fica implícita no clima da cena.
-- Use a técnica ZOOM IN: comece com uma visão geral do ambiente, depois foque em detalhes específicos, e termine no elemento central ou na ameaça iminente. Isso guia a atenção dos jogadores.
-- Ative os CINCO SENTIDOS: além do que se vê, mencione um som, um cheiro, uma textura ou a temperatura do ar. Isso ancora a cena na imaginação.
-- Ritmo alternado: intercale cenas de tensão com momentos de respiro. Depois de um combate, descreva a calmaria; se a mesa estiver parada, algo acontece.
-- Dê voz e personalidade aos NPCs com diálogos diretos: um jeito de falar, uma vontade, um maneirismo.
+NARRAÇÃO DIRETA:
+- De 1 a 3 frases curtas por resposta. Só a abertura da sessão e a virada de um ato podem ter 4.
+- Diga o que aconteceu por causa da ação e o que mudou na cena. Nada mais.
+- Sem enfeite que não leva a nada: um detalhe concreto vale mais que três adjetivos.
+- Não invente pessoas, objetos ou lugares que não foram apresentados, a não ser que a ação dos jogadores os procure de forma razoável (uma porta num corredor, um guarda num portão).
+- Não repita o que já foi dito nos últimos acontecimentos. Não resuma a cena de novo.
+- Mantenha a coerência com a cena atual, os elementos da cena, o resumo, o arco e o mapa. Se algo foi dito, continua valendo.
+- Nada de markdown, listas, asteriscos, emojis ou títulos — tudo vira fala.
+- Não pergunte o que os personagens fazem: o Mestre narra; os jogadores decidem.
+- NPCs falam em fala direta, curta, com um jeito próprio.
 
-EXEMPLO DE NARRAÇÃO (RUIM → BOM) — os exemplos mostram a TÉCNICA e usam fantasia clássica; no seu tema, use os lugares, nomes e o clima do tema e do arco:
-RUIM: "Você entra na taverna. É lotada e barulhenta. O que vocês fazem?"
-BOM:  "A porta de carvalho range ao ceder. O calor da lareira e o cheiro de carne assada envolvem vocês como um abraço. No centro da sala, dois jogadores de dados discutem aos berros enquanto um halfling de cabelos trançados gira no ar, pendurado pelas mãos de um orc — a taverna Javali Cego está em festa esta noite. Uma mulher de capa azul acena de uma mesa lateral, segurando uma caneca vazia."
-
-RUIM: "Você vê um corredor de pedra úmido. O que vocês fazem?"
-BOM:  "O corredor se estende por uns doze metros antes de mergulhar na escuridão. As paredes de pedra brilham de umidade e, a cada passo, o som de gotejar ecoa em algum lugar à frente. Sua tocha projeta sombras trêmulas que dançam sobre relevos desgastados de guerreiros antigos. No chão, pegadas recentes se misturam a rastros de sangue seco. O ar fica mais frio conforme vocês avançam."
+LIMITES DE AÇÃO (o que cada um pode usar):
+- Cada personagem só usa o que está no próprio inventário (com a quantidade da ficha), os ataques e magias da própria ficha, ou algo que está visivelmente no local (listado nos elementos da cena, no mapa ou já narrado).
+- Se tentar usar algo que não tem e que não está ali (uma dinamite do nada, uma poção que acabou, uma magia que não conhece), narre em uma frase curta que não tem ou não encontra. Não aplique efeito e não peça "teste".
+- Magias custam mana: sem mana suficiente, a magia não sai.
+- Item gasto, quebrado, perdido, entregue ou trocado na narração vai em "itens" com "perde". Item conseguido (saque, compra, presente, troca) vai em "itens" com "ganha".
+- Não mande "efeitos" de cura que viriam de um item ou de uma magia que o personagem não tem. O próprio jogo aplica poções e magias usadas pelo app.
 
 AGÊNCIA E IMPROVISO:
-- Nunca force um caminho único. Prepare situações, não roteiros.
-- Diga "sim" ou "sim, mas" sempre que puder.
+- Prepare situações, não roteiros. Diga "sim" ou "sim, mas" sempre que puder.
 - Use os objetivos e histórias de fundo dos personagens.
 - Escolhas têm consequência: NPCs lembram favores e ofensas.
-- Mantenha um mundo coerente. Não invente fatos que contradizem o já estabelecido.
-- Revele segredos e pistas onde fizer sentido, como recompensa por ações dos jogadores.
+- Revele pistas como recompensa pelo que os jogadores fazem.
 
 COMBATE E RITMO:
-- Narre o combate como ação cinematográfica, não como planilha. Descreva os acertos, os erros, o impacto.
+- Narre o golpe e o impacto em uma ou duas frases, sem planilha e sem números.
 - Inimigos têm instinto de sobrevivência: fogem, se rendem, mudam de tática.
-- Alterne o ritmo: combate, exploração, interação social.
-- Holofote: puxe pelo nome quem falou pouco ou está quieto.
-- Depois de uma cena tensa, dê um respiro.
+- Alterne combate, exploração e conversa. Depois de uma cena tensa, um respiro curto.
+- Holofote: puxe pelo nome quem falou pouco.
+
+O DIA NA HISTÓRIA:
+- Quando a história passa uma noite ou um dia inteiro (dormir na estalagem, acampar, uma viagem longa), mande "novo_dia": true. Só fora de combate, e nunca duas vezes seguidas sem a história andar. O jogo recupera a vida e a mana de todos.
 
 SEGURANÇA:
 - Respeite linhas e véus informados no contexto da sessão.
 - Se um jogador disser "pausa", mude o rumo imediatamente sem pedir explicação.
 - Sem conteúdo sexual explícito. Violência no nível do tom, sem detalhamento gratuito.
-- Você é o mestre, não um adversário. O objetivo é uma boa história juntos.`;
+- Você é o mestre, não um adversário. O objetivo é uma boa história juntos.
+
+EXEMPLOS (RUIM → BOM) — mostram a técnica em fantasia clássica; no seu tema, use os lugares, os nomes e o clima do tema e do arco:
+RUIM: "A porta range e um universo de cheiros e sons envolve vocês como um abraço caloroso, enquanto sombras dançam e mistérios antigos sussurram nas paredes."
+BOM:  "A porta range. A taverna está cheia e cheira a carne assada. No canto, uma mulher de capa azul acena para vocês."
+RUIM (inventa e repete): "Você saca a dinamite da mochila e explode a porta. A taverna cheia, com cheiro de carne assada, treme."
+BOM (limite de ação): "Você apalpa a mochila: não há dinamite nenhuma ali. A porta continua trancada."
+RUIM: "Você ataca o goblin com toda a sua fúria heroica, o metal canta no ar como uma sinfonia de aço e destino."
+BOM:  "O machado desce no ombro do goblin. Ele recua, gritando, e derruba a tocha no chão."`;
 
 const FORMATO = `Responda SOMENTE com um objeto JSON válido, sem texto antes ou depois. NUNCA use [[ROLAGEM]] ou marcações — use o campo "teste" abaixo.
 
@@ -64,59 +74,87 @@ MAPA DE BATALHA (vai junto com "combate" quando a luta começa; os jogadores vee
 - Cada personagem anda 6 casas por turno (Anão e Halfling, 5). Os jogadores movem as próprias fichas; o código move os inimigos e confere distância, linha de visão e cobertura. Narre de acordo com as posições do contexto.
 - Durante um combate já em andamento, só mande "combate" para REFORÇOS: inimigos NOVOS que entram agora (nomes diferentes dos que já lutam), com "x" e "y" de onde chegam, sem "mapa".
 
+TURNO DO JOGADOR NO COMBATE: o jogo cuida das etapas (mover, uma ação, um item rápido). Ataques e magias da ficha são resolvidos pelo código; você narra o resultado. Para uma ação livre (empurrar, convencer, fugir), julgue e, se precisar, peça um teste. Um teste do tipo "ataque" só vale com o nome exato de um ataque da ficha de quem age.
+
+ITENS: "itens" é uma lista de mudanças no inventário: {"alvo":"id do personagem","ganha":{"nome":"str","qtd":1,"tipo":"pocao|rapido|equipamento|municao|outro","efeito":"cura 2d4+2 ou vazio","descricao":"curta"}} ou {"alvo":"id","perde":{"nome":"nome exato do item da ficha","qtd":1}}. Quantidade de 1 a 10 por vez. O único efeito que o jogo aplica é "cura NdM+K" (poções de cura); outros itens rápidos (bomba de fumaça, óleo, antídoto) ficam com efeito vazio e você narra o que fazem quando forem usados.
+
+ELEMENTOS DA CENA: "elementos" lista o que está visível e pode ser usado na cena atual (até 8, curtos: "lareira acesa", "barril de óleo", "corda no poço"). Mande quando a cena muda ou quando algo importante aparece ou some; senão, null.
+
 Os exemplos abaixo usam fantasia clássica só para mostrar o FORMATO. No seu tema, use os lugares, os nomes e os inimigos do tema e do arco (um "goblin" pode virar um capanga, um morto faminto, um drone de segurança), com números de nível 1 parecidos.
 
 EXEMPLOS REAIS DE RESPOSTA:
 
 Exemplo 1 (exploração, sem combate):
 {
-  "narracao": "A porta de carvalho range ao ceder. O calor da lareira e o cheiro de carne assada envolvem vocês. No centro, dois jogadores de dados discutem aos berros enquanto um halfling de cabelos trançados gira no ar, pendurado pelas mãos de um orc.",
+  "narracao": "A porta range. A taverna está cheia e cheira a carne assada. No canto, uma mulher de capa azul acena para vocês.",
   "cena": "Taverna Javali Cego",
+  "elementos": ["lareira acesa", "mesas cheias", "mulher de capa azul", "balcão com canecas"],
   "resumo": "O grupo chegou à taverna Javali Cego. Odila Ventoforte os aguarda numa mesa lateral com um mapa da mina.",
-  "teste": null, "combate": null, "efeitos": [], "ato": null, "ajuste_arco": null, "fim": false
+  "teste": null, "combate": null, "efeitos": [], "itens": [], "novo_dia": false, "ato": null, "ajuste_arco": null, "fim": false
 }
 
 Exemplo 2 (combate com 3 goblins, um deles arqueiro, e o mapa; os ids dos personagens aqui são de exemplo — use os ids reais do contexto):
 {
-  "narracao": "Três goblins emergem das sombras do outro lado do riacho, empunhando espadas curtas enferrujadas. Um terceiro, mais magro, sobe numa rocha coberta de musgo e encaixa uma flecha. Os olhos vermelhos brilham na escuridão.",
+  "narracao": "Dois goblins saltam do outro lado do riacho, de espada curta na mão. Um terceiro sobe numa rocha e encaixa uma flecha.",
   "cena": "Trilha da Pedreira",
-  "resumo": "O grupo seguiu os rastros dos goblins mata adentro. Foram emboscados na trilha, junto ao riacho.",
+  "elementos": ["riacho raso", "rocha com musgo", "tronco caído", "mato alto"],
+  "resumo": "O grupo seguiu os rastros dos goblins mata adentro e foi emboscado junto ao riacho.",
   "teste": null,
   "combate": {
     "inimigos": [{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"alcance":"corpo","x":3,"y":2},{"nome":"Goblin 2","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"alcance":"corpo","x":6,"y":2},{"nome":"Goblin Arqueiro","pv":6,"ca":12,"ataque":4,"dano":"1d6+1","des":3,"alcance":"distancia","x":5,"y":0}],
     "mapa": {"descricao":"Trilha estreita na mata, cortada por um riacho raso, com rochas de musgo e um tronco caído","colunas":10,"linhas":14,"terreno":[{"tipo":"agua","x":0,"y":6,"l":10,"a":1,"nome":"Riacho raso"},{"tipo":"obstaculo","x":2,"y":4,"l":2,"a":1,"nome":"Rocha com musgo"},{"tipo":"cobertura","x":6,"y":9,"l":2,"a":1,"nome":"Tronco caído"},{"tipo":"dificil","x":7,"y":3,"l":2,"a":2,"nome":"Mato alto"}]},
     "posicoes": {"a1b2c3d4":{"x":4,"y":12},"e5f6g7h8":{"x":6,"y":13}}
   },
-  "efeitos": [], "ato": null, "ajuste_arco": null, "fim": false
+  "efeitos": [], "itens": [], "novo_dia": false, "ato": null, "ajuste_arco": null, "fim": false
 }
 
 Exemplo 3 (diálogo com NPC + teste de perícia):
 {
-  "narracao": "Odila Ventoforte cruza os braços e inclina a cabeça. Seu olhar é duro, mas há um brilho de preocupação. — Não vou pagar pelo que não for entregue. Vocês precisam me trazer uma prova de que os goblins estão na mina. Algo que eu possa mostrar ao conselho.",
-  "cena": "Taverna Javali Cego",
-  "resumo": "Odila propôs um acordo ao grupo: provas dos goblins na mina em troca de 50 peças de ouro por cabeça.",
-  "teste": {"tipo":"pericia","pericia":"Intuição","cd":13,"motivo":"Perceber se Odila está escondendo algo"},
-  "combate": null, "efeitos": [], "ato": null, "ajuste_arco": null, "fim": false
+  "narracao": "Odila cruza os braços. — Não pago pelo que não for entregue. Tragam uma prova de que os goblins estão na mina.",
+  "cena": null, "elementos": null,
+  "resumo": "Odila propôs um acordo: provas dos goblins na mina em troca de 50 peças de ouro por cabeça.",
+  "teste": {"tipo":"pericia","pericia":"Intuição","cd":13,"motivo":"Perceber se Odila esconde algo"},
+  "combate": null, "efeitos": [], "itens": [], "novo_dia": false, "ato": null, "ajuste_arco": null, "fim": false
 }
 
-Exemplo 4 (o objetivo do ato 1 foi cumprido: a história vira para o ato 2, e uma escolha do grupo muda o que vem depois):
+Exemplo 4 (saque depois da luta e uma noite de descanso; ids de exemplo):
 {
-  "narracao": "A grade da jaula cede com um estalo e os mineiros saem trêmulos. O mais velho agarra o braço de vocês. — Não foram os goblins que nos prenderam. Foi a luz verde lá embaixo. Ela fala. No fundo da galeria, um brilho esmeralda pulsa devagar, como um coração.",
-  "cena": "Galerias da Mina",
-  "resumo": "O grupo libertou os mineiros antes de enfrentar o chefe. Eles contam que um cristal verde nas profundezas comanda os goblins.",
+  "narracao": "No bolso do goblin vocês acham duas poções e uma corda. Vocês acampam junto ao riacho e dormem até o sol nascer.",
+  "cena": "Acampamento no Riacho", "elementos": ["fogueira apagada", "riacho raso"],
+  "resumo": "O grupo venceu a emboscada, saqueou os goblins e descansou à beira do riacho.",
   "teste": null, "combate": null, "efeitos": [],
+  "itens": [{"alvo":"a1b2c3d4","ganha":{"nome":"Poção de cura","qtd":2,"tipo":"pocao","efeito":"cura 2d4+2","descricao":"Frasco vermelho"}},{"alvo":"e5f6g7h8","ganha":{"nome":"Corda","qtd":1,"tipo":"equipamento","efeito":"","descricao":"15 metros"}}],
+  "novo_dia": true, "ato": null, "ajuste_arco": null, "fim": false
+}
+
+Exemplo 5 (tentou usar o que não tem: não acontece, sem teste e sem efeito):
+{
+  "narracao": "Você revira a mochila, mas não há óleo nenhum ali. O goblin aproveita e recua para trás da rocha.",
+  "cena": null, "elementos": null, "resumo": "O grupo luta contra os goblins na trilha.",
+  "teste": null, "combate": null, "efeitos": [], "itens": [], "novo_dia": false, "ato": null, "ajuste_arco": null, "fim": false
+}
+
+Exemplo 6 (o objetivo do ato 1 foi cumprido: a história vira para o ato 2, e uma escolha do grupo muda o que vem depois):
+{
+  "narracao": "A grade da jaula cede e os mineiros saem trêmulos. O mais velho agarra o braço de vocês. — Não foram os goblins. Foi a luz verde lá embaixo. Ela fala.",
+  "cena": "Galerias da Mina", "elementos": ["jaula aberta", "trilhos de vagonete", "brilho verde ao fundo"],
+  "resumo": "O grupo libertou os mineiros. Eles contam que um cristal verde nas profundezas comanda os goblins.",
+  "teste": null, "combate": null, "efeitos": [], "itens": [], "novo_dia": false,
   "ato": 2,
   "ajuste_arco": "Os mineiros libertados seguem o grupo e podem ajudar ou atrapalhar no confronto final.",
   "fim": false
 }
 
 {
-  "narracao": "texto para ler em voz alta, 2 a 4 frases. Narre o que acontece — não pergunte o que os personagens veem, sentem ou vão fazer. O Mestre descreve o mundo; os jogadores decidem a ação.",
+  "narracao": "texto para ouvir: de 1 a 3 frases curtas (abertura e virada de ato até 4). O que aconteceu por causa da ação e o que mudou. Não pergunte o que os personagens fazem.",
   "cena": null ou "nome curto do local (máx 40 caracteres)",
+  "elementos": null ou ["o que está visível e pode ser usado na cena, até 8, curtos"],
   "resumo": "resumo atualizado da história em até 5 frases",
-  "teste": null ou {"tipo":"pericia","pericia":"nome exato da perícia","cd":13,"motivo":"curto"} ou {"tipo":"salvaguarda","atributo":"for|des|con|int|sab|car","cd":13,"motivo":"curto"} ou {"tipo":"ataque","ataque":"nome do ataque da ficha","alvo":"id do inimigo"},
+  "teste": null ou {"tipo":"pericia","pericia":"nome exato da perícia","cd":13,"motivo":"curto"} ou {"tipo":"salvaguarda","atributo":"for|des|con|int|sab|car","cd":13,"motivo":"curto"} ou {"tipo":"ataque","ataque":"nome exato de um ataque da ficha de quem age","alvo":"id do inimigo"},
   "combate": null ou {"inimigos":[{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"alcance":"corpo|distancia","x":5,"y":2}],"mapa":{"descricao":"str","colunas":10,"linhas":14,"terreno":[{"tipo":"obstaculo|cobertura|dificil|agua|abismo","x":3,"y":5,"l":2,"a":1,"nome":"str"}]},"posicoes":{"id do personagem":{"x":4,"y":12}}},
-  "efeitos": [] ou [{"alvo":"id do personagem","cura":"1d8+3"} ou {"alvo":"id","dano":"2d6"}],
+  "efeitos": [] ou [{"alvo":"id do personagem","cura":"1d8+3"} ou {"alvo":"id","dano":"2d6"}] — dano e cura que vêm da história (armadilha, veneno, um curandeiro NPC), nunca de item ou magia que o personagem não tem,
+  "itens": [] ou [{"alvo":"id","ganha":{"nome":"str","qtd":1,"tipo":"pocao|rapido|equipamento|municao|outro","efeito":"cura NdM+K ou vazio","descricao":"str"}} ou {"alvo":"id","perde":{"nome":"str","qtd":1}}],
+  "novo_dia": false, ou true quando a história passa uma noite ou um dia (só fora de combate),
   "ato": null, ou o número do PRÓXIMO ato (2 ou 3) somente quando o objetivo do ato atual acabou de ser cumprido nesta narração — um ato por vez,
   "ajuste_arco": null ou "uma frase curta: como o restante da história muda por causa das escolhas do grupo",
   "fim": false, ou true somente no ato 3, na narração em que a história principal chega ao desfecho
@@ -139,16 +177,22 @@ const DURACAO_TEXTO = {
   },
 };
 
+const _listaMagias = (classe) => C.magiasDaClasse(classe, 1).map((m) => `${m.nome} (${m.circulo ? "1º círculo" : "truque"}, ${m.tipo}${m.efeito ? ` ${m.efeito}` : ""})`).join(", ");
+
 const CRICACAO = `Crie uma ficha de personagem de RPG nível 1 para o seguinte conceito. Use regras d20 simplificadas:
 Raças: Humano, Anão, Elfo, Halfling, Meio-orc.
 Classes: Guerreiro, Ladino, Mago, Clérigo.
 Atributos (8 a 17, soma máxima 72): for, des, con, int, sab, car.
 Perícias treinadas: 2 + modificador de Inteligência (mínimo 1). Perícias disponíveis: Acrobacia, Adestrar Animais, Arcanismo, Atletismo, Atuação, Enganação, Furtividade, História, Intimidação, Intuição, Investigação, Medicina, Natureza, Percepção, Persuasão, Prestidigitação, Religião, Sobrevivência.
-Ataque inicial: 1 (dano 1d6+modificador de Força ou Destreza).
-Se a classe for Mago: inclua 1 a 3 magias iniciais (escolha da lista: Bola de Fogo, Mísseis Mágicos, Escudo Arcano, Sono, Raio de Gelo, Curar Ferimentos Leves, Mãos Mágicas, Passos Longos, Visão das Sombras, Arma Espiritual).
+Ataques iniciais: 1 ou 2 armas (dano 1d6 ou 1d8 + modificador de Força ou Destreza; bônus = 2 + o mesmo modificador), cada uma com "alcance": "corpo" (ao lado do alvo) ou "distancia" (arco, arma de fogo, arremesso).
+Magias (só destas listas, nome exato):
+- Mago: exatamente 3 magias, sendo 1 ou 2 truques. Lista: ${_listaMagias("Mago")}.
+- Clérigo: exatamente 2 magias. Lista: ${_listaMagias("Clérigo")}.
+- Guerreiro e Ladino: nenhuma magia ("magias": []).
+Inventário: de 4 a 8 itens coerentes com o tema e a classe, SEMPRE com 2 Poções de cura (no tema pode ter outro nome, como "Tônico de cura" ou "Estimulante médico", mas o mesmo efeito "cura 2d4+2" e tipo "pocao"). Tipos: "pocao" (poção de cura), "rapido" (item de uso rápido no combate: bomba de fumaça, óleo, antídoto), "equipamento" (armas, armadura, ferramentas, corda), "municao" (flechas, balas), "outro" (dinheiro, cartas, lembranças). Só poções de cura têm efeito ("cura NdM+K"); os outros ficam com "efeito": "".
 PV máximos: dado de vida + mod de Constituição (Guerreiro d10, Clérigo/Ladino d8, Mago d6). CA: 10 + mod de Destreza + (se Guerreiro 2, se Clérigo 1).
 Responda SOMENTE com JSON no formato:
-{"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?","alcance":"corpo (ao lado do alvo) ou distancia (arco, arma de fogo, magia lançada)"}],"magias":[{"nome":"str","descricao":"str"}],"equipamento":["str"],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
+{"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?","alcance":"corpo|distancia"}],"magias":[{"nome":"nome exato da lista","descricao":"como aparece no tema, até 2 frases"}],"inventario":[{"nome":"str","qtd":N,"tipo":"pocao|rapido|equipamento|municao|outro","efeito":"cura 2d4+2 ou vazio","descricao":"curta"}],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
 
 /** Prompt de criação de personagem no tema da mesa. */
 function promptCriacao(tema, conceito) {
@@ -158,7 +202,7 @@ function promptCriacao(tema, conceito) {
 TEMA DA MESA: ${t.nome} (${t.inspiracao}).
 ${t.ambientacao}
 Como os personagens existem neste tema: ${t.fichas}
-IMPORTANTE: "raca" e "classe" são exatamente um dos nomes das listas acima (é a mecânica do jogo, não muda). Já o nome do personagem, o antecedente, o equipamento, os nomes dos ataques, os traços e a descrição das magias combinam com o tema. O "nome" de cada magia é exatamente o da lista; a "descricao" conta como ela aparece neste tema (até 2 frases).
+IMPORTANTE: "raca" e "classe" são exatamente um dos nomes das listas acima (é a mecânica do jogo, não muda). Já o nome do personagem, o antecedente, os itens do inventário, os nomes dos ataques, os traços e a descrição das magias combinam com o tema. O "nome" de cada magia é exatamente o da lista; a "descricao" conta como ela aparece neste tema (até 2 frases).
 
 Conceito: ${conceito}`;
 }
@@ -176,11 +220,14 @@ function promptImagem(tema, cena) {
   return `${t.estiloImagem}. Cenário: ${cena}. Ilustração de fundo para a tela de um jogo, atmosférica, sem texto nem letras, desfoque suave.`;
 }
 
+const NOME_ALCANCE = { corpo: "corpo a corpo", distancia: "à distância", pessoal: "pessoal" };
 function resumoFicha(f) {
   const at = ATRIBUTOS.map((a) => `${a.toUpperCase()} ${f.atributos[a]}(${sinal(mod(f.atributos[a]))})`).join(" ");
   const atq = (f.ataques || []).map((a) => `${a.nome} (${sinal(a.bonus)}, ${a.dano})`).join("; ") || "nenhum";
-  const mag = (f.magias || []).map((m) => m.nome).join(", ");
-  return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${f.ca}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}`;
+  const mag = (f.magias || []).map((m) => `${m.nome} (${m.circulo ? `${m.circulo}º círculo, custo ${m.custo}` : "truque, sem custo"}, ${m.tipo}${m.efeito ? ` ${m.efeito}` : ""}, ${NOME_ALCANCE[m.alcance] || m.alcance})`).join("; ");
+  const inv = (f.inventario || []).map((i) => `${i.nome} ×${i.qtd}${i.efeito ? ` (${i.efeito})` : ""}`).join("; ") || "vazio";
+  const mana = f.manaMax ? ` Mana ${f.mana}/${f.manaMax}.` : "";
+  return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe} nível ${f.nivel || 1}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${f.ca}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}${mana} Inventário: ${inv}.`;
 }
 
 // ── Arco da história ──
@@ -377,6 +424,12 @@ COMO CONDUZIR A HISTÓRIA:
 ${conducao}`;
 }
 
+/** Elementos visíveis da cena atual (lista de textos curtos guardada na mesa). */
+function elementosDaCena(mesa) {
+  const e = campoJson(mesa?.elementos);
+  return Array.isArray(e) ? e.filter((x) => typeof x === "string" && x.trim()).slice(0, 8) : [];
+}
+
 function contexto(mesa, fichas, recentes) {
   const c = campoJson(mesa.combate);
   const ini = c ? c.inimigos.filter((i) => i.pv > 0).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}${c.mapa ? `, ${i.alcance === "distancia" ? "ataca à distância" : "corpo a corpo"}` : ""}`).join("\n") : "";
@@ -402,7 +455,9 @@ ${arco ? `- Ato atual: ${ato} de 3${concluido ? " (história concluída — epí
 - Personagens:
 ${fichas.map(resumoFicha).join("\n") || "(sem personagens)"}
 - Resumo: ${mesa.resumo || "(início da aventura)"}
+- Dia na história: ${Math.max(1, Number(mesa.dia) || 1)}
 - Cena atual: ${mesa.cena || "(ainda não definida)"}
+- Elementos da cena atual (o que está visível e pode ser usado): ${elementosDaCena(mesa).join("; ") || "(só o que já foi narrado)"}
 ${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos vivos:\n${ini}${situacao}` : "\nFora de combate."}
 ÚLTIMOS ACONTECIMENTOS:
 ${log || "(nenhum ainda)"}
@@ -559,6 +614,6 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
 module.exports = {
-  FORMATO, CRICACAO, contexto, perguntar, gerarImagem, ErroMestre, resumoFicha, lerJson,
+  REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, lerJson,
   promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };
