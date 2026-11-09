@@ -11,19 +11,25 @@ a { color: #c8a050; }
 h1, h2, h3 { font-weight: 600; }
 h1 { font-size: 1.3rem; }
 h2 { font-size: 1.1rem; margin: 1rem 0 .5rem; border-bottom: 1px solid #443; padding-bottom: .3rem; }
-.card { background: #1a1410; border: 1px solid #332; border-radius: 8px; padding: 1rem; margin-bottom: .75rem; }
+.card { background: #1a1410; border: 1px solid #332; border-radius: 8px; padding: 1rem; margin-bottom: .75rem; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
 .btn { display: inline-block; padding: .5rem 1rem; border-radius: 6px; border: none; cursor: pointer; font-size: .9rem; }
 .btn-primary { background: #8a6a30; color: #fff; }
 .btn-danger { background: #6a2020; color: #fff; }
 .btn-sm { padding: .3rem .6rem; font-size: .8rem; }
 .badge { display: inline-block; background: #443; padding: .15rem .5rem; border-radius: 4px; font-size: .8rem; }
+.badge-lobby { background: #667; color: #c8d0e0; }
+.badge-jogo { background: #4a8; color: #fff; }
 .grid { display: grid; gap: .75rem; }
 .cols-2 { grid-template-columns: 1fr 1fr; }
+.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 input, select, textarea { background: #221e1a; color: #e0d8cc; border: 1px solid #443; border-radius: 6px; padding: .5rem; font: inherit; width: 100%; }
 label { display: block; font-size: .85rem; color: #b0a898; margin-bottom: .25rem; }
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #332; font-size: .85rem; }
 .table th { color: #c8a050; font-weight: 600; }
+.table tr:nth-child(even) td { background: #15110e; }
+.table tr:hover td { background: #1f1914; }
 #login { max-width: 360px; margin: 4rem auto; }
 #login .card { padding: 2rem; }
 #login h1 { text-align: center; margin-bottom: 1.5rem; color: #c8a050; }
@@ -39,10 +45,24 @@ label { display: block; font-size: .85rem; color: #b0a898; margin-bottom: .25rem
 .flex { display: flex; gap: .5rem; }
 .mt-1 { margin-top: .5rem; }
 .mb-1 { margin-bottom: .5rem; }
-.tabs { display: flex; gap: 0; background: #221e1a; border-radius: 6px; overflow: hidden; }
+.tabs { display: flex; gap: 0; background: #221e1a; border-radius: 6px; overflow: hidden; margin-bottom: 1rem; }
 .tabs button { background: transparent; border: none; padding: .5rem 1rem; cursor: pointer; color: #b0a898; font-size: .85rem; }
 .tabs button.ativo { background: #8a6a30; color: #fff; }
-@media (max-width:600px) { body { font-size: 13px; } .grid.cols-2 { grid-template-columns: 1fr; } }
+.kpi-card { text-align: center; padding: 1.2rem .8rem; }
+.kpi-card .kpi-val { font-size: 1.8rem; font-weight: 700; display: block; color: #c8a050; }
+.kpi-card .kpi-label { font-size: .75rem; color: #b0a898; display: block; margin-top: .2rem; }
+.kpi-card .kpi-sub { font-size: .7rem; color: #887; display: block; margin-top: .15rem; }
+.nowrap { white-space: nowrap; }
+.table-wrap { overflow-x: auto; }
+@media (max-width:600px) {
+  body { font-size: 13px; }
+  .grid.cols-2 { grid-template-columns: 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr; }
+  .grid.cols-4 { grid-template-columns: 1fr 1fr; }
+  .tabs button { padding: .4rem .6rem; font-size: .8rem; }
+  .kpi-card { padding: .8rem .5rem; }
+  .kpi-card .kpi-val { font-size: 1.4rem; }
+}
 </style>
 </head>
 <body>
@@ -51,6 +71,7 @@ label { display: block; font-size: .85rem; color: #b0a898; margin-bottom: .25rem
 const APP = {
   _token: null,
   _user: null,
+  _tab: 'geral',
   async req(method, path, body) {
     const h = { 'Content-Type': 'application/json' };
     if (this._token) h['X-Admin-Token'] = this._token;
@@ -73,6 +94,8 @@ const APP = {
   async criarFicha(cod, d) { return this.req('POST', `/api/admin/fichas/${cod}`, d); },
   async editarFicha(cod, uid, d) { return this.req('PUT', `/api/admin/fichas/${cod}/${uid}`, d); },
   async excluirFicha(cod, uid) { return this.req('DELETE', `/api/admin/fichas/${cod}/${uid}`); },
+  async listarUsuarios() { return this.req('GET', '/api/admin/usuarios'); },
+  async getEstatisticas() { return this.req('GET', '/api/admin/estatisticas'); },
 };
 
 window.onload = () => APP.render();
@@ -110,23 +133,119 @@ async function renderDashboard(parent, dados) {
   const mesas = dados.mesas || [];
   const emJogo = mesas.filter(m => m.fase === 'jogo');
   const emLobby = mesas.filter(m => m.fase !== 'jogo');
+  const activeTab = APP._tab;
   parent.innerHTML = `
     <div class="topo">
       <div><h1>🎲 Admin Mesa Viva</h1></div>
       <div class="user">${APP._user} &mdash; <a href="#" onclick="APP.logout();return false">sair</a></div>
     </div>
     <div style="max-width:960px;margin:0 auto;padding:0 1rem">
-      <div class="grid cols-2" style="margin-bottom:1rem">
-        <div class="card" style="text-align:center"><strong>${mesas.length}</strong><br><small>mesas</small></div>
-        <div class="card" style="text-align:center"><strong>${emJogo.length}</strong><br><small>em jogo</small></div>
+      <div class="tabs">
+        <button class="${activeTab==='geral'?'ativo':''}" onclick="APP._tab='geral';APP.render()">📊 Visão Geral</button>
+        <button class="${activeTab==='mesas'?'ativo':''}" onclick="APP._tab='mesas';APP.render()">🎲 Mesas (${mesas.length})</button>
+        <button class="${activeTab==='usuarios'?'ativo':''}" onclick="APP._tab='usuarios';APP.render()">👥 Usuários</button>
       </div>
-      <div class="section-header">
-        <h2>Mesas ativas (${emJogo.length})</h2>
-        <button class="btn btn-primary btn-sm" onclick="novaMesa()">+ Nova mesa</button>
-      </div>
-      <div id="lista-jogo"></div>
-      ${emLobby.length ? `<h2 class="mt-1">Lobby (${emLobby.length})</h2><div id="lista-lobby"></div>` : ''}
+      <div id="tab-content"></div>
     </div>
+  `;
+  if (activeTab === 'geral') renderVisaoGeral('tab-content', mesas);
+  else if (activeTab === 'usuarios') renderUsuarios('tab-content');
+  else renderTabMesas('tab-content', mesas, emJogo, emLobby);
+}
+
+function badgeFase(fase) {
+  const cls = fase === 'jogo' ? 'badge-jogo' : 'badge-lobby';
+  return `<span class="badge ${cls}">${fase}</span>`;
+}
+
+function fmtData(ms) {
+  if (!ms) return '—';
+  const d = new Date(Number(ms));
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtDataCurta(ms) {
+  if (!ms) return '—';
+  const d = new Date(Number(ms));
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+async function renderVisaoGeral(elId, mesas) {
+  const el = document.getElementById(elId);
+  try {
+    const stats = await APP.getEstatisticas();
+    const hj = new Date();
+    const dias = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(hj);
+      d.setDate(d.getDate() - i);
+      dias.push(d.toISOString().slice(0, 10));
+    }
+    // montar dict usuariosPorDia (últimos 7)
+    const usrPorDia = {};
+    (stats.usuariosPorDia||[]).forEach(r => { usrPorDia[r.dia] = r.total; });
+    const mesasPorDia = {};
+    (stats.mesasPorDia||[]).forEach(r => { mesasPorDia[r.dia] = r.total; });
+    const usr7 = dias.map(dia => ({ dia, total: usrPorDia[dia] || 0 }));
+    const mes7 = dias.map(dia => ({ dia, total: mesasPorDia[dia] || 0 }));
+    el.innerHTML = `
+      <div class="grid cols-4" style="margin-bottom:1rem">
+        <div class="card kpi-card">
+          <span class="kpi-val">${stats.totalUsuarios}</span>
+          <span class="kpi-label">👤 Usuários</span>
+          <span class="kpi-sub">${stats.usuariosHoje} hoje · ${stats.usuariosSemana} na semana</span>
+        </div>
+        <div class="card kpi-card">
+          <span class="kpi-val">${stats.totalMesas}</span>
+          <span class="kpi-label">🎲 Mesas</span>
+          <span class="kpi-sub">${stats.mesasEmJogo} em jogo</span>
+        </div>
+        <div class="card kpi-card">
+          <span class="kpi-val">${stats.totalFichas}</span>
+          <span class="kpi-label">📋 Fichas</span>
+          <span class="kpi-sub">${stats.totalMesas > 0 ? Math.round(stats.totalFichas / stats.totalMesas * 10) / 10 : 0} média/mesa</span>
+        </div>
+        <div class="card kpi-card">
+          <span class="kpi-val">${stats.totalLogs}</span>
+          <span class="kpi-label">📜 Logs</span>
+          <span class="kpi-sub">${stats.totalMesas > 0 ? Math.round(stats.totalLogs / stats.totalMesas) : 0} média/mesa</span>
+        </div>
+      </div>
+      <div class="grid cols-2">
+        <div class="card">
+          <h2>📅 Usuários por dia (7 dias)</h2>
+          ${montarTabelaDia(usr7)}
+        </div>
+        <div class="card">
+          <h2>📅 Mesas por dia (7 dias)</h2>
+          ${montarTabelaDia(mes7)}
+        </div>
+      </div>
+    `;
+  } catch(e) {
+    el.innerHTML = `<div class="card"><p class="erro">Erro ao carregar estatísticas: ${e.message}</p></div>`;
+  }
+}
+
+function montarTabelaDia(arr) {
+  if (!arr || !arr.length) return '<p class="aviso">Nenhum dado.</p>';
+  let rows = '';
+  arr.forEach(r => {
+    const data = r.dia ? r.dia.split('-').reverse().join('/') : r.dia;
+    rows += `<tr><td class="nowrap">${r.dia||'—'}</td><td style="text-align:right">${r.total}</td></tr>`;
+  });
+  return `<div class="table-wrap"><table class="table"><tr><th>Dia</th><th style="text-align:right">Total</th></tr>${rows}</table></div>`;
+}
+
+function renderTabMesas(elId, mesas, emJogo, emLobby) {
+  const el = document.getElementById(elId);
+  el.innerHTML = `
+    <div class="section-header">
+      <h2>Mesas ativas (${emJogo.length})</h2>
+      <button class="btn btn-primary btn-sm" onclick="novaMesa()">+ Nova mesa</button>
+    </div>
+    <div id="lista-jogo"></div>
+    ${emLobby.length ? `<h2 class="mt-1">Lobby (${emLobby.length})</h2><div id="lista-lobby"></div>` : ''}
   `;
   renderLista('lista-jogo', emJogo);
   if (emLobby.length) renderLista('lista-lobby', emLobby);
@@ -136,16 +255,41 @@ function renderLista(id, mesas) {
   const el = document.getElementById(id);
   if (!mesas.length) { el.innerHTML = '<p class="aviso">Nenhuma mesa.</p>'; return; }
   el.innerHTML = `<div class="table-wrap"><table class="table">
-    <tr><th>Código</th><th>Fase</th><th>Cena</th><th>Membros</th><th>Fichas</th><th></th></tr>
+    <tr><th>Código</th><th>Dono</th><th>Fase</th><th>Cena</th><th>Membros</th><th>Fichas</th><th></th></tr>
     ${mesas.map(m => `<tr>
       <td><a href="#" onclick="APP.verMesa('${m.codigo}');return false"><strong>${m.codigo}</strong></a></td>
-      <td><span class="badge">${m.fase}</span></td>
+      <td>${esc(m.dono_nome||m.dono||'—')}</td>
+      <td>${badgeFase(m.fase)}</td>
       <td>${esc(m.cena||'—')}</td>
       <td>${m.qtd_membros}</td>
       <td>${m.qtd_fichas}</td>
       <td><button class="btn btn-danger btn-sm" onclick="confirmarExcluir('${m.codigo}')">🗑</button></td>
     </tr>`).join('')}
   </table></div>`;
+}
+
+async function renderUsuarios(elId) {
+  const el = document.getElementById(elId);
+  try {
+    const dados = await APP.listarUsuarios();
+    const usuarios = dados.usuarios || [];
+    el.innerHTML = `
+      <h2>👥 Usuários registrados (${usuarios.length})</h2>
+      ${usuarios.length ? `<div class="table-wrap"><table class="table">
+        <tr><th>ID</th><th>Nome</th><th>Email</th><th>Registro</th><th>Mesas (criou)</th><th>Mesas (membro)</th></tr>
+        ${usuarios.map(u => `<tr>
+          <td>${esc(u.id)}</td>
+          <td>${esc(u.nome)}</td>
+          <td>${esc(u.email||'—')}</td>
+          <td class="nowrap">${fmtData(u.criadoEm)}</td>
+          <td>${u.qtd_mesas_criadas}</td>
+          <td>${u.qtd_mesas_membro}</td>
+        </tr>`).join('')}
+      </table></div>` : '<p class="aviso">Nenhum usuário.</p>'}
+    `;
+  } catch(e) {
+    el.innerHTML = `<div class="card"><p class="erro">Erro ao carregar usuários: ${e.message}</p></div>`;
+  }
 }
 
 async function novaMesa() {
@@ -199,10 +343,10 @@ APP.verMesa = async function(cod) {
           <td>${f.pv||0}/${f.pvMax||0}</td>
           <td>${f.nivel||1}</td>
           <td><button class="btn btn-danger btn-sm" onclick="if(confirm('Excluir ${esc(f.nome)}?'))APP.excluirFicha('${cod}','${f.uid}').then(()=>APP.verMesa('${cod}'))">🗑</button></td>
-        </tr>`).join('')}</table>` : '<p class="aviso">Nenhuma ficha.</p>'}
+        </tr>`).join('')}</table>` : '<p class=\"aviso\">Nenhuma ficha.</p>'}
       <button class="btn btn-primary btn-sm mt-1" onclick="novaFicha('${cod}')">+ Nova ficha</button>
       <h3 class="mt-1">Membros (${membros.length})</h3>
-      ${membros.length ? `<div class="flex" style="flex-wrap:wrap;gap:.3rem">${membros.map(p => `<span class="badge">${esc(p.nome||p.uid.slice(0,8))}</span>`).join(' ')}</div>` : '<p class="aviso">Nenhum membro.</p>'}
+      ${membros.length ? `<div class="flex" style="flex-wrap:wrap;gap:.3rem">${membros.map(p => `<span class="badge">${esc(p.nome||p.uid.slice(0,8))}</span>`).join(' ')}</div>` : '<p class=\"aviso\">Nenhum membro.</p>'}
       <div class="flex mt-1">
         <button class="btn btn-danger" onclick="if(confirm('Excluir mesa ${cod}? Isso apaga fichas, membros e logs.')){APP.excluirMesa('${cod}');fecharModal();APP.render()}">Excluir mesa</button>
         <button class="btn" onclick="fecharModal()">Fechar</button>
@@ -212,7 +356,7 @@ APP.verMesa = async function(cod) {
   const mEl = document.createElement('div'); mEl.innerHTML = html; document.body.appendChild(mEl.firstElementChild);
 };
 
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }
 function fecharModal() { const m = document.querySelector('.modal-bg'); if(m) m.remove(); }
 
 function confirmarExcluir(cod) {

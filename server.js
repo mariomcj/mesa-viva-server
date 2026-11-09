@@ -616,7 +616,7 @@ app.post("/api/criar-personagem", authMw, limiteIA, async (req, res) => {
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
   const tema = temaDoPedido(req);
   try {
-    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 2000);
+    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 4000);
     const v = r && typeof r === "object" && !Array.isArray(r) ? r : {};
     const classe = R.CLASSES.includes(v.classe) ? v.classe : "Guerreiro";
     const ficha = R.normalizarFicha({ ...v, pv: undefined, mana: undefined, xp: 0, nivel: 1, pendencias: null,
@@ -745,6 +745,50 @@ app.post("/api/gerar-imagem", authMw, limiteIA, async (req, res) => {
   } catch (e) { erro(res, 502, "Não foi possível gerar a imagem agora."); }
 });
 
+// BI — estatísticas gerais
+app.get("/api/admin/estatisticas", adminMw, (req, res) => {
+  const totalUsuarios = db.prepare("SELECT COUNT(*) as total FROM usuarios").get();
+  const totalMesas = db.prepare("SELECT COUNT(*) as total FROM mesas").get();
+  const totalFichas = db.prepare("SELECT COUNT(*) as total FROM fichas").get();
+  const totalLogs = db.prepare("SELECT COUNT(*) as total FROM log").get();
+  const mesasEmJogo = db.prepare("SELECT COUNT(*) as total FROM mesas WHERE fase = 'jogo'").get();
+  const usuariosHoje = db.prepare("SELECT COUNT(*) as total FROM usuarios WHERE criadoEm > ?").get(agora() - 86400_000);
+  const usuariosSemana = db.prepare("SELECT COUNT(*) as total FROM usuarios WHERE criadoEm > ?").get(agora() - 7*86400_000);
+  // Mesas por dia (últimos 30 dias)
+  const mesasPorDia = db.prepare(`
+    SELECT DATE(criadaEm / 1000, 'unixepoch') as dia, COUNT(*) as total
+    FROM mesas WHERE criadaEm > ? GROUP BY dia ORDER BY dia
+  `).all(agora() - 30*86400_000);
+  // Usuários por dia (últimos 30 dias)
+  const usuariosPorDia = db.prepare(`
+    SELECT DATE(criadoEm / 1000, 'unixepoch') as dia, COUNT(*) as total
+    FROM usuarios WHERE criadoEm > ? GROUP BY dia ORDER BY dia
+  `).all(agora() - 30*86400_000);
+  res.json({
+    totalUsuarios: totalUsuarios.total,
+    totalMesas: totalMesas.total,
+    totalFichas: totalFichas.total,
+    totalLogs: totalLogs.total,
+    mesasEmJogo: mesasEmJogo.total,
+    usuariosHoje: usuariosHoje.total,
+    usuariosSemana: usuariosSemana.total,
+    mesasPorDia,
+    usuariosPorDia
+  });
+});
+
+// Listar usuários registrados (admin)
+app.get("/api/admin/usuarios", adminMw, (req, res) => {
+  const usuarios = db.prepare(`
+    SELECT u.id, u.nome, u.email, u.criadoEm,
+      (SELECT COUNT(*) FROM mesas WHERE dono = u.id) as qtd_mesas_criadas,
+      (SELECT COUNT(*) FROM membros WHERE uid = u.id) as qtd_mesas_membro
+    FROM usuarios u
+    ORDER BY u.criadoEm DESC
+  `).all();
+  res.json({ usuarios });
+});
+
 // ── API: Admin (desligado se ADMIN_PASS não estiver definido) ──
 app.post("/api/admin/login", (req, res) => {
   if (!ADMIN_PASS) return erro(res, 503, "Painel desativado. Defina ADMIN_PASS no .env do servidor.");
@@ -759,10 +803,13 @@ app.post("/api/admin/login", (req, res) => {
 
 app.get("/api/admin/mesas", adminMw, (req, res) => {
   const mesas = db.prepare(`
-    SELECT m.codigo, m.fase, m.cena, m.tom, m.criadaEm, m.ultimaNarrativa,
+    SELECT m.codigo, m.fase, m.cena, m.tom, m.dono, m.criadaEm, m.ultimaNarrativa,
+      u.nome as dono_nome,
       (SELECT COUNT(*) FROM membros WHERE codigo = m.codigo) as qtd_membros,
       (SELECT COUNT(*) FROM fichas WHERE codigo = m.codigo) as qtd_fichas
-    FROM mesas m ORDER BY m.criadaEm DESC
+    FROM mesas m
+    LEFT JOIN usuarios u ON m.dono = u.id
+    ORDER BY m.criadaEm DESC
   `).all();
   res.json({ mesas });
 });

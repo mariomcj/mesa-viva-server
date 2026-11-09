@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Política de Privacidade – Mesa Viva</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f0ea;
+      color: #2c2c2c;
+      line-height: 1.7;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 800px; margin: auto; background: #fff; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+    h1 { font-size: 1.6rem; margin-bottom: .5rem; }
+    .data { color: #666; font-size: .85rem; margin-bottom: 1.5rem; }
+    h2 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; color: #4a3728; }
+    p, li { margin-bottom: .6rem; }
+    ul { padding-left: 1.2rem; }
+    strong { color: #3a3a3a; }
+    a { color: #6b3f2a; }
+    footer { margin-top: 2rem; font-size: .82rem; text-align: center; color: #888; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+<h1>Política de Privacidade – Mesa Viva</h1>
+<p class="data">Última atualização: 5 de novembro de 2026</p>
+
+<p>
+  Esta Política de Privacidade descreve como o aplicativo <strong>Mesa Viva</strong>
+  ("nós", "nosso app") coleta, usa, armazena e compartilha informações dos usuários.
+  Ao utilizar o Mesa Viva, você concorda com os termos descritos aqui.
+</p>
+
+<h2>1. Quem somos</h2>
+<p>
+  O Mesa Viva é um aplicativo de RPG de mesa com inteligência artificial como mestre.
+  O app permite que grupos de amigos joguem aventuras de RPG diretamente pelo celular,
+  com narração gerada por IA, combate em mapa, fichas de personagem e dados virtuais.
+</p>
+
+<h2>2. Informações que coletamos</h2>
+
+<h3>2.1 Informações fornecidas pelo usuário</h3>
+<ul>
+  <li><strong>Conta:</strong> e-mail e senha (ou login via Google) para autenticação.</li>
+  <li><strong>Nome do personagem e ficha:</strong> dados de RPG criados pelo jogador (nome, classe, atributos, inventário).</li>
+  <li><strong>Mensagens e ações:</strong> textos enviados pelo jogador durante a partida para interagir com o mestre IA.</li>
+  <li><strong>Dados de perfil:</strong> nome de exibição, idioma preferido, configurações de acessibilidade (voz/texto).</li>
+</ul>
+
+<h3>2.2 Informações coletadas automaticamente</h3>
+<ul>
+  <li><strong>Endereço IP:</strong> utilizado apenas para comunicação com o servidor e prevenção de abuso.</li>
+  <li><strong>Identificador do dispositivo:</strong> um código anônimo gerado localmente para associar a sessão.</li>
+  <li><strong>Dados de uso:</strong> estatísticas agregadas de partidas (número de mesas criadas, combates realizados) para melhoria do serviço.</li>
+  <li><strong>Cookies e tokens de sessão:</strong> para manter a autenticação durante o uso.</li>
+</ul>
+
+<h3>2.3 Informações de pagamento</h3>
+<p>
+  O Mesa Viva não processa pagamentos diretamente. Transações, se houver, são processadas
+  exclusivamente pelas lojas de aplicativos (Google Play) e seguem as políticas de privacidade
+  dessas plataformas. O Mesa Viva não armazena dados de cartão de crédito ou débito.
+</p>
+
+<h2>3. Como usamos as informações</h2>
+<ul>
+  <li><strong>Autenticação:</strong> seu e-mail e senha são usados exclusivamente para login.</li>
+  <li><strong>Geração de conteúdo:</strong> as ações e mensagens durante o jogo são enviadas à API do OpenRouter (IA) para gerar a narração, rolagem de dados e evolução da história. Esses dados não são armazenados permanentemente pela IA.</li>
+  <li><strong>Melhoria do serviço:</strong> estatísticas anônimas de uso ajudam a identificar bugs e equilibrar a jogabilidade.</li>
+  <li><strong>Comunicação:</strong> seu e-mail pode ser usado para comunicações essenciais (recuperação de senha, notificações de conta). Não enviamos e-mails promocionais.</li>
+</ul>
+
+<h2>4. Compartilhamento de dados</h2>
+<p>
+  O Mesa Viva compartilha dados apenas com os seguintes terceiros, estritamente para o funcionamento do app:
+</p>
+<ul>
+  <li><strong>OpenRouter / provedores de IA:</strong> as mensagens e descrições de cena são enviadas para geração de texto narrativo. Nenhum dado pessoal identificável (e-mail, nome real) é enviado para a IA.</li>
+  <li><strong>Google (login social):</strong> se você optar por login com Google, seu nome e e-mail são compartilhados conforme a política do Google. Isso é opcional — você pode usar apenas e-mail e senha.</li>
+  <li><strong>Supabase (banco de dados):</strong> os dados de conta, mesas e fichas são armazenados no Supabase, que segue padrões de segurança da indústria (SOC2, GDPR).</li>
+</ul>
+<p>Não vendemos, alugamos ou compartilhamos dados pessoais com terceiros para fins de marketing ou publicidade.</p>
+
+<h2>5. Armazenamento e segurança</h2>
+<ul>
+  <li>As senhas são armazenadas com hash (bcrypt) — nunca em texto puro.</li>
+  <li>As comunicações entre o app e o servidor são criptografadas via TLS (HTTPS).</li>
+  <li>Os tokens de autenticação são revogáveis e expiram automaticamente.</li>
+  <li>O servidor aplica práticas de segurança como rate limiting, headers de segurança e validação de entrada.</li>
+</ul>
+
+<h2>6. Retenção e exclusão de dados</h2>
+<ul>
+  <li><strong>Contas inativas:</strong> contas sem login por mais de 12 meses podem ser removidas.</li>
+  <li><strong>Exclusão voluntária:</strong> você pode solicitar a exclusão da sua conta e de todos os dados associados a qualquer momento entrando em contato pelo e-mail abaixo. O processamento leva até 30 dias.</li>
+  <li><strong>Dados de partida:</strong> mesas e fichas são mantidas enquanto a conta estiver ativa e podem ser excluídas manualmente pelo usuário no próprio app.</li>
+</ul>
+
+<h2>7. Direitos do usuário (LGPD)</h2>
+<p>
+  Se você está no Brasil, a Lei Geral de Proteção de Dados (LGPD) garante a você:
+</p>
+<ul>
+  <li>Acesso aos dados pessoais que mantemos sobre você.</li>
+  <li>Correção de dados incompletos ou desatualizados.</li>
+  <li>Exclusão de dados, exceto quando a lei exigir retenção.</li>
+  <li>Portabilidade dos seus dados para outro serviço.</li>
+  <li>Oposição ao tratamento de dados para fins específicos.</li>
+</ul>
+<p>Para exercer qualquer um desses direitos, entre em contato pelo e-mail abaixo.</p>
+
+<h2>8. Dados de crianças</h2>
+<p>
+  O Mesa Viva não é destinado a crianças menores de 13 anos. Se você é responsável
+  por uma criança que utiliza o app, recomendável supervisionar o uso. Não coletamos
+  intencionalmente dados de crianças sem consentimento dos pais ou responsáveis.
+</p>
+
+<h2>9. Alterações nesta política</h2>
+<p>
+  Esta Política de Privacidade pode ser atualizada periodicamente. Notificaremos os
+  usuários sobre mudanças significativas através do próprio app ou por e-mail.
+  A data no topo desta página indica quando foi atualizada pela última vez.
+</p>
+
+<h2>10. Contato</h2>
+<p>
+  Para dúvidas, solicitações de exclusão de dados ou exercício de direitos LGPD,
+  entre em contato pelo e-mail:
+</p>
+<p style="text-align:center; font-size:1.2rem; margin:1rem 0;">
+  <a href="mailto:mariomcj@gmail.com">mariomcj@gmail.com</a>
+</p>
+<p>
+  Ou pelo formulário de contato disponível no site do desenvolvedor.
+</p>
+
+<h2>11. Jurisdição</h2>
+<p>
+  Esta política é regida pela legislação brasileira, em especial pela LGPD
+  (Lei nº 13.709/2018). Para usuários na União Europeia, aplicam-se também
+  os termos do Regulamento Geral de Proteção de Dados (GDPR).
+</p>
+
+<footer>
+  &copy; 2026 Mesa Viva. Todos os direitos reservados.
+</footer>
+
+</div>
+</body>
+</html>

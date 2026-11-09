@@ -514,11 +514,13 @@ const TEMPO_LIMITE_IA_MS = 90_000;
 async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000, temperatura) {
   const model = qualidade === "caprichado"
     ? (process.env.MODELO_CAPRICHADO || "anthropic/claude-sonnet-5.5")
-    : (process.env.MODELO_RAPIDO || "anthropic/claude-haiku-5.5");
+    : (process.env.MODELO_RAPIDO || "deepseek/deepseek-v4-flash");
   if (temperatura === undefined) temperatura = 0.7;
 
   const url = "https://openrouter.ai/api/v1/chat/completions";
   const body = { model, messages: [{ role: "system", content: prompt }], max_tokens: maxTokens, temperature: temperatura };
+  // Só desliga reasoning em modelos que suportam (Claude)
+  if (model.includes("anthropic/")) body.reasoning = { mode: "standard" };
 
   const controle = new AbortController();
   const timer = setTimeout(() => controle.abort(), TEMPO_LIMITE_IA_MS);
@@ -554,7 +556,7 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
 }
 
 async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "img") {
-  if (tentativa > 3) return "";
+  if (tentativa > 3) return _fallbackImage(prompt, baseUrl);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
   const modelos = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image"];
