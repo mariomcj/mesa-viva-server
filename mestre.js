@@ -105,34 +105,16 @@ CAMPOS DE MUNDO (use com moderação, só quando algo mudou de verdade):
 - Elementos possíveis: fisico, fogo, gelo, raio, sagrado, sombrio, veneno. Dê fraquezas e resistências que façam sentido (mortos-vivos fracos contra sagrado, criaturas de gelo resistentes a gelo). Comportamento: "agressivo", "tatico" ou "covarde" (covardes fogem com pouca vida). Marque "chefe": true só no inimigo principal do capítulo.
 - Status possíveis em "efeitos": envenenado, em_chamas, sangrando, atordoado, protegido, regenerando, abencoado.`;
 
-const AVENTURA = `Aventura de uma sessão: "A Mina de Pedra-Funda" (mundo original, nível 1).
-Gancho: na vila de Carvalho-Cinza, a mestra-mineira Odila Ventoforte contrata o grupo na taverna Javali Cego. Há dez dias goblins tomaram a mina de prata de Pedra-Funda e seis mineiros sumiram. Paga 50 peças de ouro por cabeça.
-Cenas sugeridas (adapte às escolhas dos jogadores). Os números dos inimigos vêm da REFERÊNCIA DE INIMIGOS do contexto:
-1. Taverna Javali Cego (sem combate): conversa com Odila e moradores; um teste fácil (CD 10 a 12) para a primeira pista: os goblins estão organizados demais e há relatos de um brilho verde na mina.
-2. Trilha da pedreira: rastros (Sobrevivência CD 12) e uma emboscada de goblins: um inimigo COMUM por personagem, comportamento "covarde". É o primeiro combate: deixe o grupo vencer com estilo.
-3. Entrada da mina: sentinelas goblins (LACAIOS, um por personagem; uma Furtividade CD 13 do grupo evita a luta) e uma armadilha de pedras soltas (Percepção CD 13 para notar; Destreza CD 12 para evitar 2d6).
-4. Galerias: os mineiros presos em uma jaula; o elevador de carga quebrado (Atletismo CD 14 ou ideia criativa). Respiro: um bom lugar para o descanso curto.
-5. Câmara do Cristal: o hobgoblin Garra-Torta (CHEFE, "chefe": true) e goblins capangas (COMUNS, um a menos que o número de personagens); um cristal verde sussurra promessas a ele. Destruir o cristal (CA 10, PV 10) faz os capangas fugirem.
-Desfecho: resgatar os mineiros, decidir o que fazer com o cristal, recompensa de Odila (50 peças de ouro por cabeça, entregues na narração).`;
+const AV = require("./aventuras");
+// Compatibilidade: a primeira aventura continua exportada com os nomes antigos.
+const AVENTURA = AV.AVENTURAS[0].texto;
+const CAPITULOS = AV.AVENTURAS[0].capitulos;
 
-/**
- * Capítulos da aventura, com objetivo. O servidor avança quando o Mestre marca "capituloConcluido".
- * Ritmo (design/GAME-DESIGN.md, seção 6): a sessão inteira cabe em ~2 h a 2 h 30 para 4 jogadores,
- * alternando conversa, combate e respiro. "minutos" é a duração-alvo; "combate" é o tipo de luta esperado;
- * "ritmo" vai para o prompt do Mestre.
- */
-const CAPITULOS = [
-  { titulo: "A taverna Javali Cego", objetivo: "Aceitar o trabalho de Odila e reunir pistas sobre a mina.", minutos: 15, combate: "nenhum",
-    ritmo: "Cena social curta. Apresente Odila e um morador com uma pista cada. Peça no máximo um teste fácil. Feche o capítulo assim que o grupo aceitar o trabalho." },
-  { titulo: "A trilha da pedreira", objetivo: "Seguir os rastros até a mina e sobreviver à emboscada.", minutos: 25, combate: "comum",
-    ritmo: "Primeiro combate da campanha: inimigos comuns, um por personagem. Ensine pelo exemplo (descreva o acerto, o erro, o crítico). Depois da luta, um respiro curto." },
-  { titulo: "A entrada da mina", objetivo: "Passar pelas sentinelas e pela armadilha de pedras.", minutos: 25, combate: "facil",
-    ritmo: "Escolha real: furtividade, conversa ou luta contra lacaios. A armadilha premia quem procura. Recompense ideias criativas." },
-  { titulo: "As galerias", objetivo: "Encontrar e libertar os mineiros presos.", minutos: 30, combate: "comum",
-    ritmo: "Exploração e resgate. Um combate comum, no máximo. Ofereça o descanso curto antes da câmara do cristal e deixe os mineiros darem uma pista sobre Garra-Torta." },
-  { titulo: "A câmara do cristal", objetivo: "Enfrentar Garra-Torta e decidir o destino do cristal verde.", minutos: 35, combate: "chefe",
-    ritmo: "Clímax: chefe com capangas. Dê um objetivo além de bater (o cristal). Termine com a decisão sobre o cristal e marque capituloConcluido." },
-];
+/** Instrução de idioma da mesa. Os valores técnicos do JSON continuam em português. */
+function instrucaoIdioma(idioma) {
+  if (idioma !== "en") return "";
+  return `\n\nLANGUAGE — THIS TABLE PLAYS IN ENGLISH. Write every player-facing text in natural, vivid English: "narracao", "resumo", "cena", "motivo", NPC attitudes, enemy names and faction names. Translate place names and titles naturally (for example "Taverna Javali Cego" becomes "The Blind Boar Tavern") and keep them consistent with the summary. Keep the JSON keys exactly as specified, and keep these technical values in Portuguese exactly as listed: skill names in "pericia" (for example "Percepção"), elements, status names, "comportamento", attribute codes and flag keys. Attack names must match the character sheet exactly.`;
+}
 
 /** Sementes de encontros curtos entre capítulos (o Mestre desenvolve a cena). */
 const SEMENTES_ENCONTRO = [
@@ -189,24 +171,25 @@ function contexto(mesa, fichas, recentes, extra = {}) {
   const ini = c ? c.inimigos.filter(R.inimigoAtivo).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}${i.fraquezas?.length ? `, fraco contra ${i.fraquezas.join("/")}` : ""}${i.resistencias?.length ? `, resiste a ${i.resistencias.join("/")}` : ""}${i.status?.length ? `, ${i.status.map((s) => s.tipo).join("/")}` : ""}`).join("\n") : "";
   const log = recentes.map((e) => e.tipo === "narr" ? `MESTRE: ${e.texto}` : e.tipo === "acao" ? `${e.nome}: ${e.texto}` : `(${e.texto})`).join("\n");
   const tom = { epico: "épico e heroico", humor: "leve, com humor", sombrio: "sombrio e tenso" }[mesa.tom] || "épico e heroico";
-  const capIdx = Math.max(0, Math.min(CAPITULOS.length - 1, Number(mesa.capitulo) || 0));
-  const cap = CAPITULOS[capIdx];
+  const av = AV.daMesa(mesa);
+  const capIdx = Math.max(0, Math.min(av.capitulos.length - 1, Number(mesa.capitulo) || 0));
+  const cap = av.capitulos[capIdx];
   const concluida = Number(mesa.aventuraConcluida) === 1;
   const flags = Object.entries(extra.flags || {}).slice(0, 40).map(([k, v]) => `${k}=${v}`).join("; ");
   const npcs = Object.entries(extra.npcs || {}).slice(0, 20).map(([k, v]) => `${k}: ${v}`).join("; ");
   const rep = Object.entries(extra.reputacao || {}).slice(0, 10).map(([k, v]) => `${k} ${R.comSinal(Number(v))}`).join("; ");
   const clima = R.NOME_CLIMA[mesa.clima] || "Céu limpo";
   const periodo = R.NOME_PERIODO[mesa.periodo] || "Tarde";
-  return `${REGRAS}\n\n${AVENTURA}\n\nCONTEXTO DA SESSÃO:
-- Cenário: A Mina de Pedra-Funda (fantasia clássica, vila de Carvalho-Cinza)
+  return `${REGRAS}\n\n${av.texto}\n\nCONTEXTO DA SESSÃO:
+- Cenário: ${av.cenario}
 - Tom: ${tom}${mesa.vetos ? `\n- Temas vetados (nunca use): ${mesa.vetos}` : ""}
-- ${concluida ? "A aventura principal já foi concluída: conduza cenas de fechamento ou exploração livre." : `Capítulo ${capIdx + 1} de ${CAPITULOS.length}: ${cap.titulo}. OBJETIVO DO CAPÍTULO: ${cap.objetivo}${cap.ritmo ? ` RITMO: ${cap.ritmo}` : ""}`}
+- ${concluida ? "A aventura principal já foi concluída: conduza cenas de fechamento ou exploração livre." : `Capítulo ${capIdx + 1} de ${av.capitulos.length}: ${cap.titulo}. OBJETIVO DO CAPÍTULO: ${cap.objetivo}${cap.ritmo ? ` RITMO: ${cap.ritmo}` : ""}`}
 - ${referenciaInimigos(fichas)}
 - Clima e hora: ${clima}, ${periodo.toLowerCase()}. Descreva o ambiente de acordo (chuva enfraquece fogo e fortalece raio; noite e neblina favorecem a furtividade).
 - Personagens:
 ${fichas.map(resumoFicha).join("\n") || "(sem personagens)"}
 - Resumo: ${mesa.resumo || "(início da aventura)"}
-- Cena atual: ${mesa.cena || "Taverna Javali Cego"}
+- Cena atual: ${mesa.cena || av.cenaInicial}
 - Memória do mundo (fatos já estabelecidos, respeite): ${flags || "nenhum ainda"}
 - Atitude dos NPCs: ${npcs || "nenhuma registrada"}
 - Reputação do grupo: ${rep || "neutra"}${extra.encontro ? `\n- ENCONTRO DE ESTRADA: antes de seguir para o próximo capítulo, coloque no caminho do grupo ${extra.encontro}. Uma cena curta, com 2 ou 3 saídas possíveis e, se fizer sentido, um teste.` : ""}${extra.expedicao ? `\n- EXPEDIÇÃO: ${extra.expedicao}` : ""}
@@ -214,20 +197,20 @@ ${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos ativos:\n${ini}` : "\nFora de
 ÚLTIMOS ACONTECIMENTOS:
 ${log || "(nenhum ainda)"}
 
-${FORMATO}`;
+${FORMATO}${instrucaoIdioma(mesa.idioma)}`;
 }
 
 /** Prompt do epílogo: a IA recebe a memória da campanha e narra o destino de cada um. */
 function promptEpilogo(mesa, fichas, extra = {}) {
   const flags = Object.entries(extra.flags || {}).map(([k, v]) => `${k}=${v}`).join("; ") || "nenhuma";
   const npcs = Object.entries(extra.npcs || {}).map(([k, v]) => `${k}: ${v}`).join("; ") || "nenhum";
-  return `${REGRAS}\n\nA aventura "A Mina de Pedra-Funda" terminou. Escreva o EPÍLOGO para ser ouvido em voz alta.
+  return `${REGRAS}\n\nA aventura "${AV.daMesa(mesa).titulo}" terminou. Escreva o EPÍLOGO para ser ouvido em voz alta.
 Resumo: ${mesa.resumo || "(sem resumo)"}
 Escolhas registradas: ${flags}
 NPCs e atitudes: ${npcs}
 Personagens: ${fichas.map((f) => `${f.nome} (${f.raca} ${f.classe}, nível ${f.nivel || 1})`).join("; ")}
 Conte, em 6 a 10 frases curtas: o que aconteceu com a vila, com cada NPC importante e com cada personagem, sempre como consequência das escolhas registradas. Termine com um gancho leve para uma próxima aventura.
-Responda SOMENTE com JSON: {"narracao":"texto do epílogo"}`;
+Responda SOMENTE com JSON: {"narracao":"texto do epílogo"}${mesa.idioma === "en" ? "\nLANGUAGE: write the epilogue in natural English." : ""}`;
 }
 
 class ErroMestre extends Error {
@@ -369,4 +352,9 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { AVENTURA, FORMATO, CRICACAO, CAPITULOS, SEMENTES_ENCONTRO, contexto, promptEpilogo, perguntar, gerarImagem, ErroMestre, resumoFicha, referenciaInimigos };
+/** Prompt de criação de ficha no idioma do jogador (raça, classe e perícias continuam nos valores da lista). */
+function promptCriacao(conceito, idioma) {
+  return `${CRICACAO}\n\nConceito: ${conceito}${idioma === "en" ? `\n\nLANGUAGE: the player uses the app in English. Write "nome", "antecedente", attack names, spell names and descriptions, "equipamento", "tracos" and "dica" in English. Keep "raca", "classe" and "pericias" exactly as the Portuguese values listed above.` : ""}`;
+}
+
+module.exports = { promptCriacao, instrucaoIdioma, AVENTURA, FORMATO, CRICACAO, CAPITULOS, SEMENTES_ENCONTRO, contexto, promptEpilogo, perguntar, gerarImagem, ErroMestre, resumoFicha, referenciaInimigos };

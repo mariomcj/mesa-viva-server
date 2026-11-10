@@ -316,3 +316,28 @@ test("loja: ferreiro sobe a raridade, redistribuir custa 25 × nível, curas", (
   assert.equal(ficha.pocoes, 3);
   assert.equal(ficha.descansoCapitulo, 2);
 });
+
+test("i18n: mensagens do servidor em inglês e sem mexer no português", () => {
+  const I = require("../i18n");
+  const en = (t) => I.traduzir(t, "en");
+  assert.equal(I.traduzir("Vez de Aria.", "pt"), "Vez de Aria.");
+  assert.equal(en("Vez de Aria."), "Aria's turn.");
+  assert.equal(en("Goblin 1 ataca Aria: 15 +4 = 19 vs CA 16 → CRÍTICO, acertou, 7 de dano (resistiu)."), "Goblin 1 attacks Aria: 15 +4 = 19 vs AC 16 → CRITICAL, hit, 7 damage (resisted).");
+  assert.equal(en("Aria · Percepção: 12+3 = 15 vs CD 13"), "Aria · Perception: 12+3 = 15 vs DC 13");
+  assert.equal(en("Aria ficou com Lâmina Ardente (Épico)."), "Aria took Blazing Blade (Epic).");
+  assert.equal(en("Mesa não encontrada."), "Table not found.");
+  assert.equal(en("texto que ninguém traduziu"), "texto que ninguém traduziu");
+  assert.equal(I.idiomaDe({ headers: { "x-idioma": "en-US" } }), "en");
+  assert.equal(I.idiomaDe({ headers: {} }), "pt");
+  // Todas as aventuras têm 5 capítulos com título e objetivo nos dois idiomas, terminando em chefe
+  const AV = require("../aventuras");
+  assert.equal(AV.AVENTURAS.length, 4);
+  for (const a of AV.AVENTURAS) {
+    assert.equal(a.capitulos.length, 5, a.id);
+    assert.equal(a.capitulos[4].combate, "chefe", a.id);
+    for (const c of a.capitulos) assert.ok(c.titulo && c.tituloEn && c.objetivo && c.objetivoEn && c.ritmo, a.id);
+    assert.ok(a.texto.includes(a.titulo) && a.abertura && a.cenaInicialEn, a.id);
+  }
+  assert.equal(AV.daMesa({}).id, "mina");
+  assert.equal(AV.daMesa({ aventura: "xyz" }).id, "mina");
+});

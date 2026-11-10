@@ -50,3 +50,9 @@ Os testes (`test/`) cobrem o motor de regras e uma sessão inteira com uma IA si
 - Admin: `GET /api/admin/uso`, `POST /api/admin/creditos`, `POST /api/admin/mesas/:codigo/flags`; `PUT /api/admin/mesas/:codigo` aceita `clima`, `periodo`, `capitulo`, `aventuraConcluida` e `encontro` (modo de depuração)
 
 O banco antigo continua valendo: as colunas e tabelas novas são criadas sozinhas na primeira execução.
+
+## Biblioteca de aventuras e idiomas
+
+- **Aventuras** (`aventuras.js`): quatro aventuras de 5 capítulos, cada uma com títulos e objetivos em português e inglês. `GET /api/aventuras` lista; quem criou a mesa escolhe no saguão (`POST /api/configurar-mesa` com `aventura`) e, depois de concluir uma, segue para outra com os mesmos personagens (`POST /api/proxima-aventura`). Para criar uma aventura nova, acrescente um item em `AVENTURAS`.
+- **Idioma do aparelho**: o app manda o cabeçalho `X-Idioma: pt | en`. Com `en`, o servidor traduz na saída os erros, as mensagens de sistema do diário, o catálogo de regras, os capítulos e os nomes de itens (`i18n.js`). O banco continua em português; o que não tiver tradução sai em português.
+- **Idioma da mesa** (coluna `mesas.idioma`): define a língua em que o Mestre narra. Vem do aparelho de quem criou a mesa e pode ser trocado em Ajustes (`POST /api/configurar-mesa` com `idioma`).

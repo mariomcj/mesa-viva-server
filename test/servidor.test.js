@@ -75,8 +75,8 @@ async function iniciarServidor(env) {
   return { proc, base: `http://127.0.0.1:${porta}`, saida: () => saida };
 }
 
-function cliente(base, uid, token) {
-  const h = { "Content-Type": "application/json", "X-User-Id": uid, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+function cliente(base, uid, token, idioma) {
+  const h = { "Content-Type": "application/json", "X-User-Id": uid, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(idioma ? { "X-Idioma": idioma } : {}) };
   return {
     post: async (p, b = {}) => { const r = await fetch(base + p, { method: "POST", headers: h, body: JSON.stringify(b) }); return { status: r.status, j: await r.json() }; },
     get: async (p) => { const r = await fetch(base + p, { headers: h }); return { status: r.status, j: await r.json() }; },
@@ -328,4 +328,80 @@ test("loja de ouro, poção e descanso curto", { timeout: 30_000 }, async (t) =>
   assert.equal(f.descansoCapitulo, 0);
   // Ferreiro sem item
   assert.equal((await a.post("/api/loja-ouro/comprar", { codigo, produto: "ferreiro", item: "nada" })).status, 404);
+});
+
+test("biblioteca de aventuras e idioma inglês", { timeout: 30_000 }, async (t) => {
+  let ultimoPrompt = "";
+  const mock = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        ultimoPrompt = JSON.parse(body || "{}").messages?.[0]?.content || "";
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(respostaIA(ultimoPrompt)));
+      });
+    });
+    srv.listen(0, "127.0.0.1", () => resolve(srv));
+  });
+  const s = await iniciarServidor({ OPENROUTER_URL: `http://127.0.0.1:${mock.address().port}` });
+  t.after(() => { s.proc.kill(); mock.close(); });
+  const en = cliente(s.base, "dev-eve", null, "en");
+  const pt = cliente(s.base, "dev-rui");
+
+  // Lista de aventuras nos dois idiomas
+  const lista = (await en.get("/api/aventuras")).j.aventuras;
+  assert.equal(lista.length, 4);
+  assert.equal(lista.find((a) => a.id === "farol").titulo, "The Lighthouse of Dead Tides");
+  assert.equal((await pt.get("/api/aventuras")).j.aventuras[0].titulo, "A Mina de Pedra-Funda");
+
+  // Mesa criada em inglês; a dona escolhe a aventura do farol
+  const { j: { codigo } } = await en.post("/api/criar-mesa", { nome: "Eve" });
+  assert.equal((await pt.post("/api/entrar-mesa", { codigo, nome: "Rui" })).status, 200);
+  assert.equal((await pt.post("/api/configurar-mesa", { codigo, aventura: "farol" })).status, 403);
+  assert.equal((await en.post("/api/configurar-mesa", { codigo, aventura: "nada" })).j.error, "Invalid adventure.");
+  assert.equal((await en.post("/api/configurar-mesa", { codigo, aventura: "farol" })).status, 200);
+  const p = await en.post("/api/criar-personagem", { conceito: "dwarf fighter" });
+  assert.match(ultimoPrompt, /LANGUAGE: the player uses the app in English/);
+  await en.post("/api/salvar-ficha", { codigo, ficha: p.j.ficha });
+  assert.equal((await en.post("/api/comecar-aventura", { codigo })).status, 200);
+  assert.match(ultimoPrompt, /O Farol das Marés Mortas/);
+  assert.match(ultimoPrompt, /THIS TABLE PLAYS IN ENGLISH/);
+  assert.match(ultimoPrompt, /Anselmo Sal-Grosso/);
+
+  // Cada aparelho vê os textos do servidor no seu idioma
+  const mEn = (await en.get(`/api/mesa/${codigo}`)).j;
+  assert.equal(mEn.idioma, "en");
+  assert.equal(mEn.aventura, "farol");
+  assert.equal(mEn.aventuraTitulo, "The Lighthouse of Dead Tides");
+  assert.equal(mEn.capituloTitulo, "The Village in the Drizzle");
+  assert.equal(mEn.climaNome, "Clear sky");
+  const mPt = (await pt.get(`/api/mesa/${codigo}`)).j;
+  assert.equal(mPt.capituloTitulo, "A vila sob a garoa");
+  const logEn = (await en.get(`/api/mesa/${codigo}/log`)).j;
+  assert.match(logEn[0].texto, /^The session has begun\. Chapter 1: The Village in the Drizzle\. Goal: /);
+  const logPt = (await pt.get(`/api/mesa/${codigo}/log`)).j;
+  assert.match(logPt[0].texto, /^A sessão começou\. Capítulo 1: A vila sob a garoa/);
+  assert.equal((await en.post("/api/ficha/usar-pocao", { codigo })).j.error, "You have no potions.");
+  assert.equal((await en.get("/api/regras/catalogo")).j.talentos.couraca.nome, "Thick Hide");
+  assert.equal((await pt.get("/api/regras/catalogo")).j.talentos.couraca.nome, "Couraça");
+
+  // Trocar de aventura só depois de concluir a atual
+  assert.equal((await en.post("/api/proxima-aventura", { codigo, aventura: "inverno" })).status, 400);
+  const adm = await fetch(`${s.base}/api/admin/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: "admin", pass: "mesaviva2026" }) }).then((r) => r.json());
+  // Conclui os 5 capítulos
+  for (let i = 0; i < 5; i++) assert.equal((await en.post("/api/agir", { codigo, texto: "cumpro o objetivo" })).status, 200);
+  assert.equal((await en.get(`/api/mesa/${codigo}`)).j.aventuraConcluida, 1);
+  assert.equal((await pt.post("/api/proxima-aventura", { codigo, aventura: "inverno" })).status, 403);
+  const prox = await en.post("/api/proxima-aventura", { codigo, aventura: "inverno" });
+  assert.equal(prox.status, 200, JSON.stringify(prox.j));
+  assert.match(ultimoPrompt, /O Inverno de Vidro/);
+  const m2 = (await en.get(`/api/mesa/${codigo}`)).j;
+  assert.equal(m2.aventura, "inverno");
+  assert.equal(m2.capitulo, 0);
+  assert.equal(m2.aventuraConcluida, 0);
+  assert.equal(m2.capituloTitulo, "Snow in Midsummer");
+  const f = (await en.get(`/api/mesa/${codigo}/fichas`)).j["dev-eve"];
+  assert.ok(f.nivel >= 2, "o nível continua de uma aventura para a outra");
+  void adm;
 });

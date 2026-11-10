@@ -13,6 +13,8 @@ const { WebSocketServer } = require("ws");
 
 const R = require("./regras");
 const M = require("./mestre");
+const AV = require("./aventuras");
+const I18N = require("./i18n");
 let SERVER_BASE_URL = process.env.PUBLIC_BASE_URL || "https://download.proflow.online";
 
 // ── Config ──
@@ -120,6 +122,8 @@ for (const sql of [
   "ALTER TABLE log ADD COLUMN evento TEXT",
   "ALTER TABLE log ADD COLUMN selo TEXT",
   "ALTER TABLE log ADD COLUMN capitulo INTEGER",
+  "ALTER TABLE mesas ADD COLUMN aventura TEXT DEFAULT 'mina'",
+  "ALTER TABLE mesas ADD COLUMN idioma TEXT DEFAULT 'pt'",
 ]) { try { db.exec(sql); } catch (e) {} }
 
 const { criarCreditos } = require("./creditos");
@@ -183,7 +187,13 @@ function codigoValido(v) {
 }
 
 function erro(res, status, msg) {
-  return res.status(status).json({ error: msg });
+  return res.status(status).json({ error: I18N.traduzir(msg, I18N.idiomaDe(res.req)) });
+}
+
+/** Traduz só as linhas escritas pelo servidor; narração e ações dos jogadores não mudam. */
+function traduzirLog(entradas, idioma) {
+  if (idioma !== "en") return entradas;
+  return entradas.map((e) => (e.tipo === "narr" || e.tipo === "acao") ? e : { ...e, texto: I18N.traduzir(e.texto, idioma) });
 }
 
 function exigirUsuario(req, res) {
@@ -442,7 +452,7 @@ app.post("/api/mesa/criar", authTokenMw, (req, res) => {
     const existe = db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo);
     if (existe) continue;
     const conta = contaDaRequisicao(req);
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, donoConta) VALUES (?, ?, ?, ?)").run(codigo, req.uid, agora(), conta);
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, donoConta, idioma) VALUES (?, ?, ?, ?, ?)").run(codigo, req.uid, agora(), conta, I18N.idiomaDe(req));
     db.prepare("INSERT INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, req.uid, nome);
     creditos.garantir(conta); // o teste grátis de 14 dias começa na primeira mesa criada
     return res.json({ codigo });
@@ -587,7 +597,7 @@ app.post("/api/criar-mesa", (req, res) => {
     const existe = db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo);
     if (existe) continue;
     const conta = _tokenUid(req) || userId;
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, donoConta) VALUES (?, ?, ?, ?)").run(codigo, userId, agora(), conta);
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, donoConta, idioma) VALUES (?, ?, ?, ?, ?)").run(codigo, userId, agora(), conta, I18N.idiomaDe(req));
     db.prepare("INSERT INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, userId, nome);
     creditos.garantir(conta);
     return res.json({ codigo, uid: userId });
@@ -619,7 +629,16 @@ app.post("/api/configurar-mesa", authMw, (req, res) => {
   if (typeof d.vetos === "string") campos.vetos = texto(d.vetos, 300);
   if (["rapido", "caprichado"].includes(d.qualidade)) campos.qualidade = d.qualidade;
   if (typeof d.cdVisivel === "boolean") campos.cdVisivel = d.cdVisivel ? 1 : 0;
-  if (Object.keys(campos).length) salvarMesa(codigo, campos);
+  if (["pt", "en"].includes(d.idioma)) campos.idioma = d.idioma;
+  if (typeof d.aventura === "string") {
+    const mesa = db.prepare("SELECT dono, fase FROM mesas WHERE codigo = ?").get(codigo);
+    if (!AV.AVENTURAS.some((a) => a.id === d.aventura)) return erro(res, 400, "Aventura inválida.");
+    if (mesa?.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa escolhe a aventura.");
+    if (mesa.fase !== "lobby") return erro(res, 400, "Termine a aventura atual antes de começar outra.");
+    campos.aventura = d.aventura;
+    campos.cena = AV.aventura(d.aventura).cenaInicial;
+  }
+  if (Object.keys(campos).length) { salvarMesa(codigo, campos); broadcast(codigo, "atualizar", {}); }
   res.json({ ok: true });
 });
 
@@ -635,7 +654,7 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
     ficha.pv = ficha.pvMax;
     db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(ficha), codigo, f.uid);
   }
-  salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "Taverna Javali Cego", fundo: "", capitulo: 0, aventuraConcluida: 0, votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "tarde" });
+  salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: AV.daMesa(mesa).cenaInicial, fundo: "", capitulo: 0, aventuraConcluida: 0, votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "tarde" });
   db.prepare("DELETE FROM flags_mesa WHERE codigo = ?").run(codigo);
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
@@ -647,7 +666,7 @@ app.post("/api/criar-personagem", authMw, (req, res) => {
   const conceito = texto(req.body?.conceito, 300);
   if (!conceito) return erro(res, 400, "Descreva seu personagem.");
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
-  const prompt = `${M.CRICACAO}\n\nConceito: ${conceito}`;
+  const prompt = M.promptCriacao(conceito, I18N.idiomaDe(req));
   M.perguntar(OPENROUTER_KEY, prompt, "rapido", 2000)
     .then((r) => res.json({ ficha: R.normalizarFicha(r, req.uid, conceito) }))
     .catch((e) => erro(res, 502, e.message || "Erro ao criar personagem."));
@@ -800,14 +819,60 @@ app.post("/api/comecar-aventura", authMw, async (req, res) => {
     const mesaAntes = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
     const aut = creditos.autorizar(contaDaMesa(mesaAntes), mesaAntes?.qualidade || "rapido");
     if (!aut.ok) return erro(res, 402, aut.motivo);
-    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: "Taverna Javali Cego", fundo: "", resumo: "", combate: null, rolagem: null, processando: null, capitulo: 0, aventuraConcluida: 0, votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "anoitecer" });
-    registrar(codigo, { tipo: "sys", texto: `A sessão começou. Capítulo 1: ${M.CAPITULOS[0].titulo}. Objetivo: ${M.CAPITULOS[0].objetivo}`, evento: "capitulo" });
+    const av = AV.daMesa(mesaAntes);
+    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: av.cenaInicial, fundo: "", resumo: "", combate: null, rolagem: null, processando: null, capitulo: 0, aventuraConcluida: 0, votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "anoitecer" });
+    registrar(codigo, { tipo: "sys", texto: `A sessão começou. Capítulo 1: ${av.capitulos[0].titulo}. Objetivo: ${av.capitulos[0].objetivo}`, evento: "capitulo" });
     const ctx = carregar(codigo, req.uid);
     if (!ctx) return erro(res, 404, "Não encontrado.");
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e coloque o grupo na taverna Javali Cego, quando Odila Ventoforte se aproxima. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e ${av.abertura}. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
     const r = await chamarMestre(ctx, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
     if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
-    const cena = r?.cena ? texto(r.cena, 60) : "Taverna Javali Cego";
+    const cena = r?.cena ? texto(r.cena, 60) : av.cenaInicial;
+    salvarMesa(codigo, { cena });
+    atualizarFundo(ctx, cena);
+    broadcast(codigo, "nova", { narracao: r?.narracao || "" });
+    res.json({ ok: true });
+  } catch (e) { erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
+});
+
+// ── Biblioteca de aventuras ──
+app.get("/api/aventuras", (req, res) => res.json({ aventuras: AV.lista(I18N.idiomaDe(req)) }));
+
+/** Depois de concluir uma aventura, o grupo segue para outra com os mesmos personagens. */
+app.post("/api/proxima-aventura", authMw, async (req, res) => {
+  const codigo = codigoValido(req.body?.codigo);
+  if (!codigo) return erro(res, 400, "Código inválido.");
+  if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  const id = String(req.body?.aventura || "");
+  if (!AV.AVENTURAS.some((a) => a.id === id)) return erro(res, 400, "Aventura inválida.");
+  try {
+    const mesaAntes = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
+    if (!mesaAntes) return erro(res, 404, "Mesa não encontrada.");
+    if (mesaAntes.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa escolhe a aventura.");
+    if (mesaAntes.fase !== "jogo" || !Number(mesaAntes.aventuraConcluida)) return erro(res, 400, "Termine a aventura atual antes de começar outra.");
+    if (json(mesaAntes.combate) || json(mesaAntes.rolagem) || json(mesaAntes.expedicao)?.ativa) return erro(res, 400, "Termine o que está acontecendo antes.");
+    const aut = creditos.autorizar(contaDaMesa(mesaAntes), mesaAntes.qualidade || "rapido");
+    if (!aut.ok) return erro(res, 402, aut.motivo);
+    const av = AV.aventura(id);
+    const anterior = AV.daMesa(mesaAntes);
+    // Todos começam a nova aventura descansados; nível, itens e ouro continuam.
+    for (const row of db.prepare("SELECT uid, dados FROM fichas WHERE codigo = ?").all(codigo)) {
+      const f = R.normalizarFicha(json(row.dados), row.uid);
+      f.pv = f.pvMax; f.status = []; f.descansoCapitulo = -1;
+      salvarFicha(codigo, f);
+    }
+    salvarMesa(codigo, {
+      aventura: id, capitulo: 0, aventuraConcluida: 0, cena: av.cenaInicial, fundo: "", combate: null, rolagem: null, processando: null,
+      votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "tarde",
+      resumo: texto(`Antes disto, o grupo concluiu a aventura "${anterior.titulo}". ${mesaAntes.resumo || ""}`, 1500),
+    });
+    registrar(codigo, { tipo: "sys", texto: `Nova aventura: ${av.titulo}. Capítulo 1: ${av.capitulos[0].titulo}. Objetivo: ${av.capitulos[0].objetivo}`, evento: "capitulo", selo: "CAPÍTULO" });
+    const ctx = carregar(codigo, req.uid);
+    if (!ctx) return erro(res, 404, "Não encontrado.");
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), [], extraContexto(ctx))}\n\nEVENTO: Abertura de uma nova aventura com o mesmo grupo, algum tempo depois da anterior. Em uma frase, diga como a fama do grupo os trouxe até aqui; depois ${av.abertura}. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
+    const r = await chamarMestre(ctx, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
+    if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
+    const cena = r?.cena ? texto(r.cena, 60) : av.cenaInicial;
     salvarMesa(codigo, { cena });
     atualizarFundo(ctx, cena);
     broadcast(codigo, "nova", { narracao: r?.narracao || "" });
@@ -936,7 +1001,7 @@ app.post("/api/ideias", authMw, async (req, res) => {
     if (!ctx) return erro(res, 404, "Mesa não encontrada.");
     const f = ctx.fichas[req.uid];
     if (!f) return erro(res, 400, "Crie seu personagem.");
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem. Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.`;
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem. Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.${ctx.mesa.idioma === "en" ? " Write the 3 actions in English." : ""}`;
     const r = await chamarMestre(ctx, prompt, "rapido", 2000);
     res.json({ ideias: (Array.isArray(r) ? r : []).slice(0, 3).map((s) => texto(s, 160)) });
   } catch (e) { erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
@@ -962,16 +1027,25 @@ app.get("/api/mesa/:codigo", (req, res) => {
   mesa.expedicao = json(mesa.expedicao);
   mesa.saque = json(mesa.saque);
   mesa.cdVisivel = mesa.cdVisivel !== 0; // o app espera booleano
-  const capIdx = Math.max(0, Math.min(M.CAPITULOS.length - 1, Number(mesa.capitulo) || 0));
-  mesa.capituloTitulo = M.CAPITULOS[capIdx].titulo;
-  mesa.objetivo = Number(mesa.aventuraConcluida) ? "Aventura concluída." : M.CAPITULOS[capIdx].objetivo;
-  mesa.totalCapitulos = M.CAPITULOS.length;
-  mesa.climaNome = R.NOME_CLIMA[mesa.clima] || "Céu limpo";
-  mesa.periodoNome = R.NOME_PERIODO[mesa.periodo] || "Tarde";
+  const lang = I18N.idiomaDe(req);
+  const tr = (t) => I18N.traduzir(t, lang);
+  const av = AV.daMesa(mesa);
+  const caps = AV.capitulos(av, lang);
+  const capIdx = Math.max(0, Math.min(caps.length - 1, Number(mesa.capitulo) || 0));
+  mesa.aventura = av.id;
+  mesa.aventuraTitulo = lang === "en" ? av.tituloEn : av.titulo;
+  mesa.idioma = mesa.idioma === "en" ? "en" : "pt";
+  mesa.capituloTitulo = caps[capIdx].titulo;
+  mesa.objetivo = Number(mesa.aventuraConcluida) ? tr("Aventura concluída.") : caps[capIdx].objetivo;
+  mesa.totalCapitulos = caps.length;
+  mesa.climaNome = tr(R.NOME_CLIMA[mesa.clima] || "Céu limpo");
+  mesa.periodoNome = tr(R.NOME_PERIODO[mesa.periodo] || "Tarde");
+  if (mesa.votacao?.pergunta) mesa.votacao.pergunta = tr(mesa.votacao.pergunta);
+  if (mesa.saque && lang === "en") for (const k of Object.keys(mesa.saque)) mesa.saque[k] = (mesa.saque[k] || []).map((it) => ({ ...it, nome: I18N.nomeItem(it.nome), descricao: I18N.descricaoItem(it.descricao) }));
   // Situação dos créditos de quem paga a mesa (para o aviso de teste grátis no app).
   try {
     const s = creditos.situacao(contaDaMesa(mesa));
-    if (s) mesa.creditos = { cobrancaAtiva: s.cobrancaAtiva, emTeste: s.teste.ativo, diasTeste: s.teste.diasRestantes, horasTeste: s.teste.horasRestantes, saldo: s.creditos, podeJogar: s.podeJogar, aviso: s.aviso || null };
+    if (s) mesa.creditos = { cobrancaAtiva: s.cobrancaAtiva, emTeste: s.teste.ativo, diasTeste: s.teste.diasRestantes, horasTeste: s.teste.horasRestantes, saldo: s.creditos, podeJogar: s.podeJogar, aviso: s.aviso ? tr(s.aviso) : null };
   } catch {}
   delete mesa.donoConta;
   const membros = db.prepare("SELECT uid, nome, ultimaAtividade FROM membros WHERE codigo = ?").all(codigo);
@@ -1004,7 +1078,7 @@ app.get("/api/mesa/:codigo/fichas", (req, res) => {
   const fichas = {};
   for (const r of rows) {
     const f = R.normalizarFicha(json(r.dados), r.uid);
-    fichas[r.uid] = { ...f, pendencias: R.pendencias(f), caEfetiva: R.caEfetiva(f), xpProximo: R.xpParaProximo(f.nivel) };
+    fichas[r.uid] = I18N.ficha({ ...f, pendencias: R.pendencias(f), caEfetiva: R.caEfetiva(f), xpProximo: R.xpParaProximo(f.nivel) }, I18N.idiomaDe(req));
   }
   res.json(fichas);
 });
@@ -1017,7 +1091,7 @@ app.get("/api/mesa/:codigo/log", (req, res) => {
   if (!db.prepare("SELECT uid FROM membros WHERE codigo = ? AND uid = ?").get(codigo, String(uid).slice(0, 36)))
     return erro(res, 403, "Você não é membro desta mesa.");
   const log = db.prepare("SELECT * FROM log WHERE codigo = ? ORDER BY id DESC LIMIT 50").all(codigo).reverse();
-  res.json(log);
+  res.json(traduzirLog(log, I18N.idiomaDe(req)));
 });
 
 // ── API: Online / Digitando ──
@@ -1054,7 +1128,10 @@ app.get("/api/versao", (req, res) => res.json({
   urlApk: `${SERVER_BASE_URL}/mesa-viva-latest.apk`,
 }));
 
-app.get("/api/regras/catalogo", (req, res) => res.json({ ...R.catalogo(), capitulos: M.CAPITULOS }));
+app.get("/api/regras/catalogo", (req, res) => {
+  const lang = I18N.idiomaDe(req);
+  res.json({ ...I18N.catalogo(R.catalogo(), lang), capitulos: AV.capitulos(AV.AVENTURAS[0], lang), aventuras: AV.lista(lang) });
+});
 
 // ── Créditos e loja ──
 app.get("/api/conta/creditos", authMw, (req, res) => {
@@ -1402,7 +1479,7 @@ async function resolverExpedicao(ctx, resultado) {
   for (const f of vivos) { f.ouro = (f.ouro || 0) + parte; salvarFicha(ctx.codigo, f); }
   registrar(ctx.codigo, { tipo: "sys", texto: `O grupo volta com ${exp.ouro} peças de ouro (${parte} para cada um) depois de ${exp.andar} ${exp.modo === "torre" ? "andares" : "salas"}.`, ok: 1, evento: "expedicao_fim", selo: "OURO" });
   darXp(ctx.codigo, ctx.fichas, exp.andar * 10, "expedição concluída");
-  salvarMesa(ctx.codigo, { expedicao: null, cena: "Taverna Javali Cego" });
+  salvarMesa(ctx.codigo, { expedicao: null, cena: AV.daMesa(ctx.mesa).cenaInicial });
 }
 
 // ── Epílogo ──
@@ -1436,16 +1513,18 @@ function membroOu403(req, res) {
 
 app.get("/api/mesa/:codigo/diario", (req, res) => {
   const codigo = membroOu403(req, res); if (!codigo) return;
-  const mesa = db.prepare("SELECT capitulo, aventuraConcluida FROM mesas WHERE codigo = ?").get(codigo);
+  const mesa = db.prepare("SELECT capitulo, aventuraConcluida, aventura FROM mesas WHERE codigo = ?").get(codigo);
+  const lang = I18N.idiomaDe(req);
   const entradas = db.prepare(`SELECT id, t, tipo, texto, nome, evento, selo, capitulo FROM log
     WHERE codigo = ? AND (tipo IN ('narr', 'acao') OR evento IN ('capitulo', 'reputacao', 'npc', 'nivel', 'vitoria', 'derrota', 'item', 'aventura_fim', 'epilogo', 'expedicao_fim', 'votacao_fim'))
     ORDER BY id DESC LIMIT 400`).all(codigo).reverse();
   res.json({
-    capitulos: M.CAPITULOS.map((c, i) => ({ ...c, numero: i + 1, concluido: i < (mesa?.capitulo || 0) || (mesa?.aventuraConcluida || 0) > 0 })),
+    aventuraTitulo: lang === "en" ? AV.daMesa(mesa).tituloEn : AV.daMesa(mesa).titulo,
+    capitulos: AV.capitulos(AV.daMesa(mesa), lang).map((c, i) => ({ ...c, numero: i + 1, concluido: i < (mesa?.capitulo || 0) || (mesa?.aventuraConcluida || 0) > 0 })),
     capituloAtual: mesa?.capitulo || 0,
     ...campanha.memoria(codigo),
     bestiario: campanha.bestiario(codigo),
-    entradas,
+    entradas: traduzirLog(entradas, lang),
   });
 });
 
@@ -1583,10 +1662,11 @@ async function aplicar(ctx, r, permitirTeste, uid) {
 
   // Capítulo concluído: XP, novo objetivo, passagem do tempo e encontro de estrada.
   if (r?.capituloConcluido === true && Number(ctx.mesa.aventuraConcluida) !== 1) {
+    const CAPS = AV.daMesa(ctx.mesa).capitulos;
     const prox = capAtual + 1;
-    registrar(codigo, { tipo: "sys", texto: `Capítulo ${capAtual + 1} concluído: ${M.CAPITULOS[capAtual]?.titulo || ""}.`, ok: 1, evento: "capitulo", selo: "CAPÍTULO" });
+    registrar(codigo, { tipo: "sys", texto: `Capítulo ${capAtual + 1} concluído: ${CAPS[capAtual]?.titulo || ""}.`, ok: 1, evento: "capitulo", selo: "CAPÍTULO" });
     darXp(codigo, ctx.fichas, R.XP.capitulo, "capítulo concluído");
-    if (prox >= M.CAPITULOS.length) {
+    if (prox >= CAPS.length) {
       campos.aventuraConcluida = 1;
       registrar(codigo, { tipo: "sys", texto: "A aventura foi concluída! Quem criou a mesa pode pedir o epílogo na aba Mesa.", ok: 1, evento: "aventura_fim", selo: "FIM" });
     } else {
@@ -1596,7 +1676,7 @@ async function aplicar(ctx, r, permitirTeste, uid) {
       campos.clima = Math.random() < 0.6 ? "limpo" : R.CLIMAS[1 + Math.floor(Math.random() * (R.CLIMAS.length - 1))];
       // Metade das vezes, um encontro curto no caminho antes do próximo capítulo.
       if (Math.random() < 0.5) campos.encontro = M.SEMENTES_ENCONTRO[Math.floor(Math.random() * M.SEMENTES_ENCONTRO.length)];
-      registrar(codigo, { tipo: "sys", texto: `Capítulo ${prox + 1}: ${M.CAPITULOS[prox].titulo}. Objetivo: ${M.CAPITULOS[prox].objetivo} (${R.NOME_CLIMA[campos.clima]}, ${R.NOME_PERIODO[campos.periodo].toLowerCase()}).`, evento: "capitulo" });
+      registrar(codigo, { tipo: "sys", texto: `Capítulo ${prox + 1}: ${CAPS[prox].titulo}. Objetivo: ${CAPS[prox].objetivo} (${R.NOME_CLIMA[campos.clima]}, ${R.NOME_PERIODO[campos.periodo].toLowerCase()}).`, evento: "capitulo" });
     }
   }
 
