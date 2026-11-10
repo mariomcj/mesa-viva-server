@@ -85,12 +85,23 @@ Exemplo 3 (diálogo com NPC + teste de perícia):
 {
   "narracao": "texto para ler em voz alta, 2 a 4 frases. Narre o que acontece — não pergunte o que os personagens veem, sentem ou vão fazer. O Mestre descreve o mundo; os jogadores decidem a ação.",
   "cena": null ou "nome curto do local (máx 40 caracteres)",
-  "fundo": null ou "URL de imagem de ambiente para o fundo do chat (apenas quando a cena mudar significativamente)",
   "resumo": "resumo atualizado da história em até 5 frases",
   "teste": null ou {"tipo":"pericia","pericia":"nome exato da perícia","cd":13,"motivo":"curto"} ou {"tipo":"salvaguarda","atributo":"for|des|con|int|sab|car","cd":13,"motivo":"curto"} ou {"tipo":"ataque","ataque":"nome do ataque da ficha","alvo":"id do inimigo"},
-  "combate": null ou {"inimigos":[{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2}]},
-  "efeitos": [] ou [{"alvo":"id do personagem","cura":"1d8+3"} ou {"alvo":"id","dano":"2d6"}]
-}`;
+  "combate": null ou {"inimigos":[{"nome":"Goblin 1","pv":7,"ca":13,"ataque":4,"dano":"1d6+2","des":2,"elemento":"fisico","fraquezas":["fogo"],"resistencias":[],"imunidades":[],"comportamento":"covarde","chefe":false}]},
+  "efeitos": [] ou [{"alvo":"id do personagem ou do inimigo","cura":"1d8+3"} ou {"alvo":"id","dano":"2d6"} ou {"alvo":"id","status":"envenenado","turnos":3}],
+  "flags": {} ou {"chave_curta_em_snake_case": true ou "texto curto"},
+  "npcs": {} ou {"Nome do NPC": "atitude atual em poucas palavras"},
+  "reputacao": {} ou {"nome da facção": 1 ou -1},
+  "capituloConcluido": false ou true
+}
+
+CAMPOS DE MUNDO (use com moderação, só quando algo mudou de verdade):
+- "flags": registre escolhas e fatos importantes que devem ser lembrados depois (ex.: "goblins_poupados": true, "ponte_restaurada": true). As flags já registradas aparecem no contexto: respeite-as.
+- "npcs": a atitude de um NPC mudou (grato, desconfiado, hostil, devendo um favor).
+- "reputacao": o grupo ganhou (+1) ou perdeu (-1) prestígio com uma facção.
+- "capituloConcluido": true somente quando o OBJETIVO DO CAPÍTULO ATUAL foi cumprido nesta ação.
+- Elementos possíveis: fisico, fogo, gelo, raio, sagrado, sombrio, veneno. Dê fraquezas e resistências que façam sentido (mortos-vivos fracos contra sagrado, criaturas de gelo resistentes a gelo). Comportamento: "agressivo", "tatico" ou "covarde" (covardes fogem com pouca vida). Marque "chefe": true só no inimigo principal do capítulo.
+- Status possíveis em "efeitos": envenenado, em_chamas, sangrando, atordoado, protegido, regenerando, abencoado.`;
 
 const AVENTURA = `Aventura de uma sessão: "A Mina de Pedra-Funda" (mundo original, nível 1).
 Gancho: na vila de Carvalho-Cinza, a mestra-mineira Odila Ventoforte contrata o grupo na taverna Javali Cego. Há dez dias goblins tomaram a mina de prata de Pedra-Funda e seis mineiros sumiram. Paga 50 peças de ouro por cabeça.
@@ -101,6 +112,27 @@ Cenas sugeridas (adapte às escolhas dos jogadores):
 4. Galerias: os mineiros presos em uma jaula; o elevador de carga quebrado (Atletismo CD 14 ou ideia criativa).
 5. Câmara do Cristal: o hobgoblin Garra-Torta (PV 18, CA 15, ataque +5, dano 1d8+3, DES +1) e 2 goblins; um cristal verde sussurra promessas a ele. Destruir o cristal (CA 10, PV 10) faz os goblins fugirem.
 Desfecho: resgatar os mineiros, decidir o que fazer com o cristal, recompensa de Odila.`;
+
+/** Capítulos da aventura, com objetivo. O servidor avança quando o Mestre marca "capituloConcluido". */
+const CAPITULOS = [
+  { titulo: "A taverna Javali Cego", objetivo: "Aceitar o trabalho de Odila e reunir pistas sobre a mina." },
+  { titulo: "A trilha da pedreira", objetivo: "Seguir os rastros até a mina e sobreviver à emboscada." },
+  { titulo: "A entrada da mina", objetivo: "Passar pelas sentinelas e pela armadilha de pedras." },
+  { titulo: "As galerias", objetivo: "Encontrar e libertar os mineiros presos." },
+  { titulo: "A câmara do cristal", objetivo: "Enfrentar Garra-Torta e decidir o destino do cristal verde." },
+];
+
+/** Sementes de encontros curtos entre capítulos (o Mestre desenvolve a cena). */
+const SEMENTES_ENCONTRO = [
+  "um viajante ferido pede ajuda à beira do caminho",
+  "uma ponte de cordas meio podre sobre um riacho fundo",
+  "um mercador ambulante com preços bons demais para ser verdade",
+  "um santuário antigo com uma oferenda ainda quente",
+  "uma carroça atolada, com um dono mal-humorado",
+  "um pedágio cobrado por figuras que não parecem guardas",
+  "um animal ferido preso numa armadilha de caçador",
+  "refugiados da vila vizinha com notícias preocupantes",
+];
 
 const CRICACAO = `Crie uma ficha de personagem de RPG nível 1 para o seguinte conceito. Use regras d20 simplificadas:
 Raças: Humano, Anão, Elfo, Halfling, Meio-orc.
@@ -114,30 +146,63 @@ Responda SOMENTE com JSON no formato:
 {"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?"}],"magias":[{"nome":"str","descricao":"str"}],"equipamento":["str"],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
 
 function resumoFicha(f) {
-  const at = ATRIBUTOS.map((a) => `${a.toUpperCase()} ${f.atributos[a]}(${sinal(mod(f.atributos[a]))})`).join(" ");
-  const atq = (f.ataques || []).map((a) => `${a.nome} (${sinal(a.bonus)}${a.bonus}, ${a.dano})`).join("; ") || "nenhum";
+  const R = require("./regras");
+  const at = ATRIBUTOS.map((a) => `${a.toUpperCase()} ${f.atributos[a]}(${R.comSinal(mod(f.atributos[a]))})`).join(" ");
+  const atq = (f.ataques || []).map((a) => `${a.nome} (${R.comSinal(a.bonus)}, ${a.dano}${a.elemento && a.elemento !== "fisico" ? `, ${a.elemento}` : ""})`).join("; ") || "nenhum";
   const mag = (f.magias || []).map((m) => m.nome).join(", ");
-  return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${f.ca}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}`;
+  const st = (f.status || []).map((s) => `${R.STATUS[s.tipo]?.nome || s.tipo} (${s.turnos})`).join(", ");
+  const sub = R.SUBCLASSES[f.classe]?.[f.subclasse]?.nome;
+  return `- ${f.nome} [id ${f.uid}]: ${f.raca} ${f.classe}${sub ? ` (${sub})` : ""} nível ${f.nivel || 1}, PV ${f.pv}/${f.pvMax}${f.pv <= 0 ? " (CAÍDO)" : ""}, CA ${R.caEfetiva(f)}, ${at}. Perícias treinadas: ${(f.pericias || []).join(", ") || "nenhuma"}. Ataques: ${atq}.${mag ? " Magias: " + mag + "." : ""}${st ? ` Status: ${st}.` : ""}`;
 }
 
-function contexto(mesa, fichas, recentes) {
-  const { ATRIBUTOS, PERICIAS, mod, sinal } = require("./regras");
-  const c = mesa.combate;
-  const ini = c ? c.inimigos.filter((i) => i.pv > 0).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}`).join("\n") : "";
+/**
+ * Monta o prompt do Mestre.
+ * `extra` traz a memória da campanha: flags, NPCs, reputação, capítulo, clima e encontro sugerido.
+ */
+function contexto(mesa, fichas, recentes, extra = {}) {
+  const R = require("./regras");
+  const c = mesa.combate && typeof mesa.combate === "object" ? mesa.combate : null;
+  const ini = c ? c.inimigos.filter(R.inimigoAtivo).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}${i.fraquezas?.length ? `, fraco contra ${i.fraquezas.join("/")}` : ""}${i.resistencias?.length ? `, resiste a ${i.resistencias.join("/")}` : ""}${i.status?.length ? `, ${i.status.map((s) => s.tipo).join("/")}` : ""}`).join("\n") : "";
   const log = recentes.map((e) => e.tipo === "narr" ? `MESTRE: ${e.texto}` : e.tipo === "acao" ? `${e.nome}: ${e.texto}` : `(${e.texto})`).join("\n");
   const tom = { epico: "épico e heroico", humor: "leve, com humor", sombrio: "sombrio e tenso" }[mesa.tom] || "épico e heroico";
+  const capIdx = Math.max(0, Math.min(CAPITULOS.length - 1, Number(mesa.capitulo) || 0));
+  const cap = CAPITULOS[capIdx];
+  const concluida = Number(mesa.aventuraConcluida) === 1;
+  const flags = Object.entries(extra.flags || {}).slice(0, 40).map(([k, v]) => `${k}=${v}`).join("; ");
+  const npcs = Object.entries(extra.npcs || {}).slice(0, 20).map(([k, v]) => `${k}: ${v}`).join("; ");
+  const rep = Object.entries(extra.reputacao || {}).slice(0, 10).map(([k, v]) => `${k} ${R.comSinal(Number(v))}`).join("; ");
+  const clima = R.NOME_CLIMA[mesa.clima] || "Céu limpo";
+  const periodo = R.NOME_PERIODO[mesa.periodo] || "Tarde";
   return `${REGRAS}\n\n${AVENTURA}\n\nCONTEXTO DA SESSÃO:
 - Cenário: A Mina de Pedra-Funda (fantasia clássica, vila de Carvalho-Cinza)
 - Tom: ${tom}${mesa.vetos ? `\n- Temas vetados (nunca use): ${mesa.vetos}` : ""}
+- ${concluida ? "A aventura principal já foi concluída: conduza cenas de fechamento ou exploração livre." : `Capítulo ${capIdx + 1} de ${CAPITULOS.length}: ${cap.titulo}. OBJETIVO DO CAPÍTULO: ${cap.objetivo}`}
+- Clima e hora: ${clima}, ${periodo.toLowerCase()}. Descreva o ambiente de acordo (chuva enfraquece fogo e fortalece raio; noite e neblina favorecem a furtividade).
 - Personagens:
 ${fichas.map(resumoFicha).join("\n") || "(sem personagens)"}
 - Resumo: ${mesa.resumo || "(início da aventura)"}
 - Cena atual: ${mesa.cena || "Taverna Javali Cego"}
-${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos vivos:\n${ini}` : "\nFora de combate."}
+- Memória do mundo (fatos já estabelecidos, respeite): ${flags || "nenhum ainda"}
+- Atitude dos NPCs: ${npcs || "nenhuma registrada"}
+- Reputação do grupo: ${rep || "neutra"}${extra.encontro ? `\n- ENCONTRO DE ESTRADA: antes de seguir para o próximo capítulo, coloque no caminho do grupo ${extra.encontro}. Uma cena curta, com 2 ou 3 saídas possíveis e, se fizer sentido, um teste.` : ""}${extra.expedicao ? `\n- EXPEDIÇÃO: ${extra.expedicao}` : ""}
+${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos ativos:\n${ini}` : "\nFora de combate."}
 ÚLTIMOS ACONTECIMENTOS:
 ${log || "(nenhum ainda)"}
 
 ${FORMATO}`;
+}
+
+/** Prompt do epílogo: a IA recebe a memória da campanha e narra o destino de cada um. */
+function promptEpilogo(mesa, fichas, extra = {}) {
+  const flags = Object.entries(extra.flags || {}).map(([k, v]) => `${k}=${v}`).join("; ") || "nenhuma";
+  const npcs = Object.entries(extra.npcs || {}).map(([k, v]) => `${k}: ${v}`).join("; ") || "nenhum";
+  return `${REGRAS}\n\nA aventura "A Mina de Pedra-Funda" terminou. Escreva o EPÍLOGO para ser ouvido em voz alta.
+Resumo: ${mesa.resumo || "(sem resumo)"}
+Escolhas registradas: ${flags}
+NPCs e atitudes: ${npcs}
+Personagens: ${fichas.map((f) => `${f.nome} (${f.raca} ${f.classe}, nível ${f.nivel || 1})`).join("; ")}
+Conte, em 6 a 10 frases curtas: o que aconteceu com a vila, com cada NPC importante e com cada personagem, sempre como consequência das escolhas registradas. Termine com um gancho leve para uma próxima aventura.
+Responda SOMENTE com JSON: {"narracao":"texto do epílogo"}`;
 }
 
 class ErroMestre extends Error {
@@ -150,8 +215,9 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
     : (process.env.MODELO_RAPIDO || "anthropic/claude-haiku-5.5");
   if (temperatura === undefined) temperatura = 0.7;
 
-  const url = "https://openrouter.ai/api/v1/chat/completions";
-  const body = { model, messages: [{ role: "system", content: prompt }], max_tokens: maxTokens, temperature: temperatura };
+  const url = `${process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1"}/chat/completions`;
+  // usage.include faz o OpenRouter devolver tokens e custo de cada chamada.
+  const body = { model, messages: [{ role: "system", content: prompt }], max_tokens: maxTokens, temperature: temperatura, usage: { include: true } };
 
   const res = await fetch(url, {
     method: "POST",
@@ -174,23 +240,30 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
   const text = json.choices?.[0]?.message?.content;
   if (!text) throw new ErroMestre("Resposta vazia da IA");
 
+  let parsed;
   try {
     const codeMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     const clean = codeMatch ? codeMatch[1] : text;
-    return JSON.parse(clean);
+    parsed = JSON.parse(clean);
   } catch (e) {
     throw new ErroMestre("JSON inválido na resposta");
   }
+  // Uso de tokens (para medir o custo real). Não enumerável: não vaza para o resto do código.
+  if (parsed && typeof parsed === "object") {
+    Object.defineProperty(parsed, "__uso", { value: { usage: json.usage || null, modelo: json.model || model, qualidade }, enumerable: false });
+  }
+  return parsed;
 }
 
 async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
-  if (tentativa > 3) return _fallbackImage(prompt, baseUrl);
+  // Sem imagem: o servidor usa a biblioteca de fundos prontos (o app não abre SVG).
+  if (tentativa > 3) return "";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
   const modelos = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image"];
   const modelo = modelos[Math.min(tentativa - 1, modelos.length - 1)];
   try {
-    const res = await fetch("https://openrouter.ai/api/v1/images/generations", {
+    const res = await fetch(`${process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1"}/images/generations`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -219,7 +292,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
     if (item?.b64_json) {
       const fs = require("fs");
       const path = require("path");
-      const pubDir = path.join(__dirname, "public", "images");
+      const pubDir = process.env.IMAGENS_DIR || path.join(__dirname, "public", "images");
       if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
       const name = `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
       const buf = Buffer.from(item.b64_json, "base64");
@@ -271,4 +344,4 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { AVENTURA, FORMATO, CRICACAO, contexto, perguntar, gerarImagem, ErroMestre, resumoFicha };
+module.exports = { AVENTURA, FORMATO, CRICACAO, CAPITULOS, SEMENTES_ENCONTRO, contexto, promptEpilogo, perguntar, gerarImagem, ErroMestre, resumoFicha };

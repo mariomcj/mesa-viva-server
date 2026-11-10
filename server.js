@@ -6,7 +6,7 @@
 
 const express = require("express");
 const cors = require("cors");
-const Database = require("better-sqlite3");
+const { abrirBanco } = require("./sqlite-compat");
 const crypto = require("crypto");
 const http = require("http");
 const { WebSocketServer } = require("ws");
@@ -52,7 +52,7 @@ function authTokenMw(req, res, next) {
 }
 
 // ── Database ──
-const db = new Database(DB_PATH);
+const db = abrirBanco(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
@@ -106,6 +106,31 @@ try { db.exec("CREATE TABLE IF NOT EXISTS reacoes (codigo TEXT NOT NULL, logId I
 try { db.exec("CREATE TABLE IF NOT EXISTS sessoes (codigo TEXT NOT NULL, uid TEXT NOT NULL, resumo TEXT DEFAULT '', criadaEm INTEGER DEFAULT (strftime('%s','now')*1000), PRIMARY KEY (codigo, uid))"); } catch (e) {}
 try { db.exec("CREATE TABLE IF NOT EXISTS usuarios (id TEXT PRIMARY KEY, nome TEXT NOT NULL, email TEXT UNIQUE NOT NULL, senha TEXT NOT NULL, criadoEm INTEGER NOT NULL)"); } catch (e) {}
 try { db.exec("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, userId TEXT NOT NULL, criadoEm INTEGER NOT NULL)"); } catch (e) {}
+// Upgrade do relatório: capítulos, clima, votação, expedição, saque e dono pagante.
+for (const sql of [
+  "ALTER TABLE mesas ADD COLUMN capitulo INTEGER DEFAULT 0",
+  "ALTER TABLE mesas ADD COLUMN clima TEXT DEFAULT 'limpo'",
+  "ALTER TABLE mesas ADD COLUMN periodo TEXT DEFAULT 'tarde'",
+  "ALTER TABLE mesas ADD COLUMN aventuraConcluida INTEGER DEFAULT 0",
+  "ALTER TABLE mesas ADD COLUMN votacao TEXT",
+  "ALTER TABLE mesas ADD COLUMN expedicao TEXT",
+  "ALTER TABLE mesas ADD COLUMN saque TEXT",
+  "ALTER TABLE mesas ADD COLUMN encontro TEXT",
+  "ALTER TABLE mesas ADD COLUMN donoConta TEXT",
+  "ALTER TABLE log ADD COLUMN evento TEXT",
+  "ALTER TABLE log ADD COLUMN selo TEXT",
+  "ALTER TABLE log ADD COLUMN capitulo INTEGER",
+]) { try { db.exec(sql); } catch (e) {} }
+
+const { criarCreditos } = require("./creditos");
+const { criarLoja } = require("./loja");
+const { criarFundos } = require("./fundos");
+const { criarCampanha } = require("./campanha");
+const creditos = criarCreditos(db);
+const loja = criarLoja(db, creditos);
+const fundos = criarFundos(db);
+const campanha = criarCampanha(db);
+const VERSAO_SERVIDOR = "2.0.0";
 
 // ── Helpers ──
 function uid() { return crypto.randomUUID().slice(0, 8); }
@@ -185,19 +210,91 @@ function carregar(codigo, uid) {
   return { codigo, uid, mesa: m, fichas, recentes };
 }
 
+/** Conta que paga pela mesa: a conta (token) de quem criou; mesas antigas usam o uid do dono. */
+function contaDaMesa(mesa) {
+  return mesa?.donoConta || mesa?.dono || null;
+}
+
+/** Conta de quem faz a requisição: a do token de login; sem login, o uid do aparelho. */
+function contaDaRequisicao(req) {
+  return _tokenUid(req) || req.uid || null;
+}
+
+/** Memória da campanha + encontro sugerido, para o prompt do Mestre. */
+function extraContexto(ctx) {
+  const mem = campanha.memoria(ctx.codigo);
+  const exp = json(ctx.mesa.expedicao);
+  return {
+    ...mem,
+    encontro: ctx.mesa.encontro || null,
+    expedicao: exp?.ativa ? `o grupo está numa ${exp.modo === "torre" ? "torre" : "masmorra"}, andar ${exp.andar}, sala atual: ${exp.sala}. Narre só esta sala, curta e tensa.` : null,
+  };
+}
+
+/**
+ * Chama o Mestre respeitando créditos e teste grátis, e registra o uso real de tokens.
+ * Lança ErroCreditos quando a cobrança está ativa e a mesa não tem créditos.
+ */
+class ErroCreditos extends Error {}
+async function chamarMestre(ctx, prompt, qualidade, maxTokens, temperatura) {
+  const conta = contaDaMesa(ctx.mesa);
+  const aut = creditos.autorizar(conta, qualidade || "rapido");
+  if (!aut.ok) throw new ErroCreditos(aut.motivo);
+  const r = await M.perguntar(OPENROUTER_KEY, prompt, aut.qualidade, maxTokens, temperatura);
+  try { creditos.registrarUso(conta, { codigo: ctx.codigo, tipo: "texto", modelo: r?.__uso?.modelo, usage: r?.__uso?.usage, qualidade: aut.qualidade }); } catch (e) { console.log(`[creditos] ${e.message}`); }
+  return r;
+}
+
+/** Atualiza o fundo da cena: reaproveita, usa a biblioteca ou gera (e cobra) uma imagem nova. */
+function atualizarFundo(ctx, cena) {
+  const conta = contaDaMesa(ctx.mesa);
+  const sit = conta ? creditos.situacao(conta) : null;
+  const soBiblioteca = !OPENROUTER_KEY || (sit?.cobrancaAtiva && sit?.teste?.ativo && sit.creditos <= 0);
+  fundos.escolher(cena, {
+    baseUrl: SERVER_BASE_URL,
+    soBiblioteca,
+    gerarImagem: () => M.gerarImagem(OPENROUTER_KEY, `Ambiente de RPG de fantasia: ${cena}, ilustração de fundo para chat, atmosférico, desfoque suave`, SERVER_BASE_URL),
+  }).then(({ url, gerou }) => {
+    if (gerou) { try { creditos.registrarUso(conta, { codigo: ctx.codigo, tipo: "imagem" }); } catch {} }
+    if (url) { salvarMesa(ctx.codigo, { fundo: url }); broadcast(ctx.codigo, "atualizar", {}); }
+  }).catch(() => {});
+}
+
+function salvarFicha(codigo, f) {
+  db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, f.uid);
+}
+
+/** Dá XP a todos os vivos e registra cada subida de nível no diário. */
+function darXp(codigo, fichas, quantidade, motivo) {
+  for (const f of Object.values(fichas)) {
+    if (f.pv <= 0) continue;
+    const niveis = R.ganharXp(f, quantidade);
+    for (const n of niveis) {
+      const p = R.pendencias(f);
+      const escolhas = [p.talentos ? "um talento" : null, p.subclasse ? "a subclasse" : null, p.atributos ? "+1 atributo" : null].filter(Boolean).join(", ");
+      registrar(codigo, { tipo: "sys", texto: `${f.nome} subiu para o nível ${n}! PV máximo ${f.pvMax}, proficiência +${f.proficiencia}.${escolhas ? ` Escolha na ficha: ${escolhas}.` : ""}`, ok: 1, evento: "nivel", selo: "NÍVEL" });
+    }
+    salvarFicha(codigo, f);
+  }
+  if (motivo && quantidade >= 20) registrar(codigo, { tipo: "sys", texto: `+${quantidade} XP: ${motivo}.`, ok: 1, evento: "xp" });
+}
+
 function salvarMesa(codigo, campos) {
   const sets = Object.entries(campos).filter(([k]) => k !== "codigo").map(([k]) => `${k} = ?`).join(", ");
-  const vals = Object.entries(campos).filter(([k]) => k !== "codigo").map(([, v]) => typeof v === "object" ? JSON.stringify(v) : v);
+  // null vira NULL de verdade (antes virava o texto "null").
+  const vals = Object.entries(campos).filter(([k]) => k !== "codigo").map(([, v]) => v === null || v === undefined ? null : typeof v === "object" ? JSON.stringify(v) : v);
   if (!sets) return;
   db.prepare(`UPDATE mesas SET ${sets} WHERE codigo = ?`).run(...vals, codigo);
 }
 
 function registrar(codigo, ...entradas) {
-  const stmt = db.prepare("INSERT INTO log (codigo, t, tipo, texto, autor, nome, res, ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const stmt = db.prepare("INSERT INTO log (codigo, t, tipo, texto, autor, nome, res, ok, evento, selo, capitulo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   const t = agora();
+  const capitulo = db.prepare("SELECT capitulo FROM mesas WHERE codigo = ?").get(codigo)?.capitulo ?? 0;
   let nCount = 0;
   for (const [i, e] of entradas.entries()) {
-    stmt.run(codigo, t + i, e.tipo, e.texto, e.autor || null, e.nome || null, e.res || null, e.ok != null ? (e.ok ? 1 : 0) : null);
+    // Eventos de status e combate nunca usam tipo 'narr' (o app lê 'narr' em voz alta).
+    stmt.run(codigo, t + i, e.tipo, e.texto, e.autor || null, e.nome || null, e.res || null, e.ok != null ? (e.ok ? 1 : 0) : null, e.evento || null, e.selo || null, capitulo);
     if (e.tipo === 'narr') { broadcast(codigo, 'narrativa', e); nCount++; }
   }
   if (nCount) salvarMesa(codigo, { ultimaNarrativa: db.prepare("SELECT COALESCE(max(id),0) as id FROM log WHERE codigo = ?").get(codigo).id });
@@ -344,8 +441,10 @@ app.post("/api/mesa/criar", authTokenMw, (req, res) => {
     const codigo = Array.from({ length: 5 }, () => ALFABETO[Math.floor(Math.random() * ALFABETO.length)]).join("");
     const existe = db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo);
     if (existe) continue;
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm) VALUES (?, ?, ?)").run(codigo, req.uid, agora());
+    const conta = contaDaRequisicao(req);
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, donoConta) VALUES (?, ?, ?, ?)").run(codigo, req.uid, agora(), conta);
     db.prepare("INSERT INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, req.uid, nome);
+    creditos.garantir(conta); // o teste grátis de 14 dias começa na primeira mesa criada
     return res.json({ codigo });
   }
   erro(res, 503, "Não consegui criar a mesa.");
@@ -487,8 +586,10 @@ app.post("/api/criar-mesa", (req, res) => {
     const codigo = Array.from({ length: 5 }, () => ALFABETO[Math.floor(Math.random() * ALFABETO.length)]).join("");
     const existe = db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo);
     if (existe) continue;
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm) VALUES (?, ?, ?)").run(codigo, userId, agora());
+    const conta = _tokenUid(req) || userId;
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, donoConta) VALUES (?, ?, ?, ?)").run(codigo, userId, agora(), conta);
     db.prepare("INSERT INTO membros (codigo, uid, nome) VALUES (?, ?, ?)").run(codigo, userId, nome);
+    creditos.garantir(conta);
     return res.json({ codigo, uid: userId });
   }
   erro(res, 503, "Não consegui criar a mesa.");
@@ -534,7 +635,8 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
     ficha.pv = ficha.pvMax;
     db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(ficha), codigo, f.uid);
   }
-  salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "Taverna Javali Cego", fundo: "" });
+  salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "Taverna Javali Cego", fundo: "", capitulo: 0, aventuraConcluida: 0, votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "tarde" });
+  db.prepare("DELETE FROM flags_mesa WHERE codigo = ?").run(codigo);
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
@@ -556,7 +658,8 @@ app.post("/api/salvar-ficha", authMw, (req, res) => {
   if (!codigo) return erro(res, 400, "Código inválido.");
   const antiga = db.prepare("SELECT dados FROM fichas WHERE codigo = ? AND uid = ?").get(codigo, req.uid);
   const mesa = db.prepare("SELECT fase FROM mesas WHERE codigo = ?").get(codigo);
-  const nova = R.normalizarFicha(req.body?.ficha, req.uid);
+  // XP, nível, ouro, talentos, itens e status são do servidor: o app não consegue zerá-los ao salvar.
+  const nova = R.normalizarFicha(R.mesclarFichaEditada(req.body?.ficha, antiga ? json(antiga.dados) : null), req.uid);
   if (!antiga || mesa?.fase === "lobby") nova.pv = req.body?.ficha?.pv === undefined ? nova.pvMax : nova.pv;
   else {
     const a = json(antiga.dados);
@@ -625,7 +728,10 @@ app.put("/api/admin/mesas/:codigo", adminMw, (req, res) => {
   const cod = req.params.codigo;
   const campos = [];
   const params = [];
-  for (const k of ["cena", "fase", "tom", "resumo", "fundo"]) {
+  // Modo de depuração: o admin pode forçar clima, período, capítulo e encontro para testar.
+  if (req.body.clima !== undefined && !R.CLIMAS.includes(req.body.clima)) return erro(res, 400, `Clima inválido (${R.CLIMAS.join(", ")}).`);
+  if (req.body.periodo !== undefined && !R.PERIODOS.includes(req.body.periodo)) return erro(res, 400, `Período inválido (${R.PERIODOS.join(", ")}).`);
+  for (const k of ["cena", "fase", "tom", "resumo", "fundo", "clima", "periodo", "capitulo", "aventuraConcluida", "encontro"]) {
     if (req.body[k] !== undefined) { campos.push(`${k} = ?`); params.push(req.body[k]); }
   }
   if (!campos.length) return erro(res, 400, "Nada a alterar.");
@@ -651,12 +757,12 @@ app.post("/api/admin/fichas/:codigo", adminMw, (req, res) => {
   const f = req.body || {};
   const uid = f.uid || `admin_${Math.random().toString(36).slice(2, 8)}`;
   if (!f.nome) return erro(res, 400, "Nome obrigatório.");
-  const ficha = {
-    uid, nome: f.nome, raca: f.raca || "Humano", classe: f.classe || "Guerreiro",
-    pv: Math.max(1, Number(f.pv) || 20), pvMax: Math.max(1, Number(f.pvMax) || 20),
-    nivel: Math.max(1, Number(f.nivel) || 1), xp: Math.max(0, Number(f.xp) || 0),
-    forca: 10, destreza: 10, inteligencia: 10, presenca: 10, ataques: [], pericias: [], inventario: [], moedas: 0
-  };
+  // Mesmo formato do motor de regras (for/des/con/int/sab/car), não o formato antigo do painel.
+  const ficha = R.normalizarFicha({
+    nome: f.nome, raca: f.raca, classe: f.classe, nivel: f.nivel, xp: f.xp, pv: f.pv,
+    atributos: f.atributos || { for: 12, des: 12, con: 12, int: 12, sab: 12, car: 12 },
+    ca: f.ca, ataques: f.ataques, pericias: f.pericias, equipamento: f.equipamento, ouro: f.ouro,
+  }, uid);
   db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(cod, uid, JSON.stringify(ficha));
   res.json({ ok: true, uid });
 });
@@ -667,9 +773,11 @@ app.put("/api/admin/fichas/:codigo/:uid", adminMw, (req, res) => {
   let f = existente ? JSON.parse(existente.dados) : {};
   for (const k of ["nome", "raca", "classe"]) if (req.body[k] !== undefined) f[k] = req.body[k];
   if (req.body.pv !== undefined) f.pv = Math.max(0, Number(req.body.pv));
-  if (req.body.pvMax !== undefined) f.pvMax = Math.max(1, Number(req.body.pvMax));
   if (req.body.nivel !== undefined) f.nivel = Math.max(1, Number(req.body.nivel));
   if (req.body.xp !== undefined) f.xp = Math.max(0, Number(req.body.xp));
+  if (req.body.ouro !== undefined) f.ouro = Math.max(0, Number(req.body.ouro));
+  // pvMax é calculado pelo nível e pela Constituição.
+  f = R.normalizarFicha(f, uid);
   db.prepare("INSERT OR REPLACE INTO fichas (codigo, uid, dados) VALUES (?, ?, ?)").run(cod, uid, JSON.stringify(f));
   res.json({ ok: true });
 });
@@ -689,19 +797,22 @@ app.post("/api/comecar-aventura", authMw, async (req, res) => {
   try {
     const fichas = db.prepare("SELECT COUNT(*) as c FROM fichas WHERE codigo = ?").get(codigo).c;
     if (!fichas) return erro(res, 400, "Crie pelo menos um personagem.");
-    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: "Taverna Javali Cego", fundo: "", resumo: "", combate: null, rolagem: null, processando: null });
-    registrar(codigo, { tipo: "sys", texto: "A sessão começou." });
+    const mesaAntes = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
+    const aut = creditos.autorizar(contaDaMesa(mesaAntes), mesaAntes?.qualidade || "rapido");
+    if (!aut.ok) return erro(res, 402, aut.motivo);
+    salvarMesa(codigo, { fase: "jogo", inicio: agora(), cena: "Taverna Javali Cego", fundo: "", resumo: "", combate: null, rolagem: null, processando: null, capitulo: 0, aventuraConcluida: 0, votacao: null, expedicao: null, saque: null, encontro: null, clima: "limpo", periodo: "anoitecer" });
+    registrar(codigo, { tipo: "sys", texto: `A sessão começou. Capítulo 1: ${M.CAPITULOS[0].titulo}. Objetivo: ${M.CAPITULOS[0].objetivo}`, evento: "capitulo" });
     const ctx = carregar(codigo, req.uid);
     if (!ctx) return erro(res, 404, "Não encontrado.");
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e coloque o grupo na taverna Javali Cego, quando Odila Ventoforte se aproxima. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
-    const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nEVENTO: Abertura da sessão. Faça uma abertura curta apresentando cada personagem do grupo pelo nome e coloque o grupo na taverna Javali Cego, quando Odila Ventoforte se aproxima. Não pergunte o que fazem — apenas narre a cena.\nNão peça testes nem inicie combate.`;
+    const r = await chamarMestre(ctx, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.8);
     if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
-    const campos = {};
-    if (r?.cena) campos.cena = texto(r.cena, 60);
-    if (Object.keys(campos).length) salvarMesa(codigo, campos);
+    const cena = r?.cena ? texto(r.cena, 60) : "Taverna Javali Cego";
+    salvarMesa(codigo, { cena });
+    atualizarFundo(ctx, cena);
     broadcast(codigo, "nova", { narracao: r?.narracao || "" });
     res.json({ ok: true });
-  } catch (e) { erro(res, 502, e.message); }
+  } catch (e) { erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
 });
 
 app.post("/api/agir", authMw, async (req, res) => {
@@ -756,7 +867,9 @@ app.post("/api/agir", authMw, async (req, res) => {
     salvarMesa(codigo, { processando: JSON.stringify({ por: req.uid, nome: ctx.mesa.membros?.[req.uid] || f.nome, desde: agora() }) });
     registrar(codigo, { tipo: "acao", autor: req.uid, nome: f.nome, texto: acao });
     const extra = json(ctx.mesa.combate) ? `É o turno de ${f.nome} no combate. Se for um ataque, peça um teste do tipo "ataque". Se houver inimigos visíveis e o jogador não atacá-los, pode iniciar combate com eles.` : "";
-    const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: ${f.nome} (id ${req.uid}) declara a ação: "${acao.replace(/"/g, "'")}"\n${extra}`, ctx.mesa.qualidade || "rapido", 3000, 0.7);
+    const r = await chamarMestre(ctx, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nEVENTO: ${f.nome} (id ${req.uid}) declara a ação: "${acao.replace(/"/g, "'")}"\n${extra}`, ctx.mesa.qualidade || "rapido", 3000, 0.7);
+    // O encontro de estrada sugerido já foi entregue ao Mestre: não repetir.
+    if (ctx.mesa.encontro) salvarMesa(codigo, { encontro: null });
     await aplicar(ctx, r, true, req.uid);
     salvarMesa(codigo, { processando: null });
     // Se não gerou rolagem, avança combate
@@ -765,7 +878,7 @@ app.post("/api/agir", authMw, async (req, res) => {
     const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
     broadcast(codigo, "atualizar", { mesa: dadosMesa });
     res.json({ rolagem: novoRol });
-  } catch (e) { salvarMesa(codigo, { processando: null }); erro(res, 502, e.message); }
+  } catch (e) { salvarMesa(codigo, { processando: null }); erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
 });
 
 app.post("/api/rolar", authMw, async (req, res) => {
@@ -784,24 +897,34 @@ app.post("/api/rolar", authMw, async (req, res) => {
     if (!f) return erro(res, 400, "Personagem não encontrado.");
     const natural = valor ?? R.d(20);
     const combate = json(ctx.mesa.combate);
-    const res2 = R.resolverRolagem(rol, natural, combate, f.nome);
+    // Minigame (fechadura, enigma): +2 se acertou, -2 se errou. Só vale para testes de perícia.
+    const minigame = req.body?.minigame;
+    const ajuste = rol.tipo !== "ataque" && (minigame === "ok" || minigame === "falhou") ? (minigame === "ok" ? 2 : -2) : 0;
+    const ambiente = { clima: ctx.mesa.clima, periodo: ctx.mesa.periodo };
+    const res2 = R.resolverRolagem(rol, natural, combate, f, { ajuste, ambiente });
+    salvarFicha(codigo, f); // Sede de Sangue pode curar quem ataca
     registrar(codigo, {
-      tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${res2.natural}${R.sinal(rol.bonus)}${rol.bonus} = ${res2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}`,
+      tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${res2.natural}${R.sinal(rol.bonus + ajuste)}${rol.bonus + ajuste} = ${res2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}${ajuste ? ` (minigame ${ajuste > 0 ? "+2" : "-2"})` : ""}`,
       res: res2.dano !== undefined ? `acertou, ${res2.dano} de dano` : res2.sucesso ? "sucesso" : "falha",
       ok: res2.sucesso ? 1 : 0,
+      evento: res2.evento, selo: res2.selo,
     });
+    if (combate) {
+      for (const i of combate.inimigos || []) if (i.pv <= 0 && !i._registrado) { i._registrado = true; registrar(codigo, { tipo: "sys", texto: `${i.nome} foi derrotado.`, ok: 1, evento: "inimigo_caido" }); }
+    }
     const campos = { rolagem: null };
     if (combate) campos.combate = JSON.stringify(combate);
     salvarMesa(codigo, campos);
+    ctx.mesa.combate = combate;
     const fim = R.combateAcabou(combate, ctx.fichas);
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: Resultado de um teste. Narre a consequência.\n${res2.descricao}${fim ? "\nTodos os inimigos foram derrotados: narre o fim do combate." : ""}\nNão peça outro teste agora (deixe "teste" nulo).`;
-    const r = await M.perguntar(OPENROUTER_KEY, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.5);
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nEVENTO: Resultado de um teste. Narre a consequência.\n${res2.descricao}${fim ? "\nTodos os inimigos foram derrotados ou fugiram: narre o fim do combate." : ""}\nNão peça outro teste agora (deixe "teste" nulo).`;
+    const r = await chamarMestre(ctx, prompt, ctx.mesa.qualidade || "rapido", 3000, 0.5);
     await aplicar(ctx, { ...r, combate: null, efeitos: [] }, false, req.uid);
     if (json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo).combate)) await avancarCombate(ctx);
     const dadosMesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
     broadcast(codigo, "atualizar", { mesa: dadosMesa });
-    res.json({ natural: res2.natural, total: res2.total, sucesso: res2.sucesso, dano: res2.dano ?? null });
-  } catch (e) { erro(res, 502, e.message); }
+    res.json({ natural: res2.natural, total: res2.total, sucesso: res2.sucesso, dano: res2.dano ?? null, selo: res2.selo, evento: res2.evento });
+  } catch (e) { erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
 });
 
 app.post("/api/ideias", authMw, async (req, res) => {
@@ -813,10 +936,10 @@ app.post("/api/ideias", authMw, async (req, res) => {
     if (!ctx) return erro(res, 404, "Mesa não encontrada.");
     const f = ctx.fichas[req.uid];
     if (!f) return erro(res, 400, "Crie seu personagem.");
-    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem. Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.`;
-    const r = await M.perguntar(OPENROUTER_KEY, prompt, "rapido", 2000);
+    const prompt = `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes, extraContexto(ctx))}\n\nO jogador de ${f.nome} pediu ajuda: sugira 3 ações úteis e diferentes para ${f.nome} agora, usando as habilidades e o jeito do personagem. Cada uma em primeira pessoa, até 15 palavras, pronta para ser dita.\nResponda SOMENTE com um array JSON de 3 strings.`;
+    const r = await chamarMestre(ctx, prompt, "rapido", 2000);
     res.json({ ideias: (Array.isArray(r) ? r : []).slice(0, 3).map((s) => texto(s, 160)) });
-  } catch (e) { erro(res, 502, e.message); }
+  } catch (e) { erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
 });
 
 // ── API: Leitura (para o app) ──
@@ -835,6 +958,22 @@ app.get("/api/mesa/:codigo", (req, res) => {
   mesa.combate = json(mesa.combate);
   mesa.rolagem = json(mesa.rolagem);
   mesa.processando = json(mesa.processando);
+  mesa.votacao = json(mesa.votacao);
+  mesa.expedicao = json(mesa.expedicao);
+  mesa.saque = json(mesa.saque);
+  mesa.cdVisivel = mesa.cdVisivel !== 0; // o app espera booleano
+  const capIdx = Math.max(0, Math.min(M.CAPITULOS.length - 1, Number(mesa.capitulo) || 0));
+  mesa.capituloTitulo = M.CAPITULOS[capIdx].titulo;
+  mesa.objetivo = Number(mesa.aventuraConcluida) ? "Aventura concluída." : M.CAPITULOS[capIdx].objetivo;
+  mesa.totalCapitulos = M.CAPITULOS.length;
+  mesa.climaNome = R.NOME_CLIMA[mesa.clima] || "Céu limpo";
+  mesa.periodoNome = R.NOME_PERIODO[mesa.periodo] || "Tarde";
+  // Situação dos créditos de quem paga a mesa (para o aviso de teste grátis no app).
+  try {
+    const s = creditos.situacao(contaDaMesa(mesa));
+    if (s) mesa.creditos = { cobrancaAtiva: s.cobrancaAtiva, emTeste: s.teste.ativo, diasTeste: s.teste.diasRestantes, horasTeste: s.teste.horasRestantes, saldo: s.creditos, podeJogar: s.podeJogar };
+  } catch {}
+  delete mesa.donoConta;
   const membros = db.prepare("SELECT uid, nome, ultimaAtividade FROM membros WHERE codigo = ?").all(codigo);
   const m = {};
   const online = [];
@@ -863,7 +1002,10 @@ app.get("/api/mesa/:codigo/fichas", (req, res) => {
     return erro(res, 403, "Você não é membro desta mesa.");
   const rows = db.prepare("SELECT * FROM fichas WHERE codigo = ?").all(codigo);
   const fichas = {};
-  for (const r of rows) fichas[r.uid] = R.normalizarFicha(json(r.dados), r.uid);
+  for (const r of rows) {
+    const f = R.normalizarFicha(json(r.dados), r.uid);
+    fichas[r.uid] = { ...f, pendencias: R.pendencias(f), caEfetiva: R.caEfetiva(f), xpProximo: R.xpParaProximo(f.nivel) };
+  }
   res.json(fichas);
 });
 
@@ -898,7 +1040,368 @@ app.post("/api/mesa/:codigo/reacao", authMw, (req, res) => {
   const logId = Number(req.body?.logId);
   const tipo = String(req.body?.tipo || "");
   if (!logId || !["gostei", "nao_gostei", "desisti"].includes(tipo)) return erro(res, 400, "Tipo inválido.");
-  try { db.exec("INSERT OR REPLACE INTO reacoes (codigo, logId, uid, tipo) VALUES (?, ?, ?, ?)", codigo, logId, req.uid, tipo); } catch (e) { return erro(res, 500, "Erro ao salvar reação."); }
+  try { db.prepare("INSERT OR REPLACE INTO reacoes (codigo, logId, uid, tipo) VALUES (?, ?, ?, ?)").run(codigo, logId, req.uid, tipo); } catch (e) { return erro(res, 500, "Erro ao salvar reação."); }
+  res.json({ ok: true });
+});
+
+// ── Upgrade do relatório: rotas novas ──
+
+// Versão mínima do app: quem estiver abaixo é avisado para atualizar.
+app.get("/api/versao", (req, res) => res.json({
+  servidor: VERSAO_SERVIDOR,
+  appMinimo: Number(process.env.APP_BUILD_MINIMO) || 1,
+  appAtual: Number(process.env.APP_BUILD_ATUAL) || 2,
+  urlApk: `${SERVER_BASE_URL}/mesa-viva-latest.apk`,
+}));
+
+app.get("/api/regras/catalogo", (req, res) => res.json({ ...R.catalogo(), capitulos: M.CAPITULOS }));
+
+// ── Créditos e loja ──
+app.get("/api/conta/creditos", authMw, (req, res) => {
+  const conta = contaDaRequisicao(req);
+  res.json({ ...creditos.situacao(conta), produtos: creditos.PRODUTOS, lojaConfigurada: loja.configurada });
+});
+
+app.get("/api/loja/produtos", (req, res) => res.json({ produtos: creditos.PRODUTOS, lojaConfigurada: loja.configurada }));
+
+app.post("/api/loja/validar", authMw, async (req, res) => {
+  const conta = contaDaRequisicao(req);
+  try {
+    const r = await loja.validar(conta, texto(req.body?.produto, 60), String(req.body?.purchaseToken || ""));
+    if (!r.ok) return erro(res, r.status || 400, r.erro);
+    res.json(r);
+  } catch (e) { erro(res, 502, `Não consegui confirmar a compra: ${e.message}`); }
+});
+
+app.get("/api/admin/uso", adminMw, (req, res) => {
+  res.json({ ultimos30dias: creditos.resumoUso(30), config: creditos.CONFIG, fundos: fundos.MODO, lojaConfigurada: loja.configurada });
+});
+
+app.post("/api/admin/creditos", adminMw, (req, res) => {
+  const conta = texto(req.body?.conta, 60);
+  const qtd = Number(req.body?.quantidade);
+  if (!conta || !Number.isFinite(qtd)) return erro(res, 400, "Informe conta e quantidade.");
+  creditos.creditar(conta, qtd);
+  res.json(creditos.situacao(conta));
+});
+
+app.post("/api/admin/mesas/:codigo/flags", adminMw, (req, res) => {
+  const cod = codigoValido(req.params.codigo);
+  if (!cod) return erro(res, 400, "Código inválido.");
+  const novos = campanha.registrarMundo(cod, req.body || {}, "depuração", 0);
+  res.json({ ok: true, novos, memoria: campanha.memoria(cod) });
+});
+
+// ── Ficha: escolhas de nível, redistribuição e saque ──
+function fichaDoJogador(req, res) {
+  const codigo = codigoValido(req.body?.codigo);
+  if (!codigo) { erro(res, 400, "Código inválido."); return null; }
+  const ctx = carregar(codigo, req.uid);
+  if (!ctx) { erro(res, 404, "Mesa não encontrada."); return null; }
+  const f = ctx.fichas[req.uid];
+  if (!f) { erro(res, 400, "Crie seu personagem."); return null; }
+  return { ctx, f, codigo };
+}
+
+app.post("/api/ficha/escolher", authMw, (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { f, codigo } = x;
+  const tipo = req.body?.tipo, valor = String(req.body?.valor || "");
+  const p = R.pendencias(f);
+  let msg;
+  if (tipo === "talento") {
+    if (!p.talentos) return erro(res, 400, "Nenhum talento disponível agora.");
+    if (!R.TALENTOS[valor] || f.talentos.includes(valor)) return erro(res, 400, "Talento inválido.");
+    f.talentos.push(valor); msg = `${f.nome} aprendeu o talento ${R.TALENTOS[valor].nome}.`;
+  } else if (tipo === "subclasse") {
+    if (!p.subclasse) return erro(res, 400, "A subclasse fica disponível no nível 3.");
+    if (!R.SUBCLASSES[f.classe]?.[valor]) return erro(res, 400, "Subclasse inválida.");
+    f.subclasse = valor; msg = `${f.nome} seguiu o caminho: ${R.SUBCLASSES[f.classe][valor].nome}.`;
+  } else if (tipo === "atributo") {
+    if (!p.atributos) return erro(res, 400, "Nenhum aumento de atributo disponível agora.");
+    if (!R.ATRIBUTOS.includes(valor) || f.atributos[valor] >= 20) return erro(res, 400, "Atributo inválido.");
+    f.atributos[valor] += 1; f.atributosGanhos += 1;
+    msg = `${f.nome} aumentou ${R.NOME_ATRIBUTO[valor]} para ${f.atributos[valor]}.`;
+  } else return erro(res, 400, "Tipo inválido.");
+  const nova = R.normalizarFicha(f, f.uid);
+  if (nova.pvMax > f.pvMax) nova.pv = Math.min(nova.pvMax, f.pv + (nova.pvMax - f.pvMax));
+  salvarFicha(codigo, nova);
+  registrar(codigo, { tipo: "sys", texto: msg, ok: 1, evento: "escolha" });
+  broadcast(codigo, "ficha", { uid: f.uid });
+  res.json({ ficha: { ...nova, pendencias: R.pendencias(nova) } });
+});
+
+app.post("/api/ficha/redistribuir", authMw, (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { ctx, f, codigo } = x;
+  if (ctx.mesa.combate) return erro(res, 400, "Não dá para redistribuir durante o combate.");
+  const at = req.body?.atributos || {};
+  const novos = {};
+  for (const a of R.ATRIBUTOS) {
+    const v = Math.floor(Number(at[a]));
+    if (!Number.isFinite(v) || v < 3 || v > 20) return erro(res, 400, `Valor inválido para ${R.NOME_ATRIBUTO[a]}.`);
+    novos[a] = v;
+  }
+  const soma = R.ATRIBUTOS.reduce((s, a) => s + novos[a], 0);
+  const max = 72 + (f.atributosGanhos || 0);
+  if (soma > max) return erro(res, 400, `A soma dos atributos pode ser no máximo ${max} (está ${soma}).`);
+  const custo = f.respecUsado ? 50 : 0;
+  if ((f.ouro || 0) < custo) return erro(res, 400, `Redistribuir de novo custa ${custo} peças de ouro.`);
+  f.ouro -= custo;
+  f.atributos = novos;
+  f.talentos = []; // os talentos voltam a ficar disponíveis para escolher
+  f.respecUsado = true;
+  const nova = R.normalizarFicha(f, f.uid);
+  salvarFicha(codigo, nova);
+  registrar(codigo, { tipo: "sys", texto: `${f.nome} redistribuiu os pontos${custo ? ` (custo: ${custo} de ouro)` : " (a primeira vez é grátis)"}.`, evento: "escolha" });
+  broadcast(codigo, "ficha", { uid: f.uid });
+  res.json({ ficha: { ...nova, pendencias: R.pendencias(nova) } });
+});
+
+app.post("/api/saque/escolher", authMw, (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { ctx, f, codigo } = x;
+  const saque = json(ctx.mesa.saque) || {};
+  const opcoes = saque[req.uid];
+  if (!opcoes) return erro(res, 400, "Não há saque para você.");
+  const i = Number(req.body?.indice);
+  if (req.body?.indice !== "dispensar" && !(Number.isInteger(i) && opcoes[i])) return erro(res, 400, "Escolha inválida.");
+  if (req.body?.indice !== "dispensar") {
+    if ((f.itens || []).length >= 8) return erro(res, 400, "Inventário cheio (8 itens). Dispense um item na ficha antes.");
+    f.itens.push(opcoes[i]);
+    salvarFicha(codigo, f);
+    registrar(codigo, { tipo: "sys", texto: `${f.nome} ficou com ${opcoes[i].nome} (${R.NOME_RARIDADE[opcoes[i].raridade]}).`, ok: 1, evento: "item", selo: R.NOME_RARIDADE[opcoes[i].raridade].toUpperCase() });
+  }
+  delete saque[req.uid];
+  salvarMesa(codigo, { saque: Object.keys(saque).length ? JSON.stringify(saque) : null });
+  broadcast(codigo, "atualizar", {});
+  res.json({ ok: true });
+});
+
+app.post("/api/ficha/dispensar-item", authMw, (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { f, codigo } = x;
+  const id = String(req.body?.item || "");
+  const it = (f.itens || []).find((i) => i.id === id);
+  if (!it) return erro(res, 404, "Item não encontrado.");
+  f.itens = f.itens.filter((i) => i.id !== id);
+  f.ouro = (f.ouro || 0) + 2 + 3 * (R.RARIDADES.indexOf(it.raridade));
+  salvarFicha(codigo, f);
+  broadcast(codigo, "ficha", { uid: f.uid });
+  res.json({ ok: true });
+});
+
+// ── Votação do grupo ──
+function eleitores(ctx) {
+  const vivos = Object.values(ctx.fichas).filter((f) => f.pv > 0).map((f) => f.uid);
+  return vivos.length ? vivos : Object.keys(ctx.fichas);
+}
+
+app.post("/api/votar", authMw, async (req, res) => {
+  const codigo = codigoValido(req.body?.codigo);
+  if (!codigo) return erro(res, 400, "Código inválido.");
+  const ctx = carregar(codigo, req.uid);
+  if (!ctx) return erro(res, 404, "Mesa não encontrada.");
+  if (!ctx.fichas[req.uid]) return erro(res, 400, "Crie seu personagem para votar.");
+  const v = json(ctx.mesa.votacao);
+  if (!v) return erro(res, 400, "Não há votação aberta.");
+  const r = campanha.votar(v, req.uid, String(req.body?.opcao || ""), eleitores(ctx));
+  if (!r.valido) return erro(res, 400, "Opção inválida.");
+  if (!r.decidida) {
+    salvarMesa(codigo, { votacao: JSON.stringify(v) });
+    broadcast(codigo, "atualizar", {});
+    return res.json({ ok: true, decidida: false });
+  }
+  salvarMesa(codigo, { votacao: null });
+  registrar(codigo, { tipo: "sys", texto: `O grupo decidiu: ${r.resultado === "continuar" ? "seguir em frente" : "parar"}.`, evento: "votacao_fim" });
+  try {
+    if (v.tipo === "expedicao") await resolverExpedicao(ctx, r.resultado);
+  } catch (e) { return erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
+  broadcast(codigo, "atualizar", {});
+  res.json({ ok: true, decidida: true, resultado: r.resultado });
+});
+
+// ── Expedições: masmorra por andares e torre "subir ou parar" ──
+app.post("/api/expedicao/iniciar", authMw, async (req, res) => {
+  const codigo = codigoValido(req.body?.codigo);
+  if (!codigo) return erro(res, 400, "Código inválido.");
+  const ctx = carregar(codigo, req.uid);
+  if (!ctx) return erro(res, 404, "Mesa não encontrada.");
+  if (ctx.mesa.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa inicia uma expedição.");
+  if (ctx.mesa.fase !== "jogo") return erro(res, 400, "Comece a aventura primeiro.");
+  if (ctx.mesa.combate || ctx.mesa.rolagem || json(ctx.mesa.votacao)) return erro(res, 400, "Termine o que está acontecendo antes.");
+  if (json(ctx.mesa.expedicao)?.ativa) return erro(res, 400, "Já existe uma expedição em andamento.");
+  const exp = campanha.novaExpedicao(req.body?.modo);
+  registrar(codigo, { tipo: "sys", texto: exp.modo === "torre" ? "O grupo entra na Torre: a cada andar, a recompensa cresce. Subir ou parar?" : "O grupo desce para a masmorra. Cada sala pode trazer ouro ou perigo.", evento: "expedicao_inicio", selo: exp.modo === "torre" ? "TORRE" : "MASMORRA" });
+  try { await entrarSala(ctx, exp); } catch (e) { return erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
+  broadcast(codigo, "atualizar", {});
+  res.json({ ok: true });
+});
+
+async function entrarSala(ctx, exp) {
+  const codigo = ctx.codigo;
+  const sala = campanha.proximaSala(exp);
+  const fichas = Object.values(ctx.fichas);
+  const nomes = { monstro: "monstros", chefe: "o chefe do andar", bau: "um baú", armadilha: "uma armadilha", descanso: "um lugar seguro para descansar" };
+  registrar(codigo, { tipo: "sys", texto: `Andar ${exp.andar}: ${nomes[sala]}.`, evento: "sala", selo: `ANDAR ${exp.andar}` });
+  const cena = exp.modo === "torre" ? `Torre, andar ${exp.andar}` : `Masmorra, sala ${exp.andar}`;
+  salvarMesa(codigo, { cena });
+  atualizarFundo(ctx, cena);
+  let eventoNarrar = "";
+  if (sala === "monstro" || sala === "chefe") {
+    const c = R.iniciarCombate(fichas.filter((f) => f.pv > 0), campanha.inimigosDaSala(exp, fichas));
+    salvarMesa(codigo, { combate: JSON.stringify(c), expedicao: JSON.stringify(exp) });
+    registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + c.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · "), evento: "combate_inicio", selo: "COMBATE" });
+    eventoNarrar = `O grupo entra na sala e é atacado por ${c.inimigos.map((i) => i.nome).join(", ")}. O combate começou: descreva a ameaça em 2 ou 3 frases. Não crie outros inimigos (deixe "combate" nulo).`;
+  } else {
+    if (sala === "bau") {
+      const saque = {};
+      for (const f of fichas) if (f.pv > 0) saque[f.uid] = R.gerarSaque(exp.andar);
+      salvarMesa(codigo, { saque: JSON.stringify(saque) });
+      registrar(codigo, { tipo: "sys", texto: "Um baú! Cada um escolhe 1 entre 3 itens na aba Mesa.", ok: 1, evento: "saque", selo: "SAQUE" });
+      eventoNarrar = "O grupo encontra um baú antigo e o abre: descreva o brilho do que há dentro.";
+    } else if (sala === "armadilha") {
+      const cd = 11 + Math.min(6, exp.andar);
+      for (const f of fichas) {
+        if (f.pv <= 0) continue;
+        const nat = R.d(20); const total = nat + R.mod(f.atributos.des);
+        if (total >= cd) registrar(codigo, { tipo: "roll", texto: `${f.nome} · Salvaguarda de Destreza: ${nat}${R.sinal(R.mod(f.atributos.des))}${R.mod(f.atributos.des)} = ${total} vs CD ${cd}`, res: "escapou", ok: 1, evento: "esquiva", selo: "ESQUIVA" });
+        else {
+          const dano = R.rolar(`1d6+${Math.floor(exp.andar / 2)}`).total;
+          f.pv = Math.max(1, f.pv - dano); // armadilha não derruba ninguém
+          salvarFicha(codigo, f);
+          registrar(codigo, { tipo: "roll", texto: `${f.nome} · Salvaguarda de Destreza: ${nat}${R.sinal(R.mod(f.atributos.des))}${R.mod(f.atributos.des)} = ${total} vs CD ${cd}`, res: `${dano} de dano`, ok: 0, evento: "acerto_inimigo" });
+        }
+      }
+      eventoNarrar = "Uma armadilha dispara quando o grupo entra na sala (os resultados já estão no registro): descreva-a.";
+    } else if (sala === "descanso") {
+      for (const f of fichas) {
+        if (f.pv <= 0) continue;
+        const v = R.rolar(`1d8+${f.nivel || 1}`).total;
+        f.pv = Math.min(f.pvMax, f.pv + v);
+        salvarFicha(codigo, f);
+      }
+      registrar(codigo, { tipo: "sys", texto: "O grupo descansa e recupera as forças.", ok: 1, evento: "cura" });
+      eventoNarrar = "O grupo encontra um canto seguro e descansa: descreva um momento de respiro.";
+    }
+    exp.ouro += campanha.recompensaDoAndar(exp);
+    salvarMesa(codigo, { expedicao: JSON.stringify(exp) });
+  }
+  const c2 = carregar(codigo, ctx.uid);
+  if (OPENROUTER_KEY && c2) {
+    try {
+      const r = await chamarMestre(c2, `${M.contexto(c2.mesa, Object.values(c2.fichas), c2.recentes, extraContexto(c2))}\n\nEVENTO: ${eventoNarrar}\nNão peça testes.`, c2.mesa.qualidade || "rapido", 2000, 0.7);
+      if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
+    } catch (e) { if (e instanceof ErroCreditos) throw e; registrar(codigo, { tipo: "sys", texto: "(narração indisponível)" }); }
+  }
+  if (sala === "monstro" || sala === "chefe") {
+    // Se um inimigo ganhou a iniciativa, ele age logo.
+    const c3 = carregar(codigo, null) || carregar(codigo, ctx.uid);
+    const cAtual = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo).combate);
+    if (R.vezAtual(cAtual)?.tipo === "ini") await avancarCombate({ ...(c3 || ctx), uid: null });
+  } else {
+    abrirVotacaoExpedicao(codigo, exp);
+  }
+}
+
+async function resolverExpedicao(ctx, resultado) {
+  const exp = json(db.prepare("SELECT expedicao FROM mesas WHERE codigo = ?").get(ctx.codigo)?.expedicao);
+  if (!exp?.ativa) return;
+  if (resultado === "continuar") { await entrarSala(carregar(ctx.codigo, ctx.uid) || ctx, exp); return; }
+  const vivos = Object.values(ctx.fichas).filter((f) => f.pv > 0);
+  const parte = vivos.length ? Math.floor(exp.ouro / vivos.length) : 0;
+  for (const f of vivos) { f.ouro = (f.ouro || 0) + parte; salvarFicha(ctx.codigo, f); }
+  registrar(ctx.codigo, { tipo: "sys", texto: `O grupo volta com ${exp.ouro} peças de ouro (${parte} para cada um) depois de ${exp.andar} ${exp.modo === "torre" ? "andares" : "salas"}.`, ok: 1, evento: "expedicao_fim", selo: "OURO" });
+  darXp(ctx.codigo, ctx.fichas, exp.andar * 10, "expedição concluída");
+  salvarMesa(ctx.codigo, { expedicao: null, cena: "Taverna Javali Cego" });
+}
+
+// ── Epílogo ──
+app.post("/api/epilogo", authMw, async (req, res) => {
+  const codigo = codigoValido(req.body?.codigo);
+  if (!codigo) return erro(res, 400, "Código inválido.");
+  const ctx = carregar(codigo, req.uid);
+  if (!ctx) return erro(res, 404, "Mesa não encontrada.");
+  if (ctx.mesa.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa pede o epílogo.");
+  if (Number(ctx.mesa.aventuraConcluida) !== 1) return erro(res, 400, Number(ctx.mesa.aventuraConcluida) === 2 ? "O epílogo já foi narrado." : "A aventura ainda não terminou.");
+  if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
+  try {
+    salvarMesa(codigo, { aventuraConcluida: 2 });
+    const r = await chamarMestre(ctx, M.promptEpilogo(ctx.mesa, Object.values(ctx.fichas), campanha.memoria(codigo)), ctx.mesa.qualidade || "rapido", 3000, 0.8);
+    registrar(codigo, { tipo: "sys", texto: "Epílogo", evento: "epilogo", selo: "EPÍLOGO" });
+    if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 3000) });
+    darXp(codigo, ctx.fichas, R.XP.epilogo, "aventura concluída");
+    broadcast(codigo, "atualizar", {});
+    res.json({ ok: true });
+  } catch (e) { salvarMesa(codigo, { aventuraConcluida: 1 }); erro(res, e instanceof ErroCreditos ? 402 : 502, e.message); }
+});
+
+// ── Diário e bestiário ──
+function membroOu403(req, res) {
+  const codigo = codigoValido(req.params.codigo);
+  if (!codigo) { erro(res, 400, "Código inválido."); return null; }
+  const uid = req.headers["x-user-id"] || _tokenUid(req);
+  if (!uid || !db.prepare("SELECT uid FROM membros WHERE codigo = ? AND uid = ?").get(codigo, String(uid).slice(0, 36))) { erro(res, 403, "Você não é membro desta mesa."); return null; }
+  return codigo;
+}
+
+app.get("/api/mesa/:codigo/diario", (req, res) => {
+  const codigo = membroOu403(req, res); if (!codigo) return;
+  const mesa = db.prepare("SELECT capitulo, aventuraConcluida FROM mesas WHERE codigo = ?").get(codigo);
+  const entradas = db.prepare(`SELECT id, t, tipo, texto, nome, evento, selo, capitulo FROM log
+    WHERE codigo = ? AND (tipo IN ('narr', 'acao') OR evento IN ('capitulo', 'reputacao', 'npc', 'nivel', 'vitoria', 'derrota', 'item', 'aventura_fim', 'epilogo', 'expedicao_fim', 'votacao_fim'))
+    ORDER BY id DESC LIMIT 400`).all(codigo).reverse();
+  res.json({
+    capitulos: M.CAPITULOS.map((c, i) => ({ ...c, numero: i + 1, concluido: i < (mesa?.capitulo || 0) || (mesa?.aventuraConcluida || 0) > 0 })),
+    capituloAtual: mesa?.capitulo || 0,
+    ...campanha.memoria(codigo),
+    bestiario: campanha.bestiario(codigo),
+    entradas,
+  });
+});
+
+// ── Pontos de salvamento ──
+function limiteSaves(mesa) {
+  const s = creditos.situacao(contaDaMesa(mesa));
+  return s?.apoiador ? 10 : 3;
+}
+
+app.get("/api/mesa/:codigo/saves", (req, res) => {
+  const codigo = membroOu403(req, res); if (!codigo) return;
+  const mesa = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
+  res.json({ saves: campanha.listarSaves(codigo), limite: limiteSaves(mesa) });
+});
+
+app.post("/api/mesa/:codigo/saves", authMw, (req, res) => {
+  const codigo = codigoValido(req.params.codigo);
+  const mesa = codigo && db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
+  if (!mesa) return erro(res, 404, "Mesa não encontrada.");
+  if (mesa.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa salva o jogo.");
+  if (json(mesa.combate) || json(mesa.rolagem)) return erro(res, 400, "Salve fora do combate e sem rolagem pendente.");
+  if (campanha.listarSaves(codigo).length >= limiteSaves(mesa)) return erro(res, 400, `Limite de ${limiteSaves(mesa)} pontos de salvamento. Apague um antes.`);
+  const id = campanha.salvar(codigo, texto(req.body?.nome, 40) || `Capítulo ${(mesa.capitulo || 0) + 1}`);
+  registrar(codigo, { tipo: "sys", texto: "Jogo salvo.", evento: "save" });
+  res.json({ ok: true, id });
+});
+
+app.post("/api/mesa/:codigo/saves/:id/carregar", authMw, (req, res) => {
+  const codigo = codigoValido(req.params.codigo);
+  const mesa = codigo && db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
+  if (!mesa) return erro(res, 404, "Mesa não encontrada.");
+  if (mesa.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa carrega um jogo salvo.");
+  const nome = campanha.carregarSave(codigo, Number(req.params.id));
+  if (!nome) return erro(res, 404, "Ponto de salvamento não encontrado.");
+  registrar(codigo, { tipo: "sys", texto: `Jogo carregado: ${nome}.`, evento: "save" });
+  broadcast(codigo, "atualizar", {});
+  res.json({ ok: true });
+});
+
+app.delete("/api/mesa/:codigo/saves/:id", authMw, (req, res) => {
+  const codigo = codigoValido(req.params.codigo);
+  const mesa = codigo && db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(codigo);
+  if (!mesa) return erro(res, 404, "Mesa não encontrada.");
+  if (mesa.dono !== req.uid) return erro(res, 403, "Só quem criou a mesa apaga um jogo salvo.");
+  campanha.apagarSave(codigo, Number(req.params.id));
   res.json({ ok: true });
 });
 
@@ -935,101 +1438,177 @@ app.post("/api/mesa/:codigo/combate/pausar", authMw, (req, res) => {
 async function aplicar(ctx, r, permitirTeste, uid) {
   const codigo = ctx.codigo;
   const campos = {};
-  if (r?.cena) campos.cena = texto(r.cena, 60);
-  if (r?.fundo) campos.fundo = texto(r.fundo, 500);
-  // Generate background image when scene has a name and no fundo exists yet
-  if (r?.cena && OPENROUTER_KEY && (!ctx.mesa?.fundo || r.cena !== ctx.mesa.cena)) {
-    M.gerarImagem(OPENROUTER_KEY, `Ambiente de RPG de fantasia: ${r.cena}, ilustração de fundo para chat, atmosférico, desfoque suave`, SERVER_BASE_URL).then((url) => {
-      if (url) salvarMesa(codigo, { fundo: url });
-    }).catch(() => {});
+  const capAtual = Number(ctx.mesa.capitulo) || 0;
+  if (r?.cena) {
+    campos.cena = texto(r.cena, 60);
+    // Fundo: reaproveita, usa a biblioteca ou gera uma imagem nova só para cena nova.
+    if (!ctx.mesa?.fundo || campos.cena !== ctx.mesa.cena) atualizarFundo(ctx, campos.cena);
   }
   if (r?.resumo) campos.resumo = texto(r.resumo, 900);
   if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
-  // XP por participação
-  for (const f of Object.values(ctx.fichas)) {
-    if (f.pv > 0 && f.xp != null) {
-      f.xp = (f.xp || 0) + 5;
-      while (f.xp >= f.nivel * 100) { f.xp -= f.nivel * 100; f.nivel = (f.nivel || 1) + 1; registrar(codigo, { tipo: "sys", texto: `${f.nome} subiu para nível ${f.nivel}!`, ok: 1 }); }
-      db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, f.uid);
-    }
+
+  // Memória do mundo: flags, NPCs e reputação.
+  const novos = campanha.registrarMundo(codigo, r, campos.cena || ctx.mesa.cena, capAtual);
+  for (const n of novos) {
+    if (n.tipo === "rep") registrar(codigo, { tipo: "sys", texto: `Reputação com ${n.chave}: ${R.comSinal(n.delta)} (agora ${R.comSinal(n.valor)}).`, ok: n.delta > 0 ? 1 : 0, evento: "reputacao" });
+    else if (n.tipo === "npc") registrar(codigo, { tipo: "sys", texto: `${n.chave} agora está ${n.valor}.`, evento: "npc" });
   }
+
+  // XP por participação (pequeno: o grosso vem de vitórias e capítulos).
+  if (r?.narracao) darXp(codigo, ctx.fichas, R.XP.narracao);
+
+  const combateAtual = () => json(campos.combate) || json(ctx.mesa?.combate);
   for (const ef of Array.isArray(r?.efeitos) ? r.efeitos.slice(0, 6) : []) {
     const alvoId = ef?.alvo;
     let f = ctx.fichas[alvoId];
     if (!f) f = Object.values(ctx.fichas).find((x) => x.nome === alvoId);
     if (f) {
-      if (ef.cura) { const v = R.rolar(String(ef.cura)).total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: 1 }); }
-      if (ef.dano) { const v = R.rolar(String(ef.dano)).total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano`, ok: 0 }); }
-      db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), codigo, f.uid);
+      if (ef.cura) { const v = R.rolar(String(ef.cura)).total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: 1, evento: "cura" }); }
+      if (ef.dano) { const v = R.rolar(String(ef.dano)).total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano`, ok: 0, evento: "acerto_inimigo" }); }
+      if (ef.status && R.aplicarStatus(f, ef.status, ef.turnos)) registrar(codigo, { tipo: "sys", texto: `${f.nome} está ${R.STATUS[ef.status].nome.toLowerCase()} (${Math.max(1, Math.min(10, Number(ef.turnos) || 2))} turnos).`, ok: ["protegido", "regenerando", "abencoado"].includes(ef.status) ? 1 : 0, evento: "status", selo: R.STATUS[ef.status].nome.toUpperCase() });
+      salvarFicha(codigo, f);
       continue;
     }
     // Se o alvo não for um jogador, pode ser um inimigo do combate
-    const combate = json(ctx.mesa?.combate || campos?.combate);
+    const combate = combateAtual();
     if (combate?.inimigos) {
       const ini = combate.inimigos.find((i) => i.id === alvoId || i.nome === alvoId);
       if (ini && ef.dano) {
         const v = R.rolar(String(ef.dano)).total;
         ini.pv = Math.max(0, ini.pv - v);
-        ini.pvMax = ini.pvMax || ini.pv; // garante pvMax se não existir
-        registrar(codigo, { tipo: "roll", texto: `${ini.nome} sofre ${v} de dano`, ok: 1 });
-        campos.combate = JSON.stringify(combate);
+        registrar(codigo, { tipo: "roll", texto: `${ini.nome} sofre ${v} de dano`, ok: 1, evento: "acerto" });
       }
+      if (ini && ef.status && R.aplicarStatus(ini, ef.status, ef.turnos)) registrar(codigo, { tipo: "sys", texto: `${ini.nome} está ${R.STATUS[ef.status].nome.toLowerCase()}.`, ok: 1, evento: "status", selo: R.STATUS[ef.status].nome.toUpperCase() });
+      if (ini) campos.combate = JSON.stringify(combate);
     }
   }
+
   if (Array.isArray(r?.combate?.inimigos) && r.combate.inimigos.length && !ctx.mesa.combate) {
     const jogadores = Object.values(ctx.fichas).filter((f) => f.pv > 0);
     const c = R.iniciarCombate(jogadores, r.combate.inimigos);
     campos.combate = JSON.stringify(c);
-    registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + c.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · ") });
+    registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + c.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · "), evento: "combate_inicio", selo: "COMBATE" });
+    const primeiro = R.vezAtual(c);
+    if (primeiro) registrar(codigo, { tipo: "sys", texto: primeiro.tipo === "ini" ? `${primeiro.nome} age primeiro.` : `${primeiro.nome} age primeiro.`, evento: "iniciativa" });
   }
+
+  // Capítulo concluído: XP, novo objetivo, passagem do tempo e encontro de estrada.
+  if (r?.capituloConcluido === true && Number(ctx.mesa.aventuraConcluida) !== 1) {
+    const prox = capAtual + 1;
+    registrar(codigo, { tipo: "sys", texto: `Capítulo ${capAtual + 1} concluído: ${M.CAPITULOS[capAtual]?.titulo || ""}.`, ok: 1, evento: "capitulo", selo: "CAPÍTULO" });
+    darXp(codigo, ctx.fichas, R.XP.capitulo, "capítulo concluído");
+    if (prox >= M.CAPITULOS.length) {
+      campos.aventuraConcluida = 1;
+      registrar(codigo, { tipo: "sys", texto: "A aventura foi concluída! Quem criou a mesa pode pedir o epílogo na aba Mesa.", ok: 1, evento: "aventura_fim", selo: "FIM" });
+    } else {
+      campos.capitulo = prox;
+      const periodoIdx = (R.PERIODOS.indexOf(ctx.mesa.periodo) + 1) % R.PERIODOS.length;
+      campos.periodo = R.PERIODOS[Math.max(0, periodoIdx)];
+      campos.clima = Math.random() < 0.6 ? "limpo" : R.CLIMAS[1 + Math.floor(Math.random() * (R.CLIMAS.length - 1))];
+      // Metade das vezes, um encontro curto no caminho antes do próximo capítulo.
+      if (Math.random() < 0.5) campos.encontro = M.SEMENTES_ENCONTRO[Math.floor(Math.random() * M.SEMENTES_ENCONTRO.length)];
+      registrar(codigo, { tipo: "sys", texto: `Capítulo ${prox + 1}: ${M.CAPITULOS[prox].titulo}. Objetivo: ${M.CAPITULOS[prox].objetivo} (${R.NOME_CLIMA[campos.clima]}, ${R.NOME_PERIODO[campos.periodo].toLowerCase()}).`, evento: "capitulo" });
+    }
+  }
+
   let rolagem = null;
   const minha = ctx.fichas[uid || ctx.uid];
   if (permitirTeste && r?.teste && minha) {
-    const combate = json(ctx.mesa.combate) || json(campos.combate);
-    rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
+    const combate = json(campos.combate) || json(ctx.mesa.combate);
+    rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()), { clima: campos.clima || ctx.mesa.clima, periodo: campos.periodo || ctx.mesa.periodo });
     if (rolagem) campos.rolagem = JSON.stringify(rolagem);
   }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
+}
+
+/** Fim do combate: XP, bestiário, saque 1 de 3 e efeitos na expedição. */
+function encerrarCombate(ctx, combate) {
+  const codigo = ctx.codigo;
+  const resultado = R.resultadoCombate(combate, ctx.fichas) || "vitoria";
+  salvarMesa(codigo, { combate: null });
+  const derrotados = (combate.inimigos || []).filter((i) => i.pv <= 0);
+  const fugiram = (combate.inimigos || []).filter((i) => i.fugiu && i.pv > 0);
+  for (const i of derrotados) campanha.registrarDerrota(codigo, i, ctx.mesa.cena);
+  // Status de combate acabam com o combate.
+  for (const f of Object.values(ctx.fichas)) { if (f.status?.length) { f.status = []; salvarFicha(codigo, f); } }
+  const exp = json(db.prepare("SELECT expedicao FROM mesas WHERE codigo = ?").get(codigo)?.expedicao);
+
+  if (resultado === "derrota") {
+    registrar(codigo, { tipo: "sys", texto: "O grupo caiu. O combate terminou em derrota.", ok: 0, evento: "derrota", selo: "DERROTA" });
+    if (exp?.ativa) {
+      registrar(codigo, { tipo: "sys", texto: `A expedição acabou no andar ${exp.andar}. O ouro acumulado (${exp.ouro}) se perdeu.`, ok: 0, evento: "expedicao_fim" });
+      salvarMesa(codigo, { expedicao: null, votacao: null });
+    }
+    // Ninguém fica morto para sempre: todos voltam com 1 PV para a história continuar.
+    for (const f of Object.values(ctx.fichas)) { if (f.pv <= 0) { f.pv = 1; salvarFicha(codigo, f); } }
+    broadcast(codigo, "combate-fim", { resultado });
+    return;
+  }
+
+  registrar(codigo, { tipo: "sys", texto: `Vitória!${fugiram.length ? ` ${fugiram.map((i) => i.nome).join(", ")} fugiu.` : ""}`, ok: 1, evento: "vitoria", selo: "VITÓRIA" });
+  const xp = Math.max(R.XP.vitoriaMinima, derrotados.length * R.XP.porInimigo + derrotados.filter((i) => i.chefe).length * 40);
+  darXp(codigo, ctx.fichas, xp, "vitória em combate");
+
+  // Saque: cada personagem vivo escolhe 1 entre 3 itens.
+  const sorte = (exp?.andar || 0) + (derrotados.some((i) => i.chefe) ? 3 : 0);
+  const saque = {};
+  for (const f of Object.values(ctx.fichas)) if (f.pv > 0) saque[f.uid] = R.gerarSaque(sorte);
+  const ouroBase = 5 * derrotados.length + (derrotados.some((i) => i.chefe) ? 25 : 0);
+  for (const f of Object.values(ctx.fichas)) {
+    if (f.pv <= 0) continue;
+    f.ouro = (f.ouro || 0) + Math.round(ouroBase * R.efeitos(f).ouroMult);
+    salvarFicha(codigo, f);
+  }
+  if (ouroBase) registrar(codigo, { tipo: "sys", texto: `Cada um encontra ${ouroBase} peças de ouro.`, ok: 1, evento: "ouro" });
+  if (Object.keys(saque).length) {
+    registrar(codigo, { tipo: "sys", texto: "Saque! Cada um escolhe 1 entre 3 itens na aba Mesa.", ok: 1, evento: "saque", selo: "SAQUE" });
+    salvarMesa(codigo, { saque: JSON.stringify(saque) });
+  }
+
+  if (exp?.ativa) {
+    exp.ouro += campanha.recompensaDoAndar(exp);
+    salvarMesa(codigo, { expedicao: JSON.stringify(exp) });
+    abrirVotacaoExpedicao(codigo, exp);
+  }
+  broadcast(codigo, "combate-fim", { resultado });
+}
+
+function abrirVotacaoExpedicao(codigo, exp) {
+  const pergunta = exp.modo === "torre"
+    ? `Andar ${exp.andar} vencido. Ouro acumulado: ${exp.ouro}. Subir mais um andar ou parar e levar o ouro?`
+    : `Sala ${exp.andar} vencida. Ouro acumulado: ${exp.ouro}. Descer mais ou voltar para a superfície?`;
+  const v = campanha.abrirVotacao("expedicao", pergunta, ["continuar", "parar"]);
+  salvarMesa(codigo, { votacao: JSON.stringify(v) });
+  registrar(codigo, { tipo: "sys", texto: `Votação: ${pergunta}`, evento: "votacao", selo: "VOTAÇÃO" });
 }
 
 async function avancarCombate(ctx) {
   const m = db.prepare("SELECT * FROM mesas WHERE codigo = ?").get(ctx.codigo);
   const combate = json(m.combate);
   if (!combate) return;
-  if (R.combateAcabou(combate, ctx.fichas)) {
-    salvarMesa(ctx.codigo, { combate: null });
-    registrar(ctx.codigo, { tipo: "sys", texto: "Combate encerrado." });
-    // XP por vitória
-    for (const f of Object.values(ctx.fichas)) {
-      if (f.pv > 0 && f.xp != null) {
-        f.xp = (f.xp || 0) + 25;
-        while (f.xp >= f.nivel * 100) { f.xp -= f.nivel * 100; f.nivel = (f.nivel || 1) + 1; }
-        db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), ctx.codigo, f.uid);
-      }
-    }
-    broadcast(ctx.codigo, "combate-fim", {});
-    return;
-  }
+  if (R.combateAcabou(combate, ctx.fichas)) { encerrarCombate(ctx, combate); return; }
   const antes = {};
-  for (const f of Object.values(ctx.fichas)) antes[f.uid] = f.pv;
+  for (const f of Object.values(ctx.fichas)) antes[f.uid] = JSON.stringify([f.pv, f.status]);
   const ocorrido = R.passarVez(combate, ctx.fichas, ctx.uid);
   for (const f of Object.values(ctx.fichas)) {
-    if (f.pv !== antes[f.uid]) db.prepare("UPDATE fichas SET dados = ? WHERE codigo = ? AND uid = ?").run(JSON.stringify(f), ctx.codigo, f.uid);
+    if (JSON.stringify([f.pv, f.status]) !== antes[f.uid]) salvarFicha(ctx.codigo, f);
   }
   salvarMesa(ctx.codigo, { combate: JSON.stringify(combate) });
-  if (ocorrido.length) {
-    for (const o of ocorrido) registrar(ctx.codigo, { tipo: "roll", texto: o.log.texto, ok: o.log.ok ? 1 : 0 });
-  }
-  broadcast(ctx.codigo, "atualizar", {});
-  if (!OPENROUTER_KEY || !ocorrido.length) return;
+  for (const o of ocorrido) registrar(ctx.codigo, { tipo: "roll", texto: o.log.texto, ok: o.log.ok ? 1 : 0, evento: o.log.evento, selo: o.log.selo });
+  if (R.combateAcabou(combate, ctx.fichas)) { encerrarCombate(ctx, combate); return; }
   const prox = R.vezAtual(combate);
+  if (prox) registrar(ctx.codigo, { tipo: "sys", texto: `Vez de ${prox.nome}.`, evento: "vez" });
+  broadcast(ctx.codigo, "atualizar", {});
+  const ataques = ocorrido.filter((o) => /ataca/.test(o.linha));
+  if (!OPENROUTER_KEY || !ataques.length) return;
   // Tenta narrar o turno dos inimigos (com 1 retry se falhar)
   for (let tentativa = 0; tentativa < 2; tentativa++) {
     try {
-      const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(m, Object.values(ctx.fichas), [])}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados já rolados pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox ? `\nDepois disso é a vez de ${prox.nome}. A situação pede ação de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.3 + tentativa * 0.2);
+      const r = await chamarMestre({ ...ctx, mesa: m }, `${M.contexto({ ...m, combate }, Object.values(ctx.fichas), [], extraContexto({ ...ctx, mesa: m }))}\n\nTurno dos inimigos. Narre o que aconteceu, com base exatamente nestes resultados já rolados pelo código:\n${ocorrido.map((o) => o.linha).join("\n")}${prox ? `\nDepois disso é a vez de ${prox.nome}. A situação pede ação de ${prox.nome}.` : ""}\nNão peça testes. Deixe "teste", "combate" e "efeitos" vazios.`, m.qualidade || "rapido", 3000, 0.3 + tentativa * 0.2);
       if (r?.narracao) registrar(ctx.codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
       break;
     } catch (e) {
+      if (e instanceof ErroCreditos) { registrar(ctx.codigo, { tipo: "sys", texto: e.message }); break; }
       if (tentativa === 1) {
         console.log(`[avancarCombate] Narração falhou: ${e.message}`);
         registrar(ctx.codigo, { tipo: "sys", texto: `Turno dos inimigos processado (narração indisponível).` });
