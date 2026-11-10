@@ -17,6 +17,7 @@ const { WebSocketServer } = require("ws");
 const R = require("./regras");
 const C = require("./catalogo");
 const M = require("./mestre");
+const AV = require("./aventuras");
 const T = require("./temas");
 const MP = require("./mapa");
 
@@ -117,6 +118,7 @@ try { db.exec("ALTER TABLE mesas ADD COLUMN atoInicio INTEGER DEFAULT 0"); } cat
 // Dia na história e elementos visíveis da cena. Mesas antigas começam no dia 1.
 try { db.exec("ALTER TABLE mesas ADD COLUMN dia INTEGER DEFAULT 1"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN diaNarr INTEGER DEFAULT 0"); } catch (e) {}            // narração em que o último dia começou
+try { db.exec("ALTER TABLE mesas ADD COLUMN aventura TEXT DEFAULT ''"); } catch (e) {}             // id da aventura escolhida ("" = o Mestre sorteia)
 try { db.exec("ALTER TABLE mesas ADD COLUMN idioma TEXT DEFAULT 'pt'"); } catch (e) {}              // idioma em que o Mestre narra: pt | en
 try { db.exec("ALTER TABLE mesas ADD COLUMN elementos TEXT DEFAULT '[]'"); } catch (e) {}          // JSON, privado
 // Última ficha criada pelo Mestre para cada conta: o inventário e as magias iniciais só podem vir daqui
@@ -287,7 +289,7 @@ function carregar(codigo, uid) {
 }
 
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
-  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma"]);
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura"]);
 function salvarMesa(codigo, campos) {
   // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
   const c = campos.combate;
@@ -446,6 +448,8 @@ app.get("/api/user/mesas", authMw, (req, res) => {
 
 // ── API: Temas da história ──
 app.get("/api/temas", authMw, (req, res) => res.json(T.listaPublica()));
+// Biblioteca de aventuras: 4 por tema, no idioma do aparelho. { aventuras: { <tema>: [{ id, nome, resumo }] } }
+app.get("/api/aventuras", authMw, (req, res) => res.json({ aventuras: AV.listaPublica(M.idiomaValido(req.get("x-idioma"))) }));
 
 // ── API: Mesa (criar / entrar / sair) ──
 function criarMesa(req, res) {
@@ -456,8 +460,9 @@ function criarMesa(req, res) {
     const codigo = Array.from({ length: 5 }, () => ALFABETO[crypto.randomInt(ALFABETO.length)]).join("");
     if (db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo)) continue;
     // A mesa nasce narrando no idioma do aparelho de quem a criou (cabeçalho X-Idioma); dá para trocar em Ajustes.
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, tema, duracao, cena, idioma) VALUES (?, ?, ?, ?, ?, '', ?)")
-      .run(codigo, req.uid, agora(), tema, duracao, M.idiomaValido(req.get("x-idioma")));
+    // Aventura: só vale se for do tema da mesa (com tema "surpresa" o tema é sorteado, então quase nunca vale).
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, tema, duracao, cena, idioma, aventura) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
+      .run(codigo, req.uid, agora(), tema, duracao, M.idiomaValido(req.get("x-idioma")), AV.aventuraDoTema(req.body?.aventura, tema) || "");
     db.prepare("INSERT INTO membros (codigo, uid, nome, ultimaAtividade) VALUES (?, ?, ?, ?)").run(codigo, req.uid, nome, agora());
     return res.json({ codigo, uid: req.uid });
   }
@@ -570,7 +575,7 @@ app.post("/api/configurar-mesa", authMw, (req, res) => {
   if (typeof d.desejos === "string") campos.desejos = texto(d.desejos, 300);   // "Rumo da história": vale em qualquer fase
   if (M.IDIOMAS.includes(d.idioma)) campos.idioma = d.idioma;                   // idioma da narração: vale em qualquer fase
   // Tema e duração só antes de começar. Mandar o mesmo valor de novo não é troca (o app pode reenviar tudo).
-  const atual = db.prepare("SELECT fase, tema, duracao FROM mesas WHERE codigo = ?").get(codigo);
+  const atual = db.prepare("SELECT fase, tema, duracao, aventura FROM mesas WHERE codigo = ?").get(codigo);
   const temaAtual = T.temaPorId(atual.tema).id, duracaoAtual = T.duracaoValida(atual.duracao);
   const trocaTema = T.ehTemaValido(d.tema) && d.tema !== temaAtual;
   const trocaDuracao = T.ehDuracaoValida(d.duracao) && d.duracao !== duracaoAtual;
@@ -579,6 +584,16 @@ app.post("/api/configurar-mesa", authMw, (req, res) => {
     if (trocaTema) campos.tema = T.resolverTema(d.tema);
     if (trocaDuracao) campos.duracao = d.duracao;
   }
+  // Aventura: como o tema, só antes de começar. Trocar o tema sem mandar uma aventura dele volta para "o Mestre sorteia".
+  const temaFinal = campos.tema || temaAtual;
+  if (typeof d.aventura === "string") {
+    const av = AV.aventuraDoTema(d.aventura, temaFinal);
+    if (av === null) return erro(res, 400, "Essa aventura não é deste tema.");
+    if (av !== (atual.aventura || "")) {
+      if (atual.fase !== "lobby") return erro(res, 409, "A aventura já começou: não dá para trocar.");
+      campos.aventura = av;
+    }
+  } else if (campos.tema && atual.aventura) campos.aventura = "";
   if (Object.keys(campos).length) { salvarMesa(codigo, campos); broadcast(codigo, "atualizar", {}); }
   res.json({ ok: true });
 });
@@ -1312,6 +1327,9 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   if (mesa.combate) mesa.combate.turno = turnoDe(mesa.combate);     // combates antigos ganham o turno na leitura
   Object.assign(mesa, { tema: tema.id, temaNome: tema.nome, temaInspiracao: tema.inspiracao, temaIcone: tema.icone,
     duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco, nomes: tema.nomes });
+  const av = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
+  mesa.aventura = av ? av.id : "";
+  mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";
   res.json(mesa);
 });
 
@@ -1837,7 +1855,9 @@ const QUALIDADE_ARCO = process.env.QUALIDADE_ARCO === "rapido" ? "rapido" : "cap
  */
 async function gerarArco(mesa, fichas) {
   const tema = T.temaPorId(mesa.tema);
-  const semente = T.sortearSemente(tema), tempero = T.sortearTempero();
+  // Aventura escolhida pelo grupo: o gancho dela entra no lugar da semente sorteada
+  const aventura = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
+  const semente = aventura ? AV.sementeDaAventura(aventura) : T.sortearSemente(tema), tempero = T.sortearTempero();
   const prompt = M.promptArco({ tema, duracao: mesa.duracao, fichas, tom: mesa.tom, vetos: mesa.vetos, desejos: mesa.desejos, semente, tempero, idioma: mesa.idioma });
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
@@ -1849,7 +1869,8 @@ async function gerarArco(mesa, fichas) {
       if (/demorou demais/.test(e.message)) break; // não há tempo para outra tentativa antes de o app desistir
     }
   }
-  const reserva = tema.id === "classico" ? M.arcoPedraFunda() : M.arcoMinimo(tema, semente);
+  const pedraFunda = tema.id === "classico" && (!aventura || aventura.id === "classico:1");
+  const reserva = pedraFunda ? M.arcoPedraFunda() : M.arcoMinimo(tema, semente);
   return { ...reserva, semente, tempero, reserva: true };
 }
 
