@@ -160,32 +160,44 @@ function criarCampanha(db) {
     return exp.sala;
   }
 
-  /** Inimigos da sala, escalados pelo andar e pelo nível médio do grupo. */
+  /**
+   * Nível efetivo de uma sala: o nível médio do grupo, +1 a cada bloco de 5 andares (6 a 10, 11 a 15...).
+   * Dentro do bloco o perigo é o desgaste: o PV não volta sozinho (só nas salas de descanso),
+   * enquanto o ouro acumulado cresce a cada andar. É essa a aposta do "subir ou parar".
+   */
+  function nivelDaSala(exp, fichas) {
+    const { nivel } = R.perfilGrupo(fichas);
+    return nivel + Math.floor(Math.max(0, (exp.andar || 1) - 1) / 5);
+  }
+
+  /** Inimigos da sala, pela tabela de referência de regras.js (mesma usada para a IA). */
   function inimigosDaSala(exp, fichas, rng = Math.random) {
-    const nivel = Math.max(1, Math.round(fichas.reduce((s, f) => s + (f.nivel || 1), 0) / Math.max(1, fichas.length)));
-    const forca = exp.andar + nivel;
+    const vivos = fichas.filter((f) => f.pv === undefined || f.pv > 0);
+    const n = Math.max(1, vivos.length || fichas.length);
+    const nivel = nivelDaSala(exp, vivos.length ? vivos : fichas);
     const elementos = ["fogo", "gelo", "raio", "sagrado", "sombrio", "veneno"];
     const el = () => elementos[Math.floor(rng() * elementos.length)];
     const nomes = ["Esqueleto", "Rato gigante", "Goblin", "Aranha da cripta", "Cultista", "Lodo", "Sombra"];
     if (exp.sala === "chefe") {
+      const [chefe, ...capangas] = R.encontroReferencia(nivel, n, "chefe");
       const fraco = el();
+      const base = nomes[Math.floor(rng() * nomes.length)];
       return [{
+        ...chefe,
         nome: exp.modo === "torre" ? `Guardião do andar ${exp.andar}` : `Senhor das profundezas (andar ${exp.andar})`,
-        pv: 18 + forca * 5, ca: 13 + Math.floor(forca / 3), ataque: 4 + Math.floor(forca / 2), dano: `1d10+${2 + Math.floor(forca / 3)}`,
-        des: 1, chefe: true, comportamento: "tatico", elemento: el(), fraquezas: [fraco], resistencias: [el()].filter((x) => x !== fraco),
-        aplica: { status: rng() < 0.5 ? "atordoado" : "em_chamas", chance: 0.25, turnos: 1 },
-      }];
+        elemento: el(), fraquezas: [fraco], resistencias: [el()].filter((x) => x !== fraco),
+        aplica: { status: rng() < 0.5 ? "atordoado" : "em_chamas", chance: 0.2, turnos: 1 },
+      }, ...capangas.map((c, i) => ({ ...c, nome: `${base} ${i + 1}`, fraquezas: [el()] }))];
     }
-    const qtd = Math.min(4, 1 + Math.floor(fichas.length / 2) + (exp.andar > 3 ? 1 : 0));
     const base = nomes[Math.floor(rng() * nomes.length)];
-    return Array.from({ length: qtd }, (_, i) => {
-      const fraco = el();
-      return {
-        nome: `${base} ${i + 1}`, pv: 5 + forca * 2, ca: 11 + Math.floor(forca / 4), ataque: 3 + Math.floor(forca / 3),
-        dano: `1d6+${1 + Math.floor(forca / 4)}`, des: 2, comportamento: rng() < 0.4 ? "covarde" : "agressivo",
-        fraquezas: [fraco], aplica: base === "Aranha da cripta" || base === "Lodo" ? { status: "envenenado", chance: 0.3, turnos: 2 } : null,
-      };
-    });
+    const lista = R.encontroReferencia(nivel, n, "comum");
+    return lista.map((c, i) => ({
+      ...c,
+      nome: `${base} ${i + 1}`,
+      comportamento: rng() < 0.4 ? "covarde" : "agressivo",
+      fraquezas: [el()],
+      aplica: base === "Aranha da cripta" || base === "Lodo" ? { status: "envenenado", chance: 0.3, turnos: 2 } : null,
+    }));
   }
 
   /** Ouro acumulado por andar: cresce a cada andar (torre: risco maior, recompensa maior). */
@@ -198,7 +210,7 @@ function criarCampanha(db) {
     registrarMundo, memoria, registrarDerrota, bestiario,
     salvar, listarSaves, carregarSave, apagarSave,
     abrirVotacao, votar,
-    novaExpedicao, proximaSala, inimigosDaSala, recompensaDoAndar,
+    novaExpedicao, proximaSala, inimigosDaSala, recompensaDoAndar, nivelDaSala,
   };
 }
 

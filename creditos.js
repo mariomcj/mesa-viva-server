@@ -21,6 +21,14 @@ const CONFIG = {
     imagem: num(process.env.CREDITO_IMAGEM, 0.04),
   },
   apoiadorCreditosMes: num(process.env.APOIADOR_CREDITOS_MES, 10),
+  // Cortesia de combate: se o crédito (ou o teste) acaba com a mesa em combate, a luta termina
+  // por conta da casa, até este limite (0,25 ≈ 20 chamadas no modo Rápido, R$ 0,10 de custo de IA).
+  // Volta a valer a cada compra de créditos.
+  cortesiaCombate: num(process.env.CREDITO_CORTESIA_COMBATE, 0.25),
+  // Avisos de saldo (o app pode mostrar o campo "aviso" de situacao()).
+  avisoDiasTeste: 2,
+  avisoHorasTeste: 1,
+  avisoCreditos: 1,
 };
 
 const DIA_MS = 86_400_000;
@@ -55,8 +63,17 @@ function criarCreditos(db) {
       estado TEXT NOT NULL, pedido TEXT, t INTEGER NOT NULL
     );
   `);
+  // Coluna nova em bancos antigos (cortesia de combate).
+  try { db.exec("ALTER TABLE contas_creditos ADD COLUMN cortesiaUsada REAL NOT NULL DEFAULT 0"); } catch {}
 
   const agora = () => Date.now();
+
+  /** Alguma mesa desta conta está em combate agora? */
+  function emCombate(conta) {
+    const sql = (filtro) => `SELECT 1 AS x FROM mesas WHERE ${filtro} AND combate IS NOT NULL AND combate NOT IN ('', 'null') LIMIT 1`;
+    try { return !!db.prepare(sql("(donoConta = ? OR dono = ?)")).get(conta, conta); } catch {}
+    try { return !!db.prepare(sql("dono = ?")).get(conta); } catch { return false; }
+  }
 
   function garantir(conta) {
     if (!conta) return null;
@@ -76,10 +93,26 @@ function criarCreditos(db) {
     const horasTesteRestantes = Math.max(0, CONFIG.testeCreditos - (c.testeUsado || 0));
     const emTeste = agora() < fimTeste && horasTesteRestantes > 0;
     const apoiador = (c.apoiadorAte || 0) > agora();
+    const saldo = Math.round((c.creditos || 0) * 100) / 100;
+    const podeJogar = !CONFIG.cobrancaAtiva || emTeste || (c.creditos || 0) > 0;
+    const cortesiaRestante = Math.max(0, CONFIG.cortesiaCombate - (c.cortesiaUsada || 0));
+    // Aviso antes de acabar (dia 12 do teste, última hora de teste ou menos de 1 hora de créditos).
+    let aviso = null;
+    if (CONFIG.cobrancaAtiva) {
+      if (emTeste && (c.creditos || 0) <= 0 && (diasRestantes <= CONFIG.avisoDiasTeste || horasTesteRestantes <= CONFIG.avisoHorasTeste)) {
+        aviso = horasTesteRestantes <= CONFIG.avisoHorasTeste
+          ? `Seu teste grátis tem menos de ${CONFIG.avisoHorasTeste} hora de mesa. Se acabar no meio de uma luta, ela termina por nossa conta.`
+          : `Seu teste grátis termina em ${diasRestantes} dia${diasRestantes === 1 ? "" : "s"}. Os créditos comprados não expiram.`;
+      } else if (!emTeste && (c.creditos || 0) > 0 && (c.creditos || 0) < CONFIG.avisoCreditos) {
+        aviso = "Resta menos de 1 hora de mesa. Se acabar no meio de uma luta, ela termina por nossa conta.";
+      } else if (!podeJogar) {
+        aviso = "Os créditos desta mesa acabaram. Quem criou a mesa pode comprar mais na Loja, em Ajustes.";
+      }
+    }
     return {
       conta,
       cobrancaAtiva: CONFIG.cobrancaAtiva,
-      creditos: Math.round((c.creditos || 0) * 100) / 100,
+      creditos: saldo,
       teste: {
         ativo: emTeste,
         diasRestantes,
@@ -89,7 +122,9 @@ function criarCreditos(db) {
       },
       apoiador,
       apoiadorAte: c.apoiadorAte || 0,
-      podeJogar: !CONFIG.cobrancaAtiva || emTeste || (c.creditos || 0) > 0,
+      podeJogar,
+      cortesiaCombate: { restante: Math.round(cortesiaRestante * 1000) / 1000, limite: CONFIG.cortesiaCombate },
+      aviso,
     };
   }
 
@@ -103,6 +138,8 @@ function criarCreditos(db) {
     if (!CONFIG.cobrancaAtiva) return { ok: true, qualidade, situacao: s };
     if (s.creditos > 0) return { ok: true, qualidade, situacao: s };
     if (s.teste.ativo) return { ok: true, qualidade: "rapido", situacao: s, teste: true };
+    // Nunca cortar a mesa no meio de uma luta: o combate termina por conta da casa.
+    if (s.cortesiaCombate.restante > 0 && emCombate(conta)) return { ok: true, qualidade: "rapido", situacao: s, cortesia: true };
     return {
       ok: false,
       situacao: s,
@@ -120,7 +157,8 @@ function criarCreditos(db) {
         db.prepare("UPDATE contas_creditos SET testeUsado = testeUsado + ?, atualizadoEm = ? WHERE conta = ?").run(creditos, agora(), conta);
         deTeste = 1;
       } else if (CONFIG.cobrancaAtiva) {
-        db.prepare("UPDATE contas_creditos SET creditos = MAX(0, creditos - ?), atualizadoEm = ? WHERE conta = ?").run(creditos, agora(), conta);
+        if (s.creditos > 0) db.prepare("UPDATE contas_creditos SET creditos = MAX(0, creditos - ?), atualizadoEm = ? WHERE conta = ?").run(creditos, agora(), conta);
+        else if (emCombate(conta)) db.prepare("UPDATE contas_creditos SET cortesiaUsada = cortesiaUsada + ?, atualizadoEm = ? WHERE conta = ?").run(creditos, agora(), conta);
       }
     }
     db.prepare(`INSERT INTO uso_ia (conta, codigo, tipo, modelo, tokensEntrada, tokensSaida, custoUsd, creditos, deTeste, t)
@@ -133,7 +171,8 @@ function criarCreditos(db) {
 
   function creditar(conta, quantidade) {
     garantir(conta);
-    db.prepare("UPDATE contas_creditos SET creditos = creditos + ?, atualizadoEm = ? WHERE conta = ?").run(quantidade, agora(), conta);
+    // A compra renova a cortesia de combate.
+    db.prepare("UPDATE contas_creditos SET creditos = creditos + ?, cortesiaUsada = 0, atualizadoEm = ? WHERE conta = ?").run(quantidade, agora(), conta);
   }
 
   function ativarApoiador(conta, ate) {
@@ -150,7 +189,7 @@ function criarCreditos(db) {
       FROM uso_ia WHERE t >= ? GROUP BY tipo`).all(desde);
   }
 
-  return { CONFIG, PRODUTOS, garantir, situacao, autorizar, registrarUso, creditar, ativarApoiador, resumoUso };
+  return { CONFIG, PRODUTOS, garantir, situacao, autorizar, registrarUso, creditar, ativarApoiador, resumoUso, emCombate };
 }
 
 module.exports = { criarCreditos, CONFIG, PRODUTOS };

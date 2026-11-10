@@ -100,26 +100,38 @@ CAMPOS DE MUNDO (use com moderação, só quando algo mudou de verdade):
 - "npcs": a atitude de um NPC mudou (grato, desconfiado, hostil, devendo um favor).
 - "reputacao": o grupo ganhou (+1) ou perdeu (-1) prestígio com uma facção.
 - "capituloConcluido": true somente quando o OBJETIVO DO CAPÍTULO ATUAL foi cumprido nesta ação.
+- NÚMEROS DOS INIMIGOS: use a "REFERÊNCIA DE INIMIGOS" do contexto (ela já está ajustada ao nível e ao tamanho do grupo). Combate comum: um inimigo comum por personagem. Luta fácil: lacaios. Chefe: só no clímax do capítulo, com capangas. O servidor corta números acima da referência, então não adianta exagerar; os exemplos acima (goblins de PV 7) são só formato.
+- DESCANSO: depois de um combate, se o grupo parar para respirar ou se tratar, aplique em "efeitos" uma cura de "1d8+nível" em cada personagem ferido (no máximo uma vez por capítulo). Personagem caído (PV 0) que recebe cura volta à cena. Nunca deixe alguém caído até o fim do capítulo.
 - Elementos possíveis: fisico, fogo, gelo, raio, sagrado, sombrio, veneno. Dê fraquezas e resistências que façam sentido (mortos-vivos fracos contra sagrado, criaturas de gelo resistentes a gelo). Comportamento: "agressivo", "tatico" ou "covarde" (covardes fogem com pouca vida). Marque "chefe": true só no inimigo principal do capítulo.
 - Status possíveis em "efeitos": envenenado, em_chamas, sangrando, atordoado, protegido, regenerando, abencoado.`;
 
 const AVENTURA = `Aventura de uma sessão: "A Mina de Pedra-Funda" (mundo original, nível 1).
 Gancho: na vila de Carvalho-Cinza, a mestra-mineira Odila Ventoforte contrata o grupo na taverna Javali Cego. Há dez dias goblins tomaram a mina de prata de Pedra-Funda e seis mineiros sumiram. Paga 50 peças de ouro por cabeça.
-Cenas sugeridas (adapte às escolhas dos jogadores):
-1. Taverna Javali Cego: conversa com Odila e moradores; pistas: os goblins estão organizados demais e há relatos de um brilho verde na mina.
-2. Trilha da pedreira: rastros e uma emboscada de 3 goblins (PV 7, CA 13, ataque +4, dano 1d6+2, DES +2).
-3. Entrada da mina: duas sentinelas goblins e uma armadilha de pedras soltas (Percepção CD 13 para notar; Destreza CD 12 para evitar 2d6).
-4. Galerias: os mineiros presos em uma jaula; o elevador de carga quebrado (Atletismo CD 14 ou ideia criativa).
-5. Câmara do Cristal: o hobgoblin Garra-Torta (PV 18, CA 15, ataque +5, dano 1d8+3, DES +1) e 2 goblins; um cristal verde sussurra promessas a ele. Destruir o cristal (CA 10, PV 10) faz os goblins fugirem.
-Desfecho: resgatar os mineiros, decidir o que fazer com o cristal, recompensa de Odila.`;
+Cenas sugeridas (adapte às escolhas dos jogadores). Os números dos inimigos vêm da REFERÊNCIA DE INIMIGOS do contexto:
+1. Taverna Javali Cego (sem combate): conversa com Odila e moradores; um teste fácil (CD 10 a 12) para a primeira pista: os goblins estão organizados demais e há relatos de um brilho verde na mina.
+2. Trilha da pedreira: rastros (Sobrevivência CD 12) e uma emboscada de goblins: um inimigo COMUM por personagem, comportamento "covarde". É o primeiro combate: deixe o grupo vencer com estilo.
+3. Entrada da mina: sentinelas goblins (LACAIOS, um por personagem; uma Furtividade CD 13 do grupo evita a luta) e uma armadilha de pedras soltas (Percepção CD 13 para notar; Destreza CD 12 para evitar 2d6).
+4. Galerias: os mineiros presos em uma jaula; o elevador de carga quebrado (Atletismo CD 14 ou ideia criativa). Respiro: um bom lugar para o descanso curto.
+5. Câmara do Cristal: o hobgoblin Garra-Torta (CHEFE, "chefe": true) e goblins capangas (COMUNS, um a menos que o número de personagens); um cristal verde sussurra promessas a ele. Destruir o cristal (CA 10, PV 10) faz os capangas fugirem.
+Desfecho: resgatar os mineiros, decidir o que fazer com o cristal, recompensa de Odila (50 peças de ouro por cabeça, entregues na narração).`;
 
-/** Capítulos da aventura, com objetivo. O servidor avança quando o Mestre marca "capituloConcluido". */
+/**
+ * Capítulos da aventura, com objetivo. O servidor avança quando o Mestre marca "capituloConcluido".
+ * Ritmo (design/GAME-DESIGN.md, seção 6): a sessão inteira cabe em ~2 h a 2 h 30 para 4 jogadores,
+ * alternando conversa, combate e respiro. "minutos" é a duração-alvo; "combate" é o tipo de luta esperado;
+ * "ritmo" vai para o prompt do Mestre.
+ */
 const CAPITULOS = [
-  { titulo: "A taverna Javali Cego", objetivo: "Aceitar o trabalho de Odila e reunir pistas sobre a mina." },
-  { titulo: "A trilha da pedreira", objetivo: "Seguir os rastros até a mina e sobreviver à emboscada." },
-  { titulo: "A entrada da mina", objetivo: "Passar pelas sentinelas e pela armadilha de pedras." },
-  { titulo: "As galerias", objetivo: "Encontrar e libertar os mineiros presos." },
-  { titulo: "A câmara do cristal", objetivo: "Enfrentar Garra-Torta e decidir o destino do cristal verde." },
+  { titulo: "A taverna Javali Cego", objetivo: "Aceitar o trabalho de Odila e reunir pistas sobre a mina.", minutos: 15, combate: "nenhum",
+    ritmo: "Cena social curta. Apresente Odila e um morador com uma pista cada. Peça no máximo um teste fácil. Feche o capítulo assim que o grupo aceitar o trabalho." },
+  { titulo: "A trilha da pedreira", objetivo: "Seguir os rastros até a mina e sobreviver à emboscada.", minutos: 25, combate: "comum",
+    ritmo: "Primeiro combate da campanha: inimigos comuns, um por personagem. Ensine pelo exemplo (descreva o acerto, o erro, o crítico). Depois da luta, um respiro curto." },
+  { titulo: "A entrada da mina", objetivo: "Passar pelas sentinelas e pela armadilha de pedras.", minutos: 25, combate: "facil",
+    ritmo: "Escolha real: furtividade, conversa ou luta contra lacaios. A armadilha premia quem procura. Recompense ideias criativas." },
+  { titulo: "As galerias", objetivo: "Encontrar e libertar os mineiros presos.", minutos: 30, combate: "comum",
+    ritmo: "Exploração e resgate. Um combate comum, no máximo. Ofereça o descanso curto antes da câmara do cristal e deixe os mineiros darem uma pista sobre Garra-Torta." },
+  { titulo: "A câmara do cristal", objetivo: "Enfrentar Garra-Torta e decidir o destino do cristal verde.", minutos: 35, combate: "chefe",
+    ritmo: "Clímax: chefe com capangas. Dê um objetivo além de bater (o cristal). Termine com a decisão sobre o cristal e marque capituloConcluido." },
 ];
 
 /** Sementes de encontros curtos entre capítulos (o Mestre desenvolve a cena). */
@@ -132,16 +144,28 @@ const SEMENTES_ENCONTRO = [
   "um pedágio cobrado por figuras que não parecem guardas",
   "um animal ferido preso numa armadilha de caçador",
   "refugiados da vila vizinha com notícias preocupantes",
+  "uma criança perdida que jura ter visto luzes verdes no morro",
+  "um poço abandonado de onde vem um pedido de socorro abafado",
+  "dois lenhadores brigando por uma árvore marcada com um símbolo estranho",
+  "uma tempestade repentina que obriga o grupo a se abrigar numa cabana ocupada",
 ];
+
+/** Linha de referência de inimigos para o prompt, pelo nível médio e tamanho do grupo. */
+function referenciaInimigos(fichas) {
+  const R = require("./regras");
+  const { nivel, jogadores } = R.perfilGrupo(fichas);
+  const txt = (i) => `PV ${i.pv}, CA ${i.ca}, ataque ${R.comSinal(i.ataque)}, dano ${i.dano}`;
+  return `REFERÊNCIA DE INIMIGOS (grupo de ${jogadores}, nível médio ${nivel}): lacaio ${txt(R.inimigoReferencia(nivel, "lacaio", jogadores))}; comum ${txt(R.inimigoReferencia(nivel, "comum", jogadores))}; elite ${txt(R.inimigoReferencia(nivel, "elite", jogadores))}; chefe ${txt(R.inimigoReferencia(nivel, "chefe", jogadores))}. Testes: fácil CD 10, médio CD 13, difícil CD 16, quase impossível CD 20.`;
+}
 
 const CRICACAO = `Crie uma ficha de personagem de RPG nível 1 para o seguinte conceito. Use regras d20 simplificadas:
 Raças: Humano, Anão, Elfo, Halfling, Meio-orc.
 Classes: Guerreiro, Ladino, Mago, Clérigo.
 Atributos (8 a 17, soma máxima 72): for, des, con, int, sab, car.
 Perícias treinadas: 2 + modificador de Inteligência (mínimo 1). Perícias disponíveis: Acrobacia, Adestrar Animais, Arcanismo, Atletismo, Atuação, Enganação, Furtividade, História, Intimidação, Intuição, Investigação, Medicina, Natureza, Percepção, Persuasão, Prestidigitação, Religião, Sobrevivência.
-Ataque inicial: 1 (dano 1d6+modificador de Força ou Destreza).
+Ataque inicial: 1 ataque principal, com bônus = 2 + modificador do atributo da classe. Dano: Guerreiro 1d8 + mod de Força; Ladino 1d6 + mod de Destreza; Mago 1d10 (magia de ataque, com elemento: fogo, gelo ou raio); Clérigo 1d6 + mod de Sabedoria (elemento sagrado). O servidor soma a evolução por nível sozinho: escreva os números do nível 1.
 Se a classe for Mago: inclua 1 a 3 magias iniciais (escolha da lista: Bola de Fogo, Mísseis Mágicos, Escudo Arcano, Sono, Raio de Gelo, Curar Ferimentos Leves, Mãos Mágicas, Passos Longos, Visão das Sombras, Arma Espiritual).
-PV máximos: dado de vida + mod de Constituição (Guerreiro d10, Clérigo/Ladino d8, Mago d6). CA: 10 + mod de Destreza + (se Guerreiro 2, se Clérigo 1).
+PV máximos: o servidor calcula (dado de vida + mod de Constituição + 4; Guerreiro d10, Clérigo/Ladino d8, Mago d6). CA (armadura inicial): Guerreiro 16 (cota de malha); Clérigo 14 + mod de Destreza (máximo +2); Ladino 11 + mod de Destreza; Mago 10 + mod de Destreza. CA máxima de criação: 18.
 Responda SOMENTE com JSON no formato:
 {"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?"}],"magias":[{"nome":"str","descricao":"str"}],"equipamento":["str"],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
 
@@ -176,7 +200,8 @@ function contexto(mesa, fichas, recentes, extra = {}) {
   return `${REGRAS}\n\n${AVENTURA}\n\nCONTEXTO DA SESSÃO:
 - Cenário: A Mina de Pedra-Funda (fantasia clássica, vila de Carvalho-Cinza)
 - Tom: ${tom}${mesa.vetos ? `\n- Temas vetados (nunca use): ${mesa.vetos}` : ""}
-- ${concluida ? "A aventura principal já foi concluída: conduza cenas de fechamento ou exploração livre." : `Capítulo ${capIdx + 1} de ${CAPITULOS.length}: ${cap.titulo}. OBJETIVO DO CAPÍTULO: ${cap.objetivo}`}
+- ${concluida ? "A aventura principal já foi concluída: conduza cenas de fechamento ou exploração livre." : `Capítulo ${capIdx + 1} de ${CAPITULOS.length}: ${cap.titulo}. OBJETIVO DO CAPÍTULO: ${cap.objetivo}${cap.ritmo ? ` RITMO: ${cap.ritmo}` : ""}`}
+- ${referenciaInimigos(fichas)}
 - Clima e hora: ${clima}, ${periodo.toLowerCase()}. Descreva o ambiente de acordo (chuva enfraquece fogo e fortalece raio; noite e neblina favorecem a furtividade).
 - Personagens:
 ${fichas.map(resumoFicha).join("\n") || "(sem personagens)"}
@@ -344,4 +369,4 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1) {
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { AVENTURA, FORMATO, CRICACAO, CAPITULOS, SEMENTES_ENCONTRO, contexto, promptEpilogo, perguntar, gerarImagem, ErroMestre, resumoFicha };
+module.exports = { AVENTURA, FORMATO, CRICACAO, CAPITULOS, SEMENTES_ENCONTRO, contexto, promptEpilogo, perguntar, gerarImagem, ErroMestre, resumoFicha, referenciaInimigos };

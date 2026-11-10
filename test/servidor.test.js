@@ -225,7 +225,9 @@ test("sessão completa com IA simulada", { timeout: 60_000 }, async (t) => {
   assert.equal((await a.post("/api/ficha/escolher", { codigo, tipo: "talento", valor: "couraca" })).status, 200);
   assert.equal((await a.post("/api/ficha/escolher", { codigo, tipo: "atributo", valor: "con" })).status, 200);
   fichas = (await a.get(`/api/mesa/${codigo}/fichas`)).j;
-  assert.equal(fichas["dev-ana"].caEfetiva, fichas["dev-ana"].ca + 2);
+  // Guardião +1 e Couraça +1, mais a melhor armadura do saque (o item sorteado pode ser uma armadura).
+  const armadura = Math.max(0, ...fichas["dev-ana"].itens.filter((i) => i.tipo === "armadura").map((i) => i.bonus));
+  assert.equal(fichas["dev-ana"].caEfetiva, fichas["dev-ana"].ca + Math.min(5, 2 + armadura));
 
   // Redistribuir: grátis na primeira vez
   const at = fichas["dev-ana"].atributos;

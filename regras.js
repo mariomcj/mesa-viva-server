@@ -91,7 +91,9 @@ const SUBCLASSES = {
 // ── Raridade de itens ──
 const RARIDADES = ["comum", "incomum", "raro", "epico", "lendario"];
 const NOME_RARIDADE = { comum: "Comum", incomum: "Incomum", raro: "Raro", epico: "Épico", lendario: "Lendário" };
-const BONUS_RARIDADE = { comum: 0, incomum: 1, raro: 1, epico: 2, lendario: 3 };
+// Raro passou de +1 para +2: antes era igual ao Incomum e a escolha não tinha graça.
+// Épico e Lendário se diferenciam também pelo elemento garantido (ver gerarItem).
+const BONUS_RARIDADE = { comum: 0, incomum: 1, raro: 2, epico: 2, lendario: 3 };
 
 function safeStr(v, def, max) {
   let s = String(v ?? def);
@@ -200,7 +202,7 @@ function sortearRaridade(sorte = 0, rng = Math.random) {
   const r = rng() * 100 + sorte * 6;
   if (r > 118) return "lendario";
   if (r > 100) return "epico";
-  if (r > 80) return "raro";
+  if (r > 85) return "raro"; // era 80: com o Raro valendo +2, ele ficou um pouco mais raro (20% → 15%)
   if (r > 50) return "incomum";
   return "comum";
 }
@@ -210,7 +212,8 @@ function gerarItem(sorte = 0, rng = Math.random) {
   const tipo = tipos[Math.floor(rng() * tipos.length)];
   const raridade = sortearRaridade(sorte, rng);
   const elementos = ELEMENTOS.filter((e) => e !== "fisico");
-  const elemento = tipo !== "armadura" && raridade !== "comum" && rng() < 0.5 ? elementos[Math.floor(rng() * elementos.length)] : null;
+  const garantido = raridade === "epico" || raridade === "lendario";
+  const elemento = tipo !== "armadura" && raridade !== "comum" && (garantido || rng() < 0.5) ? elementos[Math.floor(rng() * elementos.length)] : null;
   const base = NOMES_ITEM[tipo][Math.floor(rng() * NOMES_ITEM[tipo].length)];
   const nome = elemento ? `${base} ${QUALIFICADOR_ELEMENTO[elemento]}` : `${base} ${NOME_RARIDADE[raridade]}`;
   const bonus = BONUS_RARIDADE[raridade];
@@ -256,11 +259,23 @@ function elementoPeloNome(nome) {
   return "fisico";
 }
 
+/**
+ * Tetos da ficha base (nível 1). A escala por nível vem de bonusAtaqueNivel/bonusDanoNivel,
+ * e o resto de itens, talentos e subclasse. Sem teto, uma ficha editada no app com CA 25 ou
+ * dano "10d10" quebrava todas as tabelas de inimigos.
+ */
+const TETO_FICHA = { ca: 18, bonusAtaque: 7, danoMedio: 13 };
+
+function _danoDaFicha(expr) {
+  const s = String(expr || "1d4").slice(0, 20);
+  return danoMedio(s) > TETO_FICHA.danoMedio ? danoComMedia(TETO_FICHA.danoMedio) : s;
+}
+
 function _ataquesPorClasse(classe, fornecidos) {
   const validos = fornecidos.map((a) => ({
     nome: safeStr(a.nome, "", 30),
-    bonus: Math.max(-5, Math.min(15, Number(a.bonus) || 0)),
-    dano: String(a.dano || "1d4"),
+    bonus: Math.max(-5, Math.min(TETO_FICHA.bonusAtaque, Number(a.bonus) || 0)),
+    dano: _danoDaFicha(a.dano),
     elemento: elementoValido(a.elemento) || elementoPeloNome(a.nome),
   })).slice(0, 6);
   if (validos.length > 0) return validos;
@@ -271,9 +286,15 @@ function bonusProficiencia(nivel) {
   return Math.ceil(1 + nivel / 4);
 }
 
+/**
+ * PV extra de herói, igual em todos os níveis. No nível 1 um Mago tinha 7 PV e caía com dois golpes
+ * de goblin logo no primeiro combate da primeira sessão: ficar parado assistindo é o pior onboarding.
+ */
+const PV_HEROI = 4;
+
 function calcularPvMax(classe, nivel, con) {
   const dv = DADO_DE_VIDA[classe] || 8;
-  return Math.max(1, dv + mod(con) + (nivel - 1) * (Math.floor(dv / 2) + 1 + mod(con)));
+  return Math.max(1, PV_HEROI + dv + mod(con) + (nivel - 1) * (Math.floor(dv / 2) + 1 + mod(con)));
 }
 
 /**
@@ -319,7 +340,7 @@ function normalizarFicha(dados, uid, conceito) {
     atributosGanhos,
     pvMax,
     pv: Math.max(0, Math.min(Number(v.pv) >= 0 && v.pv !== undefined && v.pv !== null && v.pv !== "" ? Number(v.pv) : pvMax, pvMax)),
-    ca: Math.max(10, Number(v.ca) || 10),
+    ca: Math.max(10, Math.min(TETO_FICHA.ca, Number(v.ca) || 10)),
     imagem: safeStr(v.imagem, "", 500),
     pericias: (Array.isArray(v.pericias) ? v.pericias : []).filter((p) => PERICIAS[p]).slice(0, Math.max(1, 2 + mod(at.int))),
     ataques: _ataquesPorClasse(classe, Array.isArray(v.ataques) ? v.ataques : []),
@@ -379,14 +400,16 @@ function efeitos(f) {
   if (t.has("aprendizado_rapido")) e.xpMult = 1.25;
   if (t.has("pes_ligeiros")) e.iniciativa += 2;
   if (t.has("negociador")) e.ouroMult = 1.2;
+  // Itens: vale o MELHOR de cada tipo (uma arma, uma armadura, um amuleto "em uso").
+  // Antes os bônus se somavam e, com saque a cada combate, o teto de +5 chegava no nível 4.
+  const melhor = { arma: 0, armadura: 0, amuleto: 0 };
   for (const it of f?.itens || []) {
-    if (it.tipo === "arma") e.ataque += it.bonus || 0;
-    else if (it.tipo === "armadura") e.ca += it.bonus || 0;
-    else if (it.tipo === "amuleto") {
-      e.pericias["*"] = (e.pericias["*"] || 0) + (it.bonus || 0);
-      if (it.elemento) e.resistencias.push(it.elemento);
-    }
+    if (melhor[it.tipo] !== undefined) melhor[it.tipo] = Math.max(melhor[it.tipo], it.bonus || 0);
+    if (it.tipo === "amuleto" && it.elemento && !e.resistencias.includes(it.elemento)) e.resistencias.push(it.elemento);
   }
+  e.ataque += melhor.arma;
+  e.ca += melhor.armadura;
+  if (melhor.amuleto) e.pericias["*"] = (e.pericias["*"] || 0) + melhor.amuleto;
   for (const s of f?.status || []) {
     const def = STATUS[s.tipo];
     if (!def) continue;
@@ -402,6 +425,17 @@ function efeitos(f) {
 
 function caEfetiva(f) {
   return (f.ca || 10) + efeitos(f).ca;
+}
+
+/**
+ * Escala do personagem por nível nos ataques (o bônus e o dano gravados na ficha são os do nível 1).
+ * Acerto: a proficiência acima de +2. Dano: +1 nos níveis 3, 5, 7, 9...
+ */
+function bonusAtaqueNivel(nivel) {
+  return bonusProficiencia(Math.max(1, Number(nivel) || 1)) - 2;
+}
+function bonusDanoNivel(nivel) {
+  return Math.floor((Math.max(1, Number(nivel) || 1) - 1) / 2);
 }
 
 function bonusPericia(f, pericia, ambiente) {
@@ -423,7 +457,10 @@ function chanceSucesso(bonus, cd) {
 }
 
 // ── XP e níveis ──
-const XP = { narracao: 2, porInimigo: 10, vitoriaMinima: 20, capitulo: 50, epilogo: 100 };
+// narracao 2 → 1: XP por chamada à IA premiava "gastar crédito" e mandar ação vazia.
+// O XP sai de marcos (capítulo, vitória, epílogo). Curva: 1ª vitória ≈ nível 2; nível 3 no meio
+// da primeira aventura; nível 4 no epílogo. Ver design/GAME-DESIGN.md, seção 3.
+const XP = { narracao: 1, porInimigo: 12, vitoriaMinima: 25, capitulo: 60, epilogo: 100 };
 
 function xpParaProximo(nivel) {
   return (nivel || 1) * 100;
@@ -451,7 +488,121 @@ function ganharXp(f, quantidade) {
   return niveis;
 }
 
+// ── Balanceamento: inimigos de referência por nível do grupo ──
+// Calibrado com tool/simular-balanceamento.js. Metas e tabelas em design/GAME-DESIGN.md.
+// "comum" é o inimigo-padrão: um por jogador num combate comum.
+const REFERENCIA_INIMIGO = {
+  pv: (n) => 10 + 2.2 * (n - 1),
+  ca: (n) => 12 + Math.floor(n / 3),
+  ataque: (n) => 2 + Math.ceil(n / 2),
+  danoMedio: (n) => 4 + 1.5 * (n - 1),
+};
+/** Multiplicadores por papel. O chefe ganha PV por jogador (ver inimigoReferencia). */
+const PAPEIS_INIMIGO = {
+  lacaio: { pv: 0.5, ca: -1, ataque: -1, dano: 0.75 },
+  comum: { pv: 1, ca: 0, ataque: 0, dano: 1 },
+  elite: { pv: 2, ca: 1, ataque: 1, dano: 1.25 },
+  chefe: { pv: 1, ca: 1, ataque: 1, dano: 1.3 },
+};
+/** PV do chefe = PV do comum × (CHEFE_PV_BASE + CHEFE_PV_POR_JOGADOR × jogadores). */
+const CHEFE_PV_BASE = 1.25;
+const CHEFE_PV_POR_JOGADOR = 0.75;
+/** O chefe bate mais forte em grupos maiores (ele ataca uma vez por rodada contra até 4 heróis). */
+const CHEFE_DANO_POR_JOGADOR = 0.15;
+
+/** Dano médio de uma expressão como "2d6+3". */
+function danoMedio(expr) {
+  const s = String(expr || "1d4").replace(/\s/g, "").toLowerCase();
+  const re = /([+-]?)(\d*)d(\d+)|([+-]?)(\d+)/g;
+  let media = 0, m;
+  while ((m = re.exec(s))) {
+    if (m[3]) media += (m[1] === "-" ? -1 : 1) * Number(m[2] || 1) * (Number(m[3]) + 1) / 2;
+    else if (m[5]) media += (m[4] === "-" ? -1 : 1) * Number(m[5]);
+  }
+  return Math.max(0, media);
+}
+
+/** Monta uma expressão de dano ("1d6+2", "2d6+3"...) com a média pedida. */
+function danoComMedia(media) {
+  const alvo = Math.max(1, media);
+  const dados = Math.max(1, Math.min(4, Math.ceil(alvo / 7)));
+  let faces = 6, fixo = Math.round(alvo - dados * 3.5);
+  if (fixo < 0) { faces = 4; fixo = Math.max(0, Math.round(alvo - dados * 2.5)); }
+  return `${dados}d${faces}${fixo ? `+${fixo}` : ""}`;
+}
+
+/** Nível médio (arredondado) e quantidade de personagens de pé. */
+function perfilGrupo(jogadores) {
+  const lista = (Array.isArray(jogadores) ? jogadores : Object.values(jogadores || {})).filter((f) => f && (f.pv === undefined || f.pv > 0));
+  const n = Math.max(1, lista.length);
+  const nivel = lista.length ? Math.max(1, Math.min(20, Math.round(lista.reduce((s, f) => s + (Number(f.nivel) || 1), 0) / lista.length))) : 1;
+  return { nivel, jogadores: n };
+}
+
+/** Estatísticas de referência de um inimigo para o nível do grupo. */
+function inimigoReferencia(nivel, papel = "comum", jogadores = 1) {
+  const n = Math.max(1, Math.min(20, Number(nivel) || 1));
+  const p = PAPEIS_INIMIGO[papel] || PAPEIS_INIMIGO.comum;
+  const j = Math.max(1, Math.min(8, Number(jogadores) || 1));
+  const multPv = papel === "chefe" ? CHEFE_PV_BASE + CHEFE_PV_POR_JOGADOR * j : p.pv;
+  const multDano = papel === "chefe" ? p.dano + CHEFE_DANO_POR_JOGADOR * (j - 1) : p.dano;
+  return {
+    pv: Math.max(1, Math.round(REFERENCIA_INIMIGO.pv(n) * multPv)),
+    ca: REFERENCIA_INIMIGO.ca(n) + p.ca,
+    ataque: REFERENCIA_INIMIGO.ataque(n) + p.ataque,
+    dano: danoComMedia(REFERENCIA_INIMIGO.danoMedio(n) * multDano),
+    des: papel === "chefe" ? 1 : 2,
+  };
+}
+
+/**
+ * Encontro de referência: "comum" = um inimigo comum por jogador;
+ * "chefe" = o chefe, um capanga comum por jogador além do primeiro e, na dupla, mais um lacaio.
+ */
+function encontroReferencia(nivel, jogadores = 1, tipo = "comum") {
+  const n = Math.max(1, Math.min(8, Number(jogadores) || 1));
+  if (tipo === "chefe") {
+    const lista = [{ nome: "Chefe", ...inimigoReferencia(nivel, "chefe", n), chefe: true, comportamento: "tatico" }];
+    for (let i = 1; i < n; i++) lista.push({ nome: `Capanga ${i}`, ...inimigoReferencia(nivel, "comum", n), comportamento: "covarde" });
+    // Dupla: um lacaio a mais, para o chefe não ficar sozinho levando todos os golpes.
+    if (n === 2) lista.push({ nome: "Lacaio", ...inimigoReferencia(nivel, "lacaio", n), comportamento: "agressivo" });
+    return lista;
+  }
+  return Array.from({ length: n }, (_, i) => ({ nome: `Inimigo ${i + 1}`, ...inimigoReferencia(nivel, "comum", n), comportamento: "tatico" }));
+}
+
+/**
+ * Trilhos de segurança para os inimigos que a IA propõe: completa o que faltar com a tabela
+ * e corta exageros (PV, CA, acerto e dano muito acima da referência do grupo).
+ * Inimigos mais fracos que a referência passam como vieram: a IA pode criar lutas fáceis.
+ */
+const LIMITE_INIMIGO = { pv: 2, ca: 2, ataque: 2, dano: 1.5, porJogador: 2, extras: 2 };
+function limitarInimigos(inimigosDados, jogadores) {
+  const g = perfilGrupo(jogadores);
+  const maximo = Math.min(8, g.jogadores * LIMITE_INIMIGO.porJogador + LIMITE_INIMIGO.extras);
+  return (Array.isArray(inimigosDados) ? inimigosDados : []).slice(0, maximo).map((dd) => {
+    const dados = { ...(dd || {}) };
+    const papel = dados.chefe === true ? "chefe" : "comum";
+    const ref = inimigoReferencia(g.nivel, papel, g.jogadores);
+    const tem = (k) => dados[k] !== undefined && dados[k] !== null && dados[k] !== "" && Number.isFinite(Number(dados[k]));
+    for (const k of ["pv", "ca", "ataque", "des"]) if (!tem(k)) dados[k] = ref[k];
+    dados.pv = Math.min(Number(dados.pv), Math.round(ref.pv * (papel === "chefe" ? 1.5 : LIMITE_INIMIGO.pv)));
+    dados.ca = Math.min(Number(dados.ca), ref.ca + LIMITE_INIMIGO.ca);
+    dados.ataque = Math.min(Number(dados.ataque), ref.ataque + LIMITE_INIMIGO.ataque);
+    if (!dados.dano) dados.dano = ref.dano;
+    else if (danoMedio(dados.dano) > danoMedio(ref.dano) * LIMITE_INIMIGO.dano) dados.dano = danoComMedia(danoMedio(ref.dano) * LIMITE_INIMIGO.dano);
+    return dados;
+  });
+}
+
 // ── Inimigos e combate ──
+/** Número vindo da IA; 0 é um valor válido (antes "ataque: 0" virava +4). */
+function numOu(v, padrao) {
+  if (v === undefined || v === null || v === "") return padrao;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : padrao;
+}
+
 function criarInimigo(id, dados) {
   const pv = Math.max(1, Math.min(500, Number(dados?.pv) || 7));
   const comportamento = ["agressivo", "covarde", "tatico"].includes(dados?.comportamento) ? dados.comportamento : "tatico";
@@ -460,10 +611,10 @@ function criarInimigo(id, dados) {
     id,
     nome: safeStr(dados?.nome, "Inimigo", 40),
     pv, pvMax: pv,
-    ca: Math.max(8, Math.min(25, Number(dados?.ca) || 13)),
-    ataque: Math.max(-2, Math.min(15, Number(dados?.ataque) || 4)),
+    ca: Math.max(8, Math.min(25, numOu(dados?.ca, 13))),
+    ataque: Math.max(-2, Math.min(15, numOu(dados?.ataque, 4))),
     dano: String(dados?.dano || "1d6+2"),
-    des: Math.max(-3, Math.min(8, Number(dados?.des) || 2)),
+    des: Math.max(-3, Math.min(8, numOu(dados?.des, 2))),
     elemento: elementoValido(dados?.elemento) || "fisico",
     fraquezas: listaElementos(dados?.fraquezas),
     resistencias: listaElementos(dados?.resistencias),
@@ -485,7 +636,8 @@ function iniciarCombate(jogadores, inimigosDados, rng = Math.random) {
     if (!f.pv || f.pv <= 0) continue;
     ordem.push({ id: f.uid, tipo: "pj", nome: f.nome, ini: d(20, rng) + mod(f.atributos.des) + efeitos(f).iniciativa });
   }
-  const inimigos = (inimigosDados || []).slice(0, 8).map((dd, i) => criarInimigo(`ini_${i}`, dd));
+  // A IA propõe os inimigos; o servidor completa e limita pelo nível e tamanho do grupo.
+  const inimigos = limitarInimigos(inimigosDados, jogadores).map((dd, i) => criarInimigo(`ini_${i}`, dd));
   for (const i of inimigos) ordem.push({ id: i.id, tipo: "ini", nome: i.nome, ini: d(20, rng) + i.des });
   ordem.sort((a, b) => b.ini - a.ini || rng() - 0.5);
   return { rodada: 1, vez: 0, ordem, inimigos, inicioVez: Date.now(), suspiro: {} };
@@ -536,7 +688,7 @@ function montarRolagem(ficha, pedido, combate, id, ambiente) {
       || combate?.inimigos?.find(inimigoAtivo);
     const arma = (ficha.itens || []).find((it) => it.tipo === "arma" && it.elemento);
     const elemento = (a.elemento && a.elemento !== "fisico") ? a.elemento : (arma?.elemento || a.elemento || "fisico");
-    const bonus = (a.bonus || 0) + ef.ataque;
+    const bonus = (a.bonus || 0) + ef.ataque + bonusAtaqueNivel(ficha.nivel);
     const cd = alvo?.ca ?? 13;
     return {
       id, jogador: ficha.uid, tipo: "ataque", rotulo: `${a.nome} vs ${alvo ? alvo.nome : "alvo"}`,
@@ -577,7 +729,7 @@ function resolverRolagem(rol, natural, combate, ficha, opcoes = {}) {
     if (sucesso) {
       const r = rolar(rol.dano || "1d4", critico, rng);
       const el = multiplicadorElemento(rol.elemento, alvo, opcoes.ambiente);
-      let bruto = r.total + (ef.dano || 0) + ((rol.elemento && rol.elemento !== "fisico") ? (ef.danoElemental || 0) : 0);
+      let bruto = r.total + (ef.dano || 0) + ((rol.elemento && rol.elemento !== "fisico") ? (ef.danoElemental || 0) : 0) + (ficha ? bonusDanoNivel(ficha.nivel) : 0);
       if (alvo?.chefe && (ficha?.talentos || []).includes("cacador_de_gigantes")) bruto += 2;
       dano = Math.max(el.mult === 0 ? 0 : 1, Math.floor(bruto * el.mult));
       if (alvo) {
@@ -767,5 +919,8 @@ module.exports = {
   criarInimigo, inimigoAtivo, iniciarCombate, vezAtual, combateAcabou, resultadoCombate,
   multiplicadorElemento, montarRolagem, resolverRolagem, passarVez, processarInicioDaVez, escolherAlvo,
   aplicarStatus, temStatus, normalizarStatus, normalizarItem, gerarItem, gerarSaque, catalogo,
+  BONUS_RARIDADE, REFERENCIA_INIMIGO, PAPEIS_INIMIGO, LIMITE_INIMIGO, TETO_FICHA, PV_HEROI,
+  bonusAtaqueNivel, bonusDanoNivel, danoMedio, danoComMedia, perfilGrupo,
+  inimigoReferencia, encontroReferencia, limitarInimigos, sortearRaridade,
   inicio: (f) => d(20) + mod(f.atributos.des),
 };

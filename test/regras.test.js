@@ -156,10 +156,140 @@ test("saque gera 3 itens válidos com raridade", () => {
   for (const it of s) assert.ok(R.RARIDADES.includes(it.raridade));
 });
 
-test("itens somam bônus com teto", () => {
+test("itens do mesmo tipo não se somam: vale o melhor de cada tipo, com teto", () => {
+  // Antes: duas armaduras +3 davam +5 (teto). Agora vale só a melhor armadura.
   const f = fichaBase({ itens: [{ nome: "A", tipo: "armadura", raridade: "lendario", bonus: 3 }, { nome: "B", tipo: "armadura", raridade: "lendario", bonus: 3 }] });
-  assert.equal(R.efeitos(f).ca, 5);
-  assert.equal(R.caEfetiva(f), 20);
+  assert.equal(R.efeitos(f).ca, 3);
+  assert.equal(R.caEfetiva(f), 18);
+  // Arma e armadura somam entre si; o teto de +5 continua valendo com subclasse e talentos.
+  const g = fichaBase({ nivel: 4, subclasse: "guardiao", talentos: ["couraca"], itens: [
+    { nome: "C", tipo: "armadura", raridade: "lendario", bonus: 3 }, { nome: "D", tipo: "arma", raridade: "raro", bonus: 2 }, { nome: "E", tipo: "arma", raridade: "incomum", bonus: 1 },
+  ] });
+  assert.equal(R.efeitos(g).ca, 5);
+  assert.equal(R.efeitos(g).ataque, 2);
+});
+
+// ── Balanceamento (design/GAME-DESIGN.md; números calibrados por tool/simular-balanceamento.js) ──
+
+test("escala por nível: acerto pela proficiência, dano +1 a cada 2 níveis", () => {
+  assert.deepEqual([1, 4, 5, 9, 10].map(R.bonusAtaqueNivel), [0, 0, 1, 2, 2]);
+  assert.deepEqual([1, 2, 3, 5, 9, 10].map(R.bonusDanoNivel), [0, 0, 1, 2, 4, 4]);
+  const combate = { inimigos: [R.criarInimigo("ini_0", { nome: "Alvo", pv: 100, ca: 10 })] };
+  const f1 = fichaBase({ ataques: [{ nome: "Espada", bonus: 5, dano: "1d8+3" }] });
+  const f5 = fichaBase({ nivel: 5, ataques: [{ nome: "Espada", bonus: 5, dano: "1d8+3" }] });
+  assert.equal(R.montarRolagem(f1, { tipo: "ataque", ataque: "Espada" }, combate, "x").bonus, 5);
+  const rol5 = R.montarRolagem(f5, { tipo: "ataque", ataque: "Espada" }, combate, "x");
+  assert.equal(rol5.bonus, 6);
+  // 1d8 com rng 0,99 = 8, +3, +2 do nível 5 = 13
+  assert.equal(R.resolverRolagem(rol5, 15, combate, f5, { rng: seq(0.99) }).dano, 13);
+});
+
+test("PV de herói: +4 em todos os níveis (Mago nível 1 com CON 10 tem 10 PV)", () => {
+  assert.equal(R.PV_HEROI, 4);
+  assert.equal(R.calcularPvMax("Mago", 1, 10), 10);
+  assert.equal(R.calcularPvMax("Guerreiro", 1, 14), 16);
+  assert.equal(R.calcularPvMax("Guerreiro", 5, 14), 16 + 4 * 8);
+});
+
+test("tabela de inimigos de referência por nível e papel", () => {
+  assert.deepEqual(R.inimigoReferencia(1, "comum"), { pv: 10, ca: 12, ataque: 3, dano: "1d6+1", des: 2 });
+  assert.deepEqual(R.inimigoReferencia(5, "comum"), { pv: 19, ca: 13, ataque: 5, dano: "2d6+3", des: 2 });
+  assert.deepEqual(R.inimigoReferencia(10, "comum"), { pv: 30, ca: 15, ataque: 7, dano: "3d6+7", des: 2 });
+  assert.equal(R.inimigoReferencia(1, "lacaio").pv, 5);
+  // Chefe: PV do comum × (1,25 + 0,75 por jogador); dano × (1,3 + 0,15 por jogador além do primeiro).
+  assert.deepEqual(R.inimigoReferencia(5, "chefe", 3), { pv: 66, ca: 14, ataque: 6, dano: "3d6+6", des: 1 });
+  assert.equal(R.inimigoReferencia(5, "chefe", 1).pv, 38);
+  assert.ok(R.inimigoReferencia(5, "chefe", 4).pv > R.inimigoReferencia(5, "chefe", 2).pv);
+});
+
+test("encontro de referência: um comum por jogador; chefe com capangas", () => {
+  for (const n of [1, 2, 3, 4]) assert.equal(R.encontroReferencia(3, n, "comum").length, n);
+  assert.equal(R.encontroReferencia(3, 1, "chefe").length, 1);
+  assert.equal(R.encontroReferencia(3, 2, "chefe").length, 3); // chefe + capanga + lacaio
+  const quatro = R.encontroReferencia(3, 4, "chefe");
+  assert.equal(quatro.length, 4);
+  assert.equal(quatro.filter((i) => i.chefe).length, 1);
+});
+
+test("dano médio e expressão de dano com média pedida", () => {
+  assert.equal(R.danoMedio("2d6+3"), 10);
+  assert.equal(R.danoMedio("1d8-1"), 3.5);
+  assert.equal(R.danoComMedia(4), "1d6+1");
+  assert.equal(R.danoComMedia(10), "2d6+3");
+  assert.equal(R.danoComMedia(2), "1d4");
+});
+
+test("trilhos de segurança: o servidor corta inimigos exagerados da IA, sem mexer nos fracos", () => {
+  const grupo = [fichaBase()]; // 1 jogador, nível 1
+  const [ogro, fraco, vazio] = R.limitarInimigos([
+    { nome: "Ogro", pv: 200, ca: 25, ataque: 15, dano: "6d10" },
+    { nome: "Rato", pv: 1, ca: 5, ataque: 0, dano: "1" },
+    { nome: "Sem números" },
+  ], grupo);
+  assert.equal(ogro.pv, 20); // 2 × PV de referência (10)
+  assert.equal(ogro.ca, 14); // referência 12 + 2
+  assert.equal(ogro.ataque, 5); // referência 3 + 2
+  assert.equal(ogro.dano, R.danoComMedia(4 * 1.5));
+  assert.deepEqual([fraco.pv, fraco.ca, fraco.ataque, fraco.dano], [1, 5, 0, "1"]);
+  assert.deepEqual([vazio.pv, vazio.ca, vazio.ataque, vazio.dano], [10, 12, 3, "1d6+1"]);
+  // No máximo 2 inimigos por jogador + 2
+  assert.equal(R.limitarInimigos(Array.from({ length: 8 }, () => ({ nome: "G" })), grupo).length, 4);
+  // Chefe tem teto próprio (1,5 × referência de chefe)
+  const chefe = R.limitarInimigos([{ nome: "Rei", pv: 999, chefe: true }], grupo)[0];
+  assert.equal(chefe.pv, Math.round(R.inimigoReferencia(1, "chefe", 1).pv * 1.5));
+});
+
+test("iniciarCombate aplica os trilhos e respeita ataque 0 (antes virava +4)", () => {
+  const f = fichaBase();
+  const c = R.iniciarCombate({ u1: f }, [{ nome: "Ogro", pv: 300, ataque: 0 }]);
+  assert.equal(c.inimigos[0].pv, 20);
+  assert.equal(c.inimigos[0].ataque, 0);
+});
+
+test("tetos da ficha base: CA 18, ataque +7, dano médio 13", () => {
+  const f = R.normalizarFicha({ classe: "Guerreiro", ca: 25, ataques: [{ nome: "Espada", bonus: 12, dano: "10d10" }, { nome: "Bola de Fogo", bonus: 4, dano: "2d6" }] }, "u");
+  assert.equal(f.ca, 18);
+  assert.equal(f.ataques[0].bonus, 7);
+  assert.equal(f.ataques[0].dano, "2d6+6");
+  assert.equal(f.ataques[1].dano, "2d6");
+});
+
+test("XP: a primeira vitória depois do capítulo 1 leva ao nível 2; narração dá só 1", () => {
+  assert.equal(R.XP.narracao, 1);
+  const f = fichaBase();
+  const niveis = R.ganharXp(f, R.XP.capitulo + 10 * R.XP.narracao + Math.max(R.XP.vitoriaMinima, 3 * R.XP.porInimigo));
+  assert.deepEqual(niveis, [2]);
+  // A aventura inteira (5 capítulos, ~6 combates, ~90 narrações, epílogo) fica entre o nível 4 e o 5.
+  const g = fichaBase();
+  R.ganharXp(g, 5 * R.XP.capitulo + 6 * 3 * R.XP.porInimigo + 40 + 90 * R.XP.narracao + R.XP.epilogo);
+  assert.equal(g.nivel, 4);
+});
+
+test("raridade: Raro vale +2, Épico e Lendário sempre têm elemento em arma e amuleto", () => {
+  assert.equal(R.BONUS_RARIDADE.raro, 2);
+  assert.equal(R.sortearRaridade(0, () => 0.84), "incomum");
+  assert.equal(R.sortearRaridade(0, () => 0.86), "raro");
+  assert.equal(R.sortearRaridade(0, () => 0.999), "raro"); // sem sorte não sai Épico
+  assert.equal(R.sortearRaridade(3, () => 0.9), "epico");
+  // tipo arma (0,1), raridade lendária (0,99 + sorte 5), elemento (0,5), nome (0,1)
+  const it = R.gerarItem(5, seq(0.1, 0.99, 0.5, 0.1, 0.1));
+  assert.equal(it.raridade, "lendario");
+  assert.equal(it.bonus, 3);
+  assert.ok(it.elemento);
+});
+
+test("expedição usa a tabela: andar 1 a 5 no nível do grupo, +1 a cada bloco de 5 andares", () => {
+  const { criarCampanha } = require("../campanha");
+  const camp = criarCampanha({ exec() {} });
+  const grupo = [fichaBase(), fichaBase()];
+  const sala = camp.inimigosDaSala({ modo: "masmorra", andar: 2, sala: "monstro" }, grupo, seq(0.5));
+  assert.equal(sala.length, 2);
+  assert.equal(sala[0].pv, R.inimigoReferencia(1, "comum", 2).pv);
+  const chefe = camp.inimigosDaSala({ modo: "torre", andar: 5, sala: "chefe" }, grupo, seq(0.5));
+  assert.equal(chefe[0].chefe, true);
+  assert.equal(chefe[0].pv, R.inimigoReferencia(1, "chefe", 2).pv);
+  assert.equal(camp.nivelDaSala({ andar: 6 }, grupo), 2);
+  assert.equal(camp.nivelDaSala({ andar: 11 }, grupo), 3);
 });
 
 test("clima: chuva enfraquece fogo; neblina atrapalha Percepção", () => {
