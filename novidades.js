@@ -279,9 +279,10 @@ function instalar(d) {
   }
   const listarPontos = (codigo) => db.prepare("SELECT id, criadoEm, rotulo FROM salvamentos WHERE codigo = ? ORDER BY id DESC").all(codigo);
   /** Ajusta a mesa que vai para o app: só o saque de quem pediu; o bestiário vai pela crônica. */
-  function mesaPublica(mesa, uid) {
+  function mesaPublica(mesa, uid, idioma) {
     const meu = saqueDaMesa(mesa)[uid];
-    mesa.saque = Array.isArray(meu) && meu.length ? meu : null;
+    // "nome" é só para mostrar, no idioma do aparelho; o item guardado continua com o nome em português
+    mesa.saque = Array.isArray(meu) && meu.length ? meu.map((o) => (o.item ? { ...o, nome: nomeNoIdioma(o.item.nome, idioma) } : o)) : null;
     mesa.epilogo = json(mesa.epilogo) || null;
     delete mesa.bestiario;
   }

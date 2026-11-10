@@ -1341,7 +1341,7 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   Object.assign(mesa, { tema: tema.id, temaNome: tema.nome, temaInspiracao: tema.inspiracao, temaIcone: tema.icone,
     duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco, nomes: tema.nomes });
   const av = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
-  NV.mesaPublica(mesa, req.uid);
+  NV.mesaPublica(mesa, req.uid, M.idiomaValido(req.get("x-idioma")));
   mesa.aventura = av ? av.id : "";
   mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";
   res.json(mesa);
