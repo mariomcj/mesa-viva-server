@@ -114,3 +114,9 @@ O estado da mesa (`GET /api/mesa/:codigo`) traz em `combate`: `mapa` (`colunas`,
 5. **Publique o APK novo junto.** O app antigo não reconhece a própria ficha com o servidor novo, então todos precisam instalar o APK novo.
 
 As tabelas e colunas novas são criadas sozinhas ao iniciar.
+
+## Idioma da narração
+
+- Coluna `mesas.idioma` (`pt` ou `en`, padrão `pt`): a língua em que o Mestre escreve nessa mesa. A mesa nasce com o idioma do aparelho de quem a criou (cabeçalho `X-Idioma`) e pode ser trocada em Ajustes (`POST /api/configurar-mesa` com `idioma`), em qualquer fase.
+- Em português nenhum prompt muda. Em inglês, `blocoIdioma` (em `mestre.js`) acrescenta ao fim dos prompts de narração, de arco e de criação de ficha a instrução de escrever em inglês, sem traduzir ids, chaves do JSON nem nomes de perícias, raças, classes, ataques e magias.
+- Continuam só em português: as mensagens de erro, as mensagens de sistema do diário (o app lê algumas delas) e o catálogo de temas.

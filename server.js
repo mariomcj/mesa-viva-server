@@ -117,6 +117,7 @@ try { db.exec("ALTER TABLE mesas ADD COLUMN atoInicio INTEGER DEFAULT 0"); } cat
 // Dia na história e elementos visíveis da cena. Mesas antigas começam no dia 1.
 try { db.exec("ALTER TABLE mesas ADD COLUMN dia INTEGER DEFAULT 1"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN diaNarr INTEGER DEFAULT 0"); } catch (e) {}            // narração em que o último dia começou
+try { db.exec("ALTER TABLE mesas ADD COLUMN idioma TEXT DEFAULT 'pt'"); } catch (e) {}              // idioma em que o Mestre narra: pt | en
 try { db.exec("ALTER TABLE mesas ADD COLUMN elementos TEXT DEFAULT '[]'"); } catch (e) {}          // JSON, privado
 // Última ficha criada pelo Mestre para cada conta: o inventário e as magias iniciais só podem vir daqui
 try { db.exec("CREATE TABLE IF NOT EXISTS criacoes (uid TEXT PRIMARY KEY, dados TEXT NOT NULL, criadoEm INTEGER NOT NULL)"); } catch (e) {}
@@ -286,7 +287,7 @@ function carregar(codigo, uid) {
 }
 
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
-  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos"]);
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma"]);
 function salvarMesa(codigo, campos) {
   // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
   const c = campos.combate;
@@ -454,7 +455,9 @@ function criarMesa(req, res) {
   for (let tentativa = 0; tentativa < 6; tentativa++) {
     const codigo = Array.from({ length: 5 }, () => ALFABETO[crypto.randomInt(ALFABETO.length)]).join("");
     if (db.prepare("SELECT 1 FROM mesas WHERE codigo = ?").get(codigo)) continue;
-    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, tema, duracao, cena) VALUES (?, ?, ?, ?, ?, '')").run(codigo, req.uid, agora(), tema, duracao);
+    // A mesa nasce narrando no idioma do aparelho de quem a criou (cabeçalho X-Idioma); dá para trocar em Ajustes.
+    db.prepare("INSERT INTO mesas (codigo, dono, criadaEm, tema, duracao, cena, idioma) VALUES (?, ?, ?, ?, ?, '', ?)")
+      .run(codigo, req.uid, agora(), tema, duracao, M.idiomaValido(req.get("x-idioma")));
     db.prepare("INSERT INTO membros (codigo, uid, nome, ultimaAtividade) VALUES (?, ?, ?, ?)").run(codigo, req.uid, nome, agora());
     return res.json({ codigo, uid: req.uid });
   }
@@ -565,6 +568,7 @@ app.post("/api/configurar-mesa", authMw, (req, res) => {
   if (["rapido", "caprichado"].includes(d.qualidade)) campos.qualidade = d.qualidade;
   if (typeof d.cdVisivel === "boolean") campos.cdVisivel = d.cdVisivel ? 1 : 0;
   if (typeof d.desejos === "string") campos.desejos = texto(d.desejos, 300);   // "Rumo da história": vale em qualquer fase
+  if (M.IDIOMAS.includes(d.idioma)) campos.idioma = d.idioma;                   // idioma da narração: vale em qualquer fase
   // Tema e duração só antes de começar. Mandar o mesmo valor de novo não é troca (o app pode reenviar tudo).
   const atual = db.prepare("SELECT fase, tema, duracao FROM mesas WHERE codigo = ?").get(codigo);
   const temaAtual = T.temaPorId(atual.tema).id, duracaoAtual = T.duracaoValida(atual.duracao);
@@ -616,7 +620,7 @@ app.post("/api/criar-personagem", authMw, limiteIA, async (req, res) => {
   if (!OPENROUTER_KEY) return erro(res, 503, "API key não configurada.");
   const tema = temaDoPedido(req);
   try {
-    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito), "rapido", 4000);
+    const r = await M.perguntar(OPENROUTER_KEY, M.promptCriacao(tema, conceito, M.idiomaValido(req.get("x-idioma"))), "rapido", 4000);
     const v = r && typeof r === "object" && !Array.isArray(r) ? r : {};
     const classe = R.CLASSES.includes(v.classe) ? v.classe : "Guerreiro";
     const ficha = R.normalizarFicha({ ...v, pv: undefined, mana: undefined, xp: 0, nivel: 1, pendencias: null,
@@ -1834,7 +1838,7 @@ const QUALIDADE_ARCO = process.env.QUALIDADE_ARCO === "rapido" ? "rapido" : "cap
 async function gerarArco(mesa, fichas) {
   const tema = T.temaPorId(mesa.tema);
   const semente = T.sortearSemente(tema), tempero = T.sortearTempero();
-  const prompt = M.promptArco({ tema, duracao: mesa.duracao, fichas, tom: mesa.tom, vetos: mesa.vetos, desejos: mesa.desejos, semente, tempero });
+  const prompt = M.promptArco({ tema, duracao: mesa.duracao, fichas, tom: mesa.tom, vetos: mesa.vetos, desejos: mesa.desejos, semente, tempero, idioma: mesa.idioma });
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
       const arco = M.normalizarArco(await M.perguntar(OPENROUTER_KEY, prompt, QUALIDADE_ARCO, 3000, 1.0));
