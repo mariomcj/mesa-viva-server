@@ -134,6 +134,11 @@ async function vencerCombate(codigo, j) {
     const c = JSON.parse(m.combate || "null");
     if (!c) return;
     for (const i of c.inimigos) if (i.pv > 1) i.pv = 1;
+    // o mapa é sorteado: põe os goblins ao lado do personagem, para o golpe corpo a corpo sempre alcançar
+    const eu = c.posicoes?.[j.id], col = c.mapa?.colunas || 10;
+    if (eu) c.inimigos.forEach((ini, n) => {
+      if (c.posicoes[ini.id]) c.posicoes[ini.id] = n === 0 ? { x: eu.x, y: eu.y > 0 ? eu.y - 1 : eu.y + 1 } : { x: eu.x + 1 < col ? eu.x + 1 : eu.x - 1, y: eu.y };
+    });
     db.prepare("UPDATE mesas SET combate = ? WHERE codigo = ?").run(JSON.stringify(c), codigo);
     gravarFicha(codigo, j.id, (f) => { f.pv = f.pvMax; f.inventario = []; });
     const r = await post("/api/agir", { codigo, texto: "Golpeio o goblin" }, o);
