@@ -120,3 +120,16 @@ As tabelas e colunas novas são criadas sozinhas ao iniciar.
 - Coluna `mesas.idioma` (`pt` ou `en`, padrão `pt`): a língua em que o Mestre escreve nessa mesa. A mesa nasce com o idioma do aparelho de quem a criou (cabeçalho `X-Idioma`) e pode ser trocada em Ajustes (`POST /api/configurar-mesa` com `idioma`), em qualquer fase.
 - Em português nenhum prompt muda. Em inglês, `blocoIdioma` (em `mestre.js`) acrescenta ao fim dos prompts de narração, de arco e de criação de ficha a instrução de escrever em inglês, sem traduzir ids, chaves do JSON nem nomes de perícias, raças, classes, ataques e magias.
 - Continuam só em português: as mensagens de erro, as mensagens de sistema do diário (o app lê algumas delas) e o catálogo de temas.
+
+## Aventuras, ouro, saque, loja e crônica
+
+Tudo aqui é acréscimo: sem usar, o jogo se comporta como antes.
+
+- **Aventuras** (`aventuras.js`): 4 por tema. A escolhida (`mesas.aventura`) entra como elemento-semente do arco e dá o título. `GET /api/aventuras`; `POST /api/mesa/criar` e `/api/configurar-mesa` aceitam `aventura` (só no saguão).
+- **Ouro e saque** (`novidades.js`): na vitória, cada personagem de pé ganha ouro e 3 opções de saque com raridade (poção, bolsa de ouro e tônico de mana ou relíquia). `POST /api/saque` com `indice` fica com uma. A ficha ganha `ouro` e os itens, `raridade`.
+- **Loja da vila**: `GET /api/mesa/:codigo/loja`, `POST /api/loja/comprar` (`id` de um item ou `estalagem`) e `POST /api/loja/vender`. Só fora de combate.
+- **Descanso curto**: `POST /api/descanso-curto`, uma vez por ato, recupera metade da vida e da mana.
+- **Crônica**: `GET /api/mesa/:codigo/cronica` devolve os marcos da campanha (tirados do diário), o bestiário, os pontos de salvamento e o epílogo.
+- **Pontos de salvamento**: um automático a cada ato, mais `POST /api/salvamento/criar`. `POST /api/salvamento/restaurar` (só o dono) volta a mesa e as fichas ao ponto e apaga o diário posterior. Ficam os 5 mais recentes.
+- **Epílogo**: `POST /api/epilogo`, depois do fim da aventura; o Mestre conta o destino de cada personagem (uma chamada à IA, guardada na mesa).
+- Itens novos usam os tipos que já existiam; o único efeito novo é `mana N`.

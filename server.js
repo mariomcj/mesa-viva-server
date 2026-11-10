@@ -118,6 +118,9 @@ try { db.exec("ALTER TABLE mesas ADD COLUMN atoInicio INTEGER DEFAULT 0"); } cat
 // Dia na história e elementos visíveis da cena. Mesas antigas começam no dia 1.
 try { db.exec("ALTER TABLE mesas ADD COLUMN dia INTEGER DEFAULT 1"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN diaNarr INTEGER DEFAULT 0"); } catch (e) {}            // narração em que o último dia começou
+try { db.exec("ALTER TABLE mesas ADD COLUMN saque TEXT"); } catch (e) {}                         // opções de saque por jogador, JSON
+try { db.exec("ALTER TABLE mesas ADD COLUMN bestiario TEXT"); } catch (e) {}                     // criaturas encontradas, JSON
+try { db.exec("ALTER TABLE mesas ADD COLUMN epilogo TEXT"); } catch (e) {}                       // epílogo depois do fim, JSON
 try { db.exec("ALTER TABLE mesas ADD COLUMN aventura TEXT DEFAULT ''"); } catch (e) {}             // id da aventura escolhida ("" = o Mestre sorteia)
 try { db.exec("ALTER TABLE mesas ADD COLUMN idioma TEXT DEFAULT 'pt'"); } catch (e) {}              // idioma em que o Mestre narra: pt | en
 try { db.exec("ALTER TABLE mesas ADD COLUMN elementos TEXT DEFAULT '[]'"); } catch (e) {}          // JSON, privado
@@ -289,7 +292,7 @@ function carregar(codigo, uid) {
 }
 
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
-  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura"]);
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura", "saque", "bestiario", "epilogo"]);
 function salvarMesa(codigo, campos) {
   // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
   const c = campos.combate;
@@ -339,7 +342,10 @@ function travar(codigo, uid, nome) {
   broadcast(codigo, "atualizar", {});
   return null;
 }
-function destravar(codigo) { salvarMesa(codigo, { processando: null }); broadcast(codigo, "atualizar", {}); }
+function destravar(codigo) { salvarMesa(codigo, { processando: null }); NV?.fecharPonto(codigo); broadcast(codigo, "atualizar", {}); }
+
+/** Ganchos das novidades (saque, bestiário, pontos de salvamento); preenchido depois das rotas. */
+let NV = null;
 
 const msgErro = (e) => (e instanceof M.ErroMestre ? e.message : "O Mestre não respondeu. Tente de novo.");
 
@@ -614,6 +620,7 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
     salvarMesa(codigo, { fase: "lobby", combate: null, rolagem: null, processando: null, resumo: "", inicio: null, cena: "", fundo: "",
       arco: null, arcoAjustes: [], ato: 1, arcoConcluido: 0, atoInicio: 0, dia: 1, diaNarr: 0, elementos: [] });
   })();
+  NV.aoReiniciar(codigo);
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
@@ -745,6 +752,7 @@ app.post("/api/salvar-ficha", authMw, (req, res) => {
     // saguão: livre dentro das regras de criação; XP, nível e pendências são do servidor; vida e mana cheias
     const criacao = ultimaCriacao(req.uid);
     nova = R.normalizarFicha({ ...recebida, xp: antiga?.xp ?? 0, nivel: antiga?.nivel ?? 1, pendencias: antiga?.pendencias ?? null,
+      ouro: antiga?.ouro, descanso: antiga?.descanso ?? 0,
       pv: undefined, mana: undefined, anotacoes: anotacoesRecebidas(recebida, antiga),
       magias: magiasPermitidas(recebida, antiga, criacao), inventario: inventarioPermitido(recebida, antiga, criacao) }, req.uid);
   }
@@ -926,6 +934,7 @@ app.post("/api/comecar-aventura", authMw, limiteIA, async (req, res) => {
     salvarMesa(codigo, { atoInicio: idAto });
     if (r?.narracao) registrar(codigo, { tipo: "narr", texto: texto(r.narracao, 2000) });
     gerarFundo(codigo, tema, cena);
+    NV.pedirPonto(codigo, `Ato 1 — ${a1.nome}`);
     res.json({ ok: true });
   } catch (e) { erro(res, 502, msgErro(e)); }
   finally { destravar(codigo); }
@@ -1200,6 +1209,10 @@ app.post("/api/usar-item", authMw, limiteIA, async (req, res) => {
       cura = R.rolar(item.efeito.slice(5)).total;
       alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
       registrar(codigo, { tipo: "roll", texto: `${f.nome} usa ${item.nome}${em}: ${alvo.nome} recupera ${cura} PV`, ok: true });
+    } else if (/^mana /.test(item.efeito)) {
+      cura = Math.min(alvo.manaMax - alvo.mana, Number(item.efeito.slice(5)) || 0);
+      alvo.mana += cura;
+      registrar(codigo, { tipo: "roll", texto: `${f.nome} usa ${item.nome}${em}: ${alvo.nome} recupera ${cura} de ${T.atributoMagiaDoTema(ctx.mesa.tema).toLowerCase()}`, ok: true });
     } else {
       registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Usa ${item.nome}${em}.` });
     }
@@ -1328,6 +1341,7 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   Object.assign(mesa, { tema: tema.id, temaNome: tema.nome, temaInspiracao: tema.inspiracao, temaIcone: tema.icone,
     duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco, nomes: tema.nomes });
   const av = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
+  NV.mesaPublica(mesa, req.uid);
   mesa.aventura = av ? av.id : "";
   mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";
   res.json(mesa);
@@ -1444,6 +1458,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
       combate.turno = null;
       turnoDe(combate);
       campos.combate = combate;
+      NV.aoEncontrar(codigo, combate.inimigos);
       combateNovo = true;
       registrar(codigo, { tipo: "sys", texto: "Combate! Iniciativa: " + combate.ordem.map((o) => `${o.nome} ${o.ini}`).join(" · ") });
     }
@@ -1907,7 +1922,7 @@ function aplicarArco(codigo, r) {
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
   if (entradas.length) {
     const ids = registrar(codigo, ...entradas);
-    if (novoAto) salvarMesa(codigo, { atoInicio: ids[0] });
+    if (novoAto) { salvarMesa(codigo, { atoInicio: ids[0] }); NV.pedirPonto(codigo, entradas[0].texto); }
   }
 }
 
@@ -1967,6 +1982,7 @@ async function avancarCombate(ctx, quemAgiu) {
     if (vivos.length) {
       registrar(codigo, { tipo: "sys", texto: "Combate encerrado. Vitória do grupo!" });
       for (const f of vivos) ganharXp(ctx, f, 25);
+      NV.aoVencer(ctx, vivos, combate.inimigos);
     } else {
       // ninguém fica preso numa mesa sem jogadores de pé
       for (const f of Object.values(ctx.fichas)) { f.pv = 1; salvarFicha(codigo, f); }
@@ -1976,6 +1992,10 @@ async function avancarCombate(ctx, quemAgiu) {
   }
   broadcast(codigo, "atualizar", {});
 }
+
+// ── Novidades: saque, loja, descanso curto, crônica, bestiário, pontos de salvamento e epílogo ──
+NV = require("./novidades").instalar({ app, db, authMw, limiteIA, mesaDoMembro, carregar, salvarMesa, salvarFicha, registrar, broadcast, erro, json, texto, agora,
+  travar, destravar, M, T, TRAVA_MS, msgErro, chaveIA: () => OPENROUTER_KEY });
 
 // ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);

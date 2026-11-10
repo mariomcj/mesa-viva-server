@@ -137,6 +137,8 @@ const NIVEL_MAXIMO = 20;
 const MAX_SOMA_ATRIBUTOS = 72;                               // na criação; cada nível de pontos soma +2
 const TIPOS_ITEM = ["pocao", "rapido", "equipamento", "municao", "outro"];
 const TIPOS_RAPIDOS = ["pocao", "rapido"];
+const RARIDADES_ITEM = ["comum", "incomum", "raro", "epico", "lendario"];
+const OURO_INICIAL = 15;
 const MAX_ITENS = 30;
 const MAX_QTD = 99;
 const MAX_MAGIAS = 40;
@@ -159,6 +161,9 @@ function bonusMagia(f) { return (f.proficiencia || 2) + mod(f.atributos?.[CONJUR
 function efeitoDeItem(v) {
   const s = String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   if (!s) return "";
+  // "mana N" (1 a 30): devolve energia de conjurar
+  const mm = s.match(/^mana (\d{1,2})$/);
+  if (mm) return Number(mm[1]) >= 1 && Number(mm[1]) <= 30 ? `mana ${Number(mm[1])}` : null;
   const m = s.match(/^cura (\d{1,2})d(\d{1,2})(?: ?\+ ?(\d{1,2}))?$/);
   if (!m) return null;
   const n = Number(m[1]), faces = Number(m[2]), k = Number(m[3] || 0);
@@ -174,7 +179,9 @@ function normalizarItem(it) {
   const qtd = Math.max(1, Math.min(MAX_QTD, Math.floor(Number(it.qtd)) || 1));
   const tipo = TIPOS_ITEM.includes(it.tipo) ? it.tipo : "outro";
   const efeito = TIPOS_RAPIDOS.includes(tipo) ? efeitoDeItem(it.efeito) || "" : "";   // só poção e item rápido têm efeito
-  return { nome, qtd, tipo, efeito, descricao: safeStr(it.descricao, "", 200) };
+  // raridade (itens do saque e da loja): só entra quando existe, para os itens antigos ficarem como eram
+  const raridade = RARIDADES_ITEM.includes(it.raridade) ? it.raridade : null;
+  return { nome, qtd, tipo, efeito, descricao: safeStr(it.descricao, "", 200), ...(raridade ? { raridade } : {}) };
 }
 
 /** Junta itens de mesmo nome (soma as quantidades) e limita a 30. */
@@ -329,6 +336,9 @@ function normalizarFicha(dados, uid, conceito) {
     conceito: conceito || safeStr(v.conceito, "", 300),
     notas: anotacoes,
     anotacoes,
+    // Ouro (loja da vila e saque) e o ato em que o descanso curto já foi usado. Ficha antiga começa com o ouro inicial.
+    ouro: v.ouro === undefined || v.ouro === null ? OURO_INICIAL : Math.max(0, Math.min(99999, Math.floor(Number(v.ouro)) || 0)),
+    descanso: Math.max(0, Math.min(3, Math.floor(Number(v.descanso)) || 0)),
   };
   f.pendencias = pendenciasDe(v.pendencias, f);
   return f;
@@ -515,5 +525,6 @@ module.exports = {
   montarRolagem, resolverRolagem, passarVez, chave, acharAtaque,
   CONJURADORES, NIVEIS_PONTOS, NIVEIS_TECNICA, NIVEL_MAXIMO, TIPOS_ITEM, TIPOS_RAPIDOS, MAX_ITENS, MAX_QTD, POCAO_DE_CURA, MAGIAS_INICIAIS,
   circuloMaximo, manaMaxima, bonusMagia, ehConjurador, efeitoDeItem, normalizarItem, juntarItens, equipamentoDerivado,
+  RARIDADES_ITEM, OURO_INICIAL,
   ganhosDoNivel, somarPendencias, qtdPendencia, ataqueDaTecnica, ataqueDaFicha, magiaDaFicha, itemDaFicha, temItemRapido,
 };
