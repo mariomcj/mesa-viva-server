@@ -277,3 +277,55 @@ test("com cobrança ativa, mesa sem créditos e sem teste é bloqueada com 402",
   await fetch(`${s.base}/api/admin/creditos`, { method: "POST", headers: { "Content-Type": "application/json", "x-admin-token": adm.token }, body: JSON.stringify({ conta: "dev-caio", quantidade: 5 }) });
   assert.equal((await a.post("/api/ideias", { codigo })).status, 200);
 });
+
+test("loja de ouro, poção e descanso curto", { timeout: 30_000 }, async (t) => {
+  const mock = await iniciarMock();
+  const s = await iniciarServidor({ OPENROUTER_URL: `http://127.0.0.1:${mock.address().port}` });
+  t.after(() => { s.proc.kill(); mock.close(); });
+  const a = cliente(s.base, "dev-duda");
+  const { j: { codigo } } = await a.post("/api/mesa/criar", { nome: "Duda" });
+  const p = await a.post("/api/criar-personagem", { conceito: "anão guerreiro" });
+  await a.post("/api/salvar-ficha", { codigo, ficha: p.j.ficha });
+  assert.equal((await a.post("/api/comecar-aventura", { codigo })).status, 200);
+  const adm = await fetch(`${s.base}/api/admin/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: "admin", pass: "mesaviva2026" }) }).then((r) => r.json());
+  const ajustar = (b) => fetch(`${s.base}/api/admin/fichas/${codigo}/dev-duda`, { method: "PUT", headers: { "Content-Type": "application/json", "x-admin-token": adm.token }, body: JSON.stringify(b) });
+  const ficha = async () => (await a.get(`/api/mesa/${codigo}/fichas`)).j["dev-duda"];
+
+  // Sem ouro: recusa
+  assert.equal((await a.post("/api/loja-ouro/comprar", { codigo, produto: "pocao" })).status, 400);
+  await ajustar({ ouro: 100, pv: 1 });
+  const cat = (await a.get("/api/regras/catalogo")).j;
+  assert.equal(cat.loja.produtos.pocao.preco, 25);
+
+  // Poção: compra, limite de 3, uso cura
+  for (let i = 0; i < 3; i++) assert.equal((await a.post("/api/loja-ouro/comprar", { codigo, produto: "pocao" })).status, 200);
+  assert.equal((await a.post("/api/loja-ouro/comprar", { codigo, produto: "pocao" })).status, 400);
+  let f = await ficha();
+  assert.equal(f.pocoes, 3);
+  assert.equal(f.ouro, 25);
+  const uso = await a.post("/api/ficha/usar-pocao", { codigo });
+  assert.equal(uso.status, 200, JSON.stringify(uso.j));
+  assert.ok(uso.j.ficha.pv >= 1 + 5);
+  assert.equal(uso.j.ficha.pocoes, 2);
+
+  // Descanso curto: uma vez por capítulo
+  await ajustar({ pv: 1 });
+  const d1 = await a.post("/api/ficha/descansar", { codigo });
+  assert.equal(d1.status, 200, JSON.stringify(d1.j));
+  assert.ok(d1.j.ficha.pv >= 3);
+  await ajustar({ pv: 1 });
+  assert.equal((await a.post("/api/ficha/descansar", { codigo })).status, 400);
+
+  // Taverna: cura total; salvar a ficha pelo app não apaga poções nem descanso
+  const tav = await a.post("/api/loja-ouro/comprar", { codigo, produto: "taverna" });
+  assert.equal(tav.status, 200, JSON.stringify(tav.j));
+  assert.equal(tav.j.ficha.pv, tav.j.ficha.pvMax);
+  assert.equal(tav.j.ficha.ouro, 15);
+  await a.post("/api/salvar-ficha", { codigo, ficha: { ...f, pocoes: 0, ouro: 999 } });
+  f = await ficha();
+  assert.equal(f.pocoes, 2);
+  assert.equal(f.ouro, 15);
+  assert.equal(f.descansoCapitulo, 0);
+  // Ferreiro sem item
+  assert.equal((await a.post("/api/loja-ouro/comprar", { codigo, produto: "ferreiro", item: "nada" })).status, 404);
+});

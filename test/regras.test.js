@@ -297,3 +297,22 @@ test("clima: chuva enfraquece fogo; neblina atrapalha Percepção", () => {
   const f = fichaBase();
   assert.equal(R.bonusPericia(f, "Percepção", { clima: "neblina" }), R.bonusPericia(f, "Percepção") - 2);
 });
+
+test("loja: ferreiro sobe a raridade, redistribuir custa 25 × nível, curas", () => {
+  const R = require("../regras");
+  const m = R.melhorarItem({ id: "x", nome: "Cota Raro", raridade: "raro", tipo: "armadura", bonus: 2, descricao: "+2 na CA." });
+  assert.equal(m.preco, 400);
+  assert.equal(m.item.raridade, "epico");
+  assert.equal(m.item.nome, "Cota Épico");
+  assert.equal(R.melhorarItem({ id: "y", nome: "Anel", raridade: "epico", tipo: "amuleto" }), null);
+  assert.equal(R.custoRedistribuir({ respecUsado: false, nivel: 5 }), 0);
+  assert.equal(R.custoRedistribuir({ respecUsado: true, nivel: 5 }), 125);
+  const f = { pv: 1, pvMax: 10, nivel: 3 };
+  assert.equal(R.curar(f, 50), 9);
+  assert.equal(f.pv, 10);
+  const pocao = R.curaPocao({ nivel: 1 }, () => 0);
+  assert.equal(pocao, 5);
+  const ficha = R.normalizarFicha({ pocoes: 9, descansoCapitulo: 2 }, "u");
+  assert.equal(ficha.pocoes, 3);
+  assert.equal(ficha.descansoCapitulo, 2);
+});

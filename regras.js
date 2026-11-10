@@ -352,6 +352,8 @@ function normalizarFicha(dados, uid, conceito) {
     subclasse,
     status: normalizarStatus(v.status),
     respecUsado: v.respecUsado === true,
+    pocoes: Math.max(0, Math.min(LOJA.maxPocoes, Math.floor(Number(v.pocoes) || 0))),
+    descansoCapitulo: Number.isInteger(v.descansoCapitulo) ? v.descansoCapitulo : -1,
     tracos: {
       personalidade: safeStr(v.tracos?.personalidade, "", 200),
       ideal: safeStr(v.tracos?.ideal, "", 200),
@@ -365,7 +367,7 @@ function normalizarFicha(dados, uid, conceito) {
 }
 
 /** Campos que só o servidor altera. O app pode editar o resto da ficha. */
-const CAMPOS_DO_SERVIDOR = ["xp", "nivel", "atributosGanhos", "ouro", "talentos", "subclasse", "itens", "status", "respecUsado"];
+const CAMPOS_DO_SERVIDOR = ["xp", "nivel", "atributosGanhos", "ouro", "talentos", "subclasse", "itens", "status", "respecUsado", "pocoes", "descansoCapitulo"];
 
 /** Junta a ficha editada no app com a progressão guardada no servidor. */
 function mesclarFichaEditada(editada, antiga) {
@@ -907,10 +909,60 @@ function catalogo() {
     climas: NOME_CLIMA,
     periodos: NOME_PERIODO,
     xp: XP,
+    loja: LOJA,
   };
 }
 
+// ── Loja de ouro e descanso ──
+// O ouro do saque e da venda de itens finalmente tem onde ser gasto.
+const LOJA = {
+  maxPocoes: 3,
+  produtos: {
+    taverna: { nome: "Noite na taverna", preco: 10, descricao: "Recupera todos os PV e tira os status. Fora de combate." },
+    pocao: { nome: "Poção de cura", preco: 25, descricao: "Guarde até 3. Cura 2d4 + 2 + nível; no combate gasta o seu turno." },
+    ferreiro: { nome: "Ferreiro", preco: null, descricao: "Melhora a raridade de um item seu (até Épico)." },
+    refazerSaque: { nome: "Revirar o saque", preco: 30, descricao: "Troca as 3 opções do seu saque atual por outras." },
+  },
+  // Preço para subir o item para a raridade seguinte.
+  ferreiro: { comum: 60, incomum: 150, raro: 400 },
+};
+
+/** Redistribuir pontos: a primeira é grátis; depois 25 × nível. */
+function custoRedistribuir(f) {
+  return f.respecUsado ? 25 * (f.nivel || 1) : 0;
+}
+
+/** Cura de uma poção: 2d4 + 2 + nível. */
+function curaPocao(f, rng = Math.random) {
+  return d(4, rng) + d(4, rng) + 2 + (f.nivel || 1);
+}
+
+/** Cura do descanso curto (1 por capítulo): 1d8 + nível. */
+function curaDescanso(f, rng = Math.random) {
+  return d(8, rng) + (f.nivel || 1);
+}
+
+/** Aplica uma cura sem passar do máximo e devolve quanto curou de fato. */
+function curar(f, quanto) {
+  const antes = f.pv;
+  f.pv = Math.min(f.pvMax, f.pv + Math.max(0, Math.floor(quanto)));
+  return f.pv - antes;
+}
+
+/** Item com a raridade seguinte; null se não dá para melhorar no ferreiro. */
+function melhorarItem(it) {
+  const preco = LOJA.ferreiro[it?.raridade];
+  if (!preco) return null;
+  const raridade = RARIDADES[RARIDADES.indexOf(it.raridade) + 1];
+  const bonus = BONUS_RARIDADE[raridade];
+  const antigo = ` ${NOME_RARIDADE[it.raridade]}`;
+  const nome = it.nome.endsWith(antigo) ? it.nome.slice(0, -antigo.length) + ` ${NOME_RARIDADE[raridade]}` : it.nome;
+  const descricao = it.descricao.replace(/\+\d+/, `+${bonus}`);
+  return { preco, item: normalizarItem({ ...it, raridade, bonus, nome, descricao }) };
+}
+
 module.exports = {
+  LOJA, custoRedistribuir, curaPocao, curaDescanso, curar, melhorarItem,
   ATRIBUTOS, NOME_ATRIBUTO, PERICIAS, RACAS, CLASSES, SEXOS, DADO_DE_VIDA,
   ELEMENTOS, NOME_ELEMENTO, STATUS, TALENTOS, SUBCLASSES, RARIDADES, NOME_RARIDADE,
   CLIMAS, PERIODOS, NOME_CLIMA, NOME_PERIODO, XP,

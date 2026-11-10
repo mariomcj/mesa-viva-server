@@ -971,7 +971,7 @@ app.get("/api/mesa/:codigo", (req, res) => {
   // Situação dos créditos de quem paga a mesa (para o aviso de teste grátis no app).
   try {
     const s = creditos.situacao(contaDaMesa(mesa));
-    if (s) mesa.creditos = { cobrancaAtiva: s.cobrancaAtiva, emTeste: s.teste.ativo, diasTeste: s.teste.diasRestantes, horasTeste: s.teste.horasRestantes, saldo: s.creditos, podeJogar: s.podeJogar };
+    if (s) mesa.creditos = { cobrancaAtiva: s.cobrancaAtiva, emTeste: s.teste.ativo, diasTeste: s.teste.diasRestantes, horasTeste: s.teste.horasRestantes, saldo: s.creditos, podeJogar: s.podeJogar, aviso: s.aviso || null };
   } catch {}
   delete mesa.donoConta;
   const membros = db.prepare("SELECT uid, nome, ultimaAtividade FROM membros WHERE codigo = ?").all(codigo);
@@ -1145,7 +1145,7 @@ app.post("/api/ficha/redistribuir", authMw, (req, res) => {
   const soma = R.ATRIBUTOS.reduce((s, a) => s + novos[a], 0);
   const max = 72 + (f.atributosGanhos || 0);
   if (soma > max) return erro(res, 400, `A soma dos atributos pode ser no máximo ${max} (está ${soma}).`);
-  const custo = f.respecUsado ? 50 : 0;
+  const custo = R.custoRedistribuir(f);
   if ((f.ouro || 0) < custo) return erro(res, 400, `Redistribuir de novo custa ${custo} peças de ouro.`);
   f.ouro -= custo;
   f.atributos = novos;
@@ -1189,6 +1189,95 @@ app.post("/api/ficha/dispensar-item", authMw, (req, res) => {
   salvarFicha(codigo, f);
   broadcast(codigo, "ficha", { uid: f.uid });
   res.json({ ok: true });
+});
+
+// ── Loja de ouro, poções e descanso ──
+function respostaFicha(f) {
+  return { ficha: { ...f, pendencias: R.pendencias(f), caEfetiva: R.caEfetiva(f), xpProximo: R.xpParaProximo(f.nivel) } };
+}
+
+app.post("/api/loja-ouro/comprar", authMw, (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { ctx, f, codigo } = x;
+  const produto = String(req.body?.produto || "");
+  const P = R.LOJA.produtos;
+  let custo, msg;
+  if (produto === "taverna") {
+    if (ctx.mesa.combate) return erro(res, 400, "Não dá para descansar na taverna durante o combate.");
+    if (f.pv <= 0) return erro(res, 400, "Personagem caído precisa de cura antes.");
+    custo = P.taverna.preco;
+    if (f.ouro < custo) return erro(res, 400, `Uma noite na taverna custa ${custo} de ouro.`);
+    f.pv = f.pvMax; f.status = [];
+    msg = `${f.nome} passou a noite na taverna e acordou renovado (${custo} de ouro).`;
+  } else if (produto === "pocao") {
+    custo = P.pocao.preco;
+    if (f.pocoes >= R.LOJA.maxPocoes) return erro(res, 400, `Dá para carregar no máximo ${R.LOJA.maxPocoes} poções.`);
+    if (f.ouro < custo) return erro(res, 400, `A poção custa ${custo} de ouro.`);
+    f.pocoes += 1;
+    msg = `${f.nome} comprou uma poção de cura (${custo} de ouro).`;
+  } else if (produto === "ferreiro") {
+    if (ctx.mesa.combate) return erro(res, 400, "O ferreiro não trabalha no meio de uma luta.");
+    const idx = (f.itens || []).findIndex((i) => i.id === String(req.body?.item || ""));
+    if (idx < 0) return erro(res, 404, "Item não encontrado.");
+    const m = R.melhorarItem(f.itens[idx]);
+    if (!m) return erro(res, 400, "Esse item já está no máximo que o ferreiro alcança.");
+    custo = m.preco;
+    if (f.ouro < custo) return erro(res, 400, `O ferreiro cobra ${custo} de ouro por esse trabalho.`);
+    const antigo = f.itens[idx].nome;
+    f.itens[idx] = m.item;
+    msg = `O ferreiro melhorou ${antigo}: agora é ${m.item.nome} (${R.NOME_RARIDADE[m.item.raridade]}, ${custo} de ouro).`;
+  } else if (produto === "refazerSaque") {
+    const saque = json(ctx.mesa.saque) || {};
+    if (!saque[req.uid]) return erro(res, 400, "Você não tem saque para revirar.");
+    custo = P.refazerSaque.preco;
+    if (f.ouro < custo) return erro(res, 400, `Revirar o saque custa ${custo} de ouro.`);
+    const melhorAtual = Math.max(...saque[req.uid].map((i) => R.RARIDADES.indexOf(i.raridade)));
+    saque[req.uid] = R.gerarSaque(Math.max(0, melhorAtual - 1));
+    salvarMesa(codigo, { saque: JSON.stringify(saque) });
+    msg = `${f.nome} revirou o saque atrás de algo melhor (${custo} de ouro).`;
+  } else return erro(res, 400, "Produto inválido.");
+  f.ouro -= custo;
+  salvarFicha(codigo, f);
+  registrar(codigo, { tipo: "sys", texto: msg, ok: 1, evento: "loja" });
+  broadcast(codigo, "ficha", { uid: f.uid });
+  broadcast(codigo, "atualizar", {});
+  res.json(respostaFicha(f));
+});
+
+app.post("/api/ficha/usar-pocao", authMw, async (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { ctx, f, codigo } = x;
+  if (f.pocoes <= 0) return erro(res, 400, "Você não tem poções.");
+  const combate = ctx.mesa.combate;
+  if (combate) {
+    if (R.vezAtual(combate)?.id !== req.uid) return erro(res, 400, "No combate, a poção só pode ser tomada na sua vez.");
+    if (ctx.mesa.rolagem) return erro(res, 400, "Resolva a rolagem pendente antes.");
+  }
+  if (f.pv >= f.pvMax) return erro(res, 400, "Seus PV já estão cheios.");
+  const curou = R.curar(f, R.curaPocao(f));
+  f.pocoes -= 1;
+  salvarFicha(codigo, f);
+  registrar(codigo, { tipo: "sys", texto: `${f.nome} bebeu uma poção e recuperou ${curou} PV (${f.pv}/${f.pvMax}).`, ok: 1, evento: "cura" });
+  res.json(respostaFicha(f));
+  if (combate) {
+    try { await avancarCombate({ ...ctx, fichas: { ...ctx.fichas, [f.uid]: f } }); } catch (e) { console.log(`[pocao] ${e.message}`); }
+  } else broadcast(codigo, "ficha", { uid: f.uid });
+});
+
+app.post("/api/ficha/descansar", authMw, (req, res) => {
+  const x = fichaDoJogador(req, res); if (!x) return;
+  const { ctx, f, codigo } = x;
+  if (ctx.mesa.combate) return erro(res, 400, "Não dá para descansar durante o combate.");
+  if (f.pv <= 0) return erro(res, 400, "Personagem caído precisa de cura antes.");
+  const cap = Number(ctx.mesa.capitulo) || 0;
+  if (f.descansoCapitulo === cap) return erro(res, 400, "Você já fez o descanso curto deste capítulo.");
+  if (f.pv >= f.pvMax) return erro(res, 400, "Seus PV já estão cheios.");
+  const curou = R.curar(f, R.curaDescanso(f));
+  f.descansoCapitulo = cap;
+  salvarFicha(codigo, f);
+  registrar(codigo, { tipo: "sys", texto: `${f.nome} fez um descanso curto e recuperou ${curou} PV (${f.pv}/${f.pvMax}).`, ok: 1, evento: "cura" });
+  broadcast(codigo, "ficha", { uid: f.uid });
+  res.json(respostaFicha(f));
 });
 
 // ── Votação do grupo ──
