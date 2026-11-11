@@ -144,12 +144,14 @@ async function renderDashboard(parent, dados) {
         <button class="${activeTab==='geral'?'ativo':''}" onclick="APP._tab='geral';APP.render()">📊 Visão Geral</button>
         <button class="${activeTab==='mesas'?'ativo':''}" onclick="APP._tab='mesas';APP.render()">🎲 Mesas (${mesas.length})</button>
         <button class="${activeTab==='usuarios'?'ativo':''}" onclick="APP._tab='usuarios';APP.render()">👥 Usuários</button>
+        <button class="${activeTab==='uso'?'ativo':''}" onclick="APP._tab='uso';APP.render()">💰 Uso da IA</button>
       </div>
       <div id="tab-content"></div>
     </div>
   `;
   if (activeTab === 'geral') renderVisaoGeral('tab-content', mesas);
   else if (activeTab === 'usuarios') renderUsuarios('tab-content');
+  else if (activeTab === 'uso') renderUso('tab-content');
   else renderTabMesas('tab-content', mesas, emJogo, emLobby);
 }
 
@@ -349,11 +351,75 @@ APP.verMesa = async function(cod) {
       ${membros.length ? `<div class="flex" style="flex-wrap:wrap;gap:.3rem">${membros.map(p => `<span class="badge">${esc(p.nome||p.uid.slice(0,8))}</span>`).join(' ')}</div>` : '<p class=\"aviso\">Nenhum membro.</p>'}
       <div class="flex mt-1">
         <button class="btn btn-danger" onclick="if(confirm('Excluir mesa ${cod}? Isso apaga fichas, membros e logs.')){APP.excluirMesa('${cod}');fecharModal();APP.render()}">Excluir mesa</button>
+        <button class="btn" onclick="fecharModal();APP.verMundo('${cod}')">🌦 Mundo (depuração)</button>
         <button class="btn" onclick="fecharModal()">Fechar</button>
       </div>
     </div></div>
   `;
   const mEl = document.createElement('div'); mEl.innerHTML = html; document.body.appendChild(mEl.firstElementChild);
+};
+
+// ── Uso da IA (chamadas, tokens e custo por dia) e depuração do mundo da mesa ──
+async function renderUso(elId) {
+  const el = document.getElementById(elId);
+  try {
+    const u = await APP.req('GET', '/api/admin/uso?dias=30');
+    const n = (v) => Number(v || 0).toLocaleString('pt-BR');
+    const us = (v) => 'US$ ' + Number(v || 0).toFixed(4);
+    const tipos = Object.entries(u.total || {});
+    el.innerHTML = `
+      <div class="card">
+        <h2>💰 Uso da IA nos últimos ${u.dias} dias</h2>
+        ${tipos.length ? `<table class="table"><tr><th>Tipo</th><th>Chamadas</th><th>Tokens de entrada</th><th>Tokens de saída</th><th>Custo informado</th></tr>
+          ${tipos.map(([t, x]) => `<tr><td>${esc(t)}</td><td>${n(x.chamadas)}</td><td>${n(x.entrada)}</td><td>${n(x.saida)}</td><td>${us(x.custo)}</td></tr>`).join('')}</table>`
+          : '<p class="aviso">Nenhuma chamada registrada ainda.</p>'}
+        <p class="aviso">"fundo-reaproveitado" e "fundo-biblioteca" são imagens que deixaram de ser geradas. O custo só aparece quando o provedor informa.</p>
+      </div>
+      <div class="card">
+        <h2>Por dia</h2>
+        ${(u.linhas || []).length ? `<table class="table"><tr><th>Dia</th><th>Tipo</th><th>Modelo</th><th>Chamadas</th><th>Entrada</th><th>Saída</th><th>Custo</th></tr>
+          ${u.linhas.map((l) => `<tr><td>${esc(l.dia)}</td><td>${esc(l.tipo)}</td><td>${esc(l.modelo)}</td><td>${n(l.chamadas)}</td><td>${n(l.entrada)}</td><td>${n(l.saida)}</td><td>${us(l.custo)}</td></tr>`).join('')}</table>`
+          : '<p class="aviso">Sem dados.</p>'}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="card"><p class="erro">Erro ao carregar o uso: ${esc(e.message)}</p></div>`;
+  }
+}
+
+APP.verMundo = async function(cod, dados) {
+  let d;
+  try { d = dados || await this.req('GET', `/api/admin/mesas/${cod}/mundo`); } catch (e) { alert(e.message); return; }
+  const opcoes = (lista, atual) => ['', ...lista].map((x) => `<option value="${esc(x)}" ${x === atual ? 'selected' : ''}>${esc(x || '(nenhum)')}</option>`).join('');
+  const linhas = (o, f) => Object.entries(o || {}).map(f).join('') || '<li class="aviso">nada ainda</li>';
+  const salvar = `APP.salvarMundo('${cod}',{clima:document.getElementById('wclima').value,periodo:document.getElementById('wperiodo').value,ato:Number(document.getElementById('wato').value)})`;
+  const html = `
+    <div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
+      <h2>Mundo da mesa ${esc(d.codigo)}</h2>
+      <p class="aviso">Fase ${esc(d.fase)} · dia ${d.dia} · cena: ${esc(d.cena || '—')}${d.concluida ? ' · história concluída' : ''}</p>
+      <div class="grid cols-2" style="margin-bottom:.5rem">
+        <div><label>Clima</label><select id="wclima">${opcoes(d.climas, d.mundo.clima)}</select></div>
+        <div><label>Período</label><select id="wperiodo">${opcoes(d.periodos, d.mundo.periodo)}</select></div>
+        <div><label>Ato (só com a aventura em andamento)</label><select id="wato">${[1, 2, 3].map((a) => `<option ${a === d.ato ? 'selected' : ''}>${a}</option>`).join('')}</select></div>
+        <div><label>Encontro à espera</label><p>${esc(d.mundo.encontro || '(nenhum)')}</p></div>
+      </div>
+      <div class="flex" style="flex-wrap:wrap;gap:.3rem">
+        <button class="btn btn-primary btn-sm" onclick="${salvar}">Salvar clima, período e ato</button>
+        <button class="btn btn-sm" onclick="APP.salvarMundo('${cod}',{encontro:true})">Sortear encontro de estrada</button>
+        <button class="btn btn-danger btn-sm" onclick="if(confirm('Apagar a memória desta mesa (fatos, NPCs, reputação, clima)?'))APP.salvarMundo('${cod}',{limpar:true})">Limpar memória</button>
+      </div>
+      <h3 class="mt-1">Fatos</h3><ul>${linhas(d.mundo.fatos, ([k, x]) => `<li><b>${esc(k)}</b>: ${esc(x.v)}</li>`)}</ul>
+      <h3>NPCs</h3><ul>${linhas(d.mundo.npcs, ([k, x]) => `<li><b>${esc(k)}</b>: ${esc(x.v)}</li>`)}</ul>
+      <h3>Reputação</h3><ul>${linhas(d.mundo.reputacao, ([k, v]) => `<li><b>${esc(k)}</b>: ${v > 0 ? '+' : ''}${v}</li>`)}</ul>
+      <div class="flex mt-1"><button class="btn" onclick="fecharModal();APP.verMesa('${cod}')">Voltar</button><button class="btn" onclick="fecharModal()">Fechar</button></div>
+    </div></div>`;
+  const el = document.createElement('div'); el.innerHTML = html; document.body.appendChild(el.firstElementChild);
+};
+APP.salvarMundo = async function(cod, corpo) {
+  try {
+    const d = await this.req('PUT', `/api/admin/mesas/${cod}/mundo`, corpo);
+    fecharModal();
+    this.verMundo(cod, d);
+  } catch (e) { alert(e.message); }
 };
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }

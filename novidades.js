@@ -205,7 +205,7 @@ function normalizarEpilogo(r, fichas, texto) {
 
 // ── Pontos de salvamento ──
 const COLUNAS_DO_PONTO = ["fase", "cena", "resumo", "fundo", "combate", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr",
-  "elementos", "ultimaNarrativa", "saque", "bestiario", "epilogo"];
+  "elementos", "ultimaNarrativa", "saque", "bestiario", "epilogo", "mundo"];
 const MAX_PONTOS = 5;
 
 /**

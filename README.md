@@ -31,6 +31,12 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 | `MODELO_RAPIDO`, `MODELO_CAPRICHADO` | não | Modelos do OpenRouter para cada modo do Mestre |
 | `QUALIDADE_ARCO` | não | `rapido` usa o modelo rápido para criar o arco da história (padrão: o caprichado, uma chamada por aventura) |
 | `IMAGENS_DE_FUNDO` | não | `0` desliga a imagem de fundo gerada a cada cena nova (economiza créditos) |
+| `XP_POR_ACAO` | não | XP por ação narrada. Padrão `5`; `2` deixa a subida de nível mais lenta (recomendado em produção) |
+| `XP_POR_ATO`, `XP_POR_FIM` | não | XP que todos ganham quando o ato vira (padrão `40`) e quando a história termina (padrão `60`); `0` desliga |
+| `CHANCE_VISIVEL` | não | `1` mostra a chance de sucesso no texto de cada rolagem, quando a mesa mostra a dificuldade |
+| `FUGA_DE_INIMIGOS` | não | `0` impede inimigos muito feridos de fugir |
+| `ENCONTROS_DE_ESTRADA` | não | `0` desliga as sementes de encontro entre cenas |
+| `REAPROVEITAR_FUNDOS` | não | `0` gera sempre uma imagem nova; `exato` só reaproveita o fundo da mesma cena (padrão: mesma cena e mesmo tipo de lugar) |
 | `IMAGENS_DE_MAPA` | não | `0` desliga a imagem do mapa de batalha gerada a cada combate novo (economiza créditos; o app desenha um tabuleiro no lugar) |
 | `LIMITE_IA_MAX` | não | Pedidos à IA por conta a cada 10 min (padrão 40) |
 
@@ -133,3 +139,20 @@ Tudo aqui é acréscimo: sem usar, o jogo se comporta como antes.
 - **Pontos de salvamento**: um automático a cada ato, mais `POST /api/salvamento/criar`. `POST /api/salvamento/restaurar` (só o dono) volta a mesa e as fichas ao ponto e apaga o diário posterior. Ficam os 5 mais recentes.
 - **Epílogo**: `POST /api/epilogo`, depois do fim da aventura; o Mestre conta o destino de cada personagem (uma chamada à IA, guardada na mesa).
 - Itens novos usam os tipos que já existiam; o único efeito novo é `mana N`.
+
+## Melhorias só de servidor (`melhorias.js`)
+
+Valem com o app já instalado: aparecem na narração, no diário e no texto das rolagens. Tudo é acréscimo; as frases que já existiam no diário não mudam (o app reconhece eventos pelo texto) e nenhum aviso novo usa o tipo `narr` (o app leria em voz alta).
+
+- **Memória da campanha** (`mesas.mundo`): o Mestre pode mandar `"memoria": {"fatos": {...}, "npcs": {...}, "reputacao": {...}}`. O servidor guarda (até 40 fatos, 24 NPCs e 8 grupos, reputação de -10 a +10) e manda tudo de volta em todo contexto. A mudança de reputação aparece no diário. O app não recebe a memória; os pontos de salvamento guardam e reiniciar a mesa apaga.
+- **Encontros de estrada**: depois de 6 narrações e de uma mudança de cena, fora de combate, o Mestre recebe uma semente de encontro (uma vez).
+- **Clima e período**: `"clima"` e `"periodo"` na resposta do Mestre. À noite e na neblina, Furtividade +2 e Percepção -2; na chuva, Atletismo e Acrobacia -2; o ajuste (no máximo ±2) entra no bônus e no texto da rolagem. O dia novo traz a manhã. `GET /api/mesa/:codigo` devolve `clima` e `periodo`.
+- **Chance de sucesso** (`CHANCE_VISIVEL=1`): `(chance 55%)` no fim do texto da rolagem, só quando a mesa mostra a dificuldade.
+- **Selos de resultado**: além de `acertou, N de dano`, `sucesso` e `falha`, o diário passa a trazer `crítico! N de dano`, `errou por pouco`, `falha por pouco`, `sucesso crítico`, `falha crítica`, `fraqueza: N de dano`, `resistiu: N de dano` e `imune: 0 de dano`.
+- **Elementos** (fogo, gelo, raio, veneno, luz, sombra): o elemento vem do nome do ataque ou da magia; o inimigo pode ter `fraquezas` (dano ×1,5), `resistencias` (metade) e `imunidades` (zero). Na chuva o fogo causa metade do dano.
+- **Condições com duração** (envenenado, em chamas, atordoado, protegido, regenerando): o Mestre aplica em `efeitos` (`{"alvo","status","turnos"}`); um crítico de fogo, veneno ou raio também deixa a condição. O efeito vale no começo do turno de quem a tem, de 1 a 5 turnos, só em combate; some no fim da luta ou no dia seguinte.
+- **Inimigos que fogem**: com 1/4 da vida ou menos e em desvantagem numérica, metade das vezes o inimigo foge em vez de atacar (chefes com 40 PV ou mais e criaturas com menos de 6 PV não fogem).
+- **XP**: `XP_POR_ACAO` por ação narrada e um marco para todos na virada de cada ato e no fim da história.
+- **Fundos reaproveitados**: antes de gerar uma imagem, o servidor procura um arquivo em `public/fundos/<tema>/` ou `public/fundos/geral/` com o nome da cena ou do tipo de lugar (`taverna.webp`, `floresta.jpg`...), depois um fundo já gerado para a mesma cena do mesmo tema e, havendo 2 variantes, um do mesmo tipo de lugar. Só reaproveita imagens salvas neste servidor (`public/images/`).
+- **Uso da IA**: cada chamada soma chamadas, tokens e custo (quando o provedor informa) em `uso_ia`, por dia, tipo e modelo. `GET /api/admin/uso?dias=30` e a aba "Uso da IA" do painel.
+- **Depuração**: `GET` e `PUT /api/admin/mesas/:codigo/mundo` (e o botão "Mundo" no painel) forçam clima, período, ato, fatos, reputação e o próximo encontro.

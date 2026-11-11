@@ -340,6 +340,9 @@ function normalizarFicha(dados, uid, conceito) {
     ouro: v.ouro === undefined || v.ouro === null ? OURO_INICIAL : Math.max(0, Math.min(99999, Math.floor(Number(v.ouro)) || 0)),
     descanso: Math.max(0, Math.min(3, Math.floor(Number(v.descanso)) || 0)),
   };
+  // Condições com duração (envenenado, protegido...): só aparecem na ficha enquanto valem
+  const condicoes = statusValidos(v.status);
+  if (condicoes.length && f.pv > 0) f.status = condicoes;
   f.pendencias = pendenciasDe(v.pendencias, f);
   return f;
 }
@@ -372,8 +375,32 @@ function iniciativa(ficha) {
   return d(20) + mod(ficha.atributos.des);
 }
 
+// ── Elementos e condições (as regras ficam em melhorias.js; aqui só o que a ficha e o inimigo guardam) ──
+const ELEMENTOS = ["fogo", "gelo", "raio", "veneno", "luz", "sombra"];
+const STATUS = ["envenenado", "em_chamas", "atordoado", "protegido", "regenerando"];
+const MAX_TURNOS_STATUS = 5;
+/** Lista de elementos válidos, sem repetir (aceita com ou sem acento e maiúsculas). */
+function elementosValidos(v) {
+  const saida = [];
+  for (const x of Array.isArray(v) ? v : []) { const e = chave(x); if (ELEMENTOS.includes(e) && !saida.includes(e)) saida.push(e); }
+  return saida;
+}
+/** Condições válidas de uma ficha ou inimigo: [{ tipo, turnos }], uma de cada tipo, com 1 a 5 turnos. */
+function statusValidos(v) {
+  const saida = [];
+  for (const s of Array.isArray(v) ? v : []) {
+    const turnos = Math.min(MAX_TURNOS_STATUS, Math.floor(Number(s?.turnos)) || 0);
+    if (s && STATUS.includes(s.tipo) && turnos > 0 && !saida.some((x) => x.tipo === s.tipo)) saida.push({ tipo: s.tipo, turnos });
+  }
+  return saida;
+}
+
 function criarInimigo(id, dados) {
+  // fraquezas, resistências e imunidades só entram quando o Mestre mandou alguma (inimigo comum fica como sempre foi)
+  const extras = {};
+  for (const k of ["fraquezas", "resistencias", "imunidades"]) { const l = elementosValidos(dados[k]); if (l.length) extras[k] = l; }
   return {
+    ...extras,
     id, nome: dados.nome, pv: Math.max(1, dados.pv || 7),
     pvMax: Math.max(1, dados.pv || 7), ca: Math.max(10, dados.ca || 13),
     ataque: Number(dados.ataque) || 4, dano: dados.dano || "1d6+2", des: Number(dados.des) || 2,
@@ -440,26 +467,38 @@ function montarRolagem(ficha, pedido, combate, id) {
     bonus: bonusPericia(ficha, pericia), cd, motivo: safeStr(pedido.motivo, "", 120) };
 }
 
-function resolverRolagem(rol, natural, combate, nomeAtacante) {
+/**
+ * `opcoes` (opcional): ajustarDano(rol, alvo, dano, critico) => { dano, selo, nota, avisos, depois } muda o dano pelo elemento;
+ * selo(rol, resultado, seloDoElemento) => texto curto do resultado. Sem opções, resolve como sempre.
+ */
+function resolverRolagem(rol, natural, combate, nomeAtacante, opcoes = {}) {
   natural = Math.max(1, Math.min(20, Math.round(Number(natural)) || 1));
   const total = natural + (rol.bonus || 0);
   const sucesso = natural === 20 || (natural !== 1 && total >= (rol.cd || 13));
-  let dano, descricao;
+  let dano, descricao, ajuste = null;
   if (rol.tipo === "ataque") {
     if (sucesso) {
       const critico = natural === 20;
       const r = rolar(rol.dano || "1d4", critico);
       dano = r.total;
       const alvo = combate?.inimigos?.find((i) => i.id === rol.alvo || i.nome === rol.alvo);
+      if (alvo && opcoes.ajustarDano) {
+        ajuste = opcoes.ajustarDano(rol, alvo, dano, critico) || null;
+        if (ajuste && Number.isFinite(ajuste.dano)) dano = Math.max(0, Math.round(ajuste.dano));
+      }
       if (alvo) alvo.pv = Math.max(0, alvo.pv - dano);
-      descricao = `${rol.rotulo}: ${natural}${sinal(rol.bonus)} = ${total} vs CA ${rol.cd} — ${critico ? "CRÍTICO! " : ""}${dano} de dano.`;
+      if (ajuste?.depois) ajuste.depois();
+      descricao = `${rol.rotulo}: ${natural}${sinal(rol.bonus)} = ${total} vs CA ${rol.cd} — ${critico ? "CRÍTICO! " : ""}${dano} de dano.${ajuste?.nota ? ` (${ajuste.nota})` : ""}`;
     } else {
       descricao = `${rol.rotulo}: ${natural}${sinal(rol.bonus)} = ${total} vs CA ${rol.cd} — errou.`;
     }
   } else {
     descricao = `${rol.rotulo}: ${natural}${sinal(rol.bonus)} = ${total} vs CD ${rol.cd} — ${sucesso ? "sucesso" : "falha"}.`;
   }
-  return { natural, total, sucesso, dano, descricao };
+  const resultado = { natural, total, sucesso, dano, descricao };
+  if (opcoes.selo) { const selo = opcoes.selo(rol, resultado, ajuste?.selo || ""); if (selo) resultado.selo = selo; }
+  if (ajuste?.avisos?.length) resultado.avisos = ajuste.avisos;
+  return resultado;
 }
 
 /**
@@ -468,11 +507,14 @@ function resolverRolagem(rol, natural, combate, nomeAtacante) {
  * `opcoes.tatica(inimigo, alvosVivos)` (combate com mapa): move o inimigo e devolve { alvo|null, linhas, bonusCA };
  * sem alvo, o inimigo só se move. Sem tática (combate antigo), ataca um personagem de pé ao acaso.
  * Cada item de `ocorrido`: { linha, log: { texto, ok, tipo? } } (ok null = movimento, neutro).
+ * Opcionais: `opcoes.inicioDoTurno(quem, "pj"|"ini")` => { linhas, pula } (condições com duração),
+ * `opcoes.foge(inimigo, c, alvosVivos)` => o inimigo foge em vez de agir, `opcoes.bonusCA(alvo)` => CA extra do alvo.
  */
 function passarVez(c, fichas, quemAgiu, opcoes = {}) {
   const ocorrido = [];
   const lista = Object.values(fichas);
   const avancar = () => { c.vez = (Number(c.vez) || 0) + 1; if (c.vez >= c.ordem.length) { c.vez = 0; c.rodada = (c.rodada || 1) + 1; } };
+  const anotar = (linhas) => { for (const l of linhas || []) ocorrido.push({ linha: l, log: { texto: l, ok: null, tipo: "sys" } }); };
   if (!c.ordem?.length) return ocorrido;
   c.vez = (Number(c.vez) || 0) % c.ordem.length;
   if (quemAgiu && vezAtual(c)?.id === quemAgiu) avancar();
@@ -482,6 +524,16 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
     if (!atual) break;
     if (atual.tipo === "pj") {
       const f = lista.find((ff) => ff.uid === atual.id);
+      if (f && f.pv > 0 && opcoes.inicioDoTurno) {
+        // condições do personagem, uma vez por turno (a marca evita repetir se a vez não mudou)
+        const marca = `${c.rodada || 1}:${c.vez}`;
+        if (c.statusVez !== marca) {
+          c.statusVez = marca;
+          const t = opcoes.inicioDoTurno(f, "pj") || {};
+          anotar(t.linhas);
+          if (f.pv <= 0 || t.pula) { avancar(); continue; }
+        }
+      }
       if (f && f.pv > 0) break;          // vez de um jogador de pé: para aqui
       if (!lista.some((ff) => ff.pv > 0)) break;
       avancar();                          // jogador caído ou que saiu da mesa perde a vez
@@ -489,8 +541,20 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
     }
     const inimigo = c.inimigos.find((i) => i.id === atual.id);
     if (!inimigo || inimigo.pv <= 0) { avancar(); continue; }
+    if (opcoes.inicioDoTurno) {
+      const t = opcoes.inicioDoTurno(inimigo, "ini") || {};
+      anotar(t.linhas);
+      if (inimigo.pv <= 0 || t.pula) { avancar(); continue; }
+    }
     const alvos = lista.filter((f) => f.pv > 0);
     if (!alvos.length) break;
+    if (opcoes.foge && opcoes.foge(inimigo, c, alvos)) {
+      inimigo.pv = 0;
+      inimigo.fugiu = true;
+      anotar([`${inimigo.nome} está muito ferido e foge do combate.`]);
+      avancar();
+      continue;
+    }
     let alvo, bonusCA = 0;
     if (opcoes.tatica) {
       const plano = opcoes.tatica(inimigo, alvos) || {};
@@ -501,7 +565,8 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
     } else {
       alvo = alvos[Math.floor(Math.random() * alvos.length)];
     }
-    const ca = alvo.ca + bonusCA;
+    const protecao = opcoes.bonusCA ? Number(opcoes.bonusCA(alvo)) || 0 : 0;
+    const ca = alvo.ca + bonusCA + protecao;
     const nat = d(20);
     const total = nat + inimigo.ataque;
     const acertou = nat === 20 || (nat !== 1 && total >= ca);
@@ -510,7 +575,7 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
       dano = rolar(inimigo.dano, nat === 20).total;
       alvo.pv = Math.max(0, alvo.pv - dano);
     }
-    const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${ca}${bonusCA ? ` (cobertura +${bonusCA})` : ""} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
+    const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${ca}${bonusCA ? ` (cobertura +${bonusCA})` : ""}${protecao ? ` (protegido +${protecao})` : ""} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
     ocorrido.push({ linha, log: { texto: linha, ok: acertou } });
     avancar();
   }
@@ -526,5 +591,6 @@ module.exports = {
   CONJURADORES, NIVEIS_PONTOS, NIVEIS_TECNICA, NIVEL_MAXIMO, TIPOS_ITEM, TIPOS_RAPIDOS, MAX_ITENS, MAX_QTD, POCAO_DE_CURA, MAGIAS_INICIAIS,
   circuloMaximo, manaMaxima, bonusMagia, ehConjurador, efeitoDeItem, normalizarItem, juntarItens, equipamentoDerivado,
   RARIDADES_ITEM, OURO_INICIAL,
+  ELEMENTOS, STATUS, MAX_TURNOS_STATUS, elementosValidos, statusValidos,
   ganhosDoNivel, somarPendencias, qtdPendencia, ataqueDaTecnica, ataqueDaFicha, magiaDaFicha, itemDaFicha, temItemRapido,
 };

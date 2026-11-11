@@ -292,7 +292,7 @@ function carregar(codigo, uid) {
 }
 
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
-  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura", "saque", "bestiario", "epilogo"]);
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura", "saque", "bestiario", "epilogo", "mundo"]);
 function salvarMesa(codigo, campos) {
   // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
   const c = campos.combate;
@@ -346,6 +346,14 @@ function destravar(codigo) { salvarMesa(codigo, { processando: null }); NV?.fech
 
 /** Ganchos das novidades (saque, bestiário, pontos de salvamento); preenchido depois das rotas. */
 let NV = null;
+// Melhorias só de servidor (memória, clima, elementos, condições, fundos, uso): ligadas mais abaixo
+let MH = null;
+/** XP por ação narrada. Padrão 5; XP_POR_ACAO no .env deixa a subida de nível mais lenta (recomendado: 2). */
+function xpPorAcao() {
+  const v = process.env.XP_POR_ACAO;
+  const n = Math.round(Number(v));
+  return v === undefined || v === "" || !Number.isFinite(n) ? 5 : Math.max(0, Math.min(50, n));
+}
 
 const msgErro = (e) => (e instanceof M.ErroMestre ? e.message : "O Mestre não respondeu. Tente de novo.");
 
@@ -621,6 +629,7 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
       arco: null, arcoAjustes: [], ato: 1, arcoConcluido: 0, atoInicio: 0, dia: 1, diaNarr: 0, elementos: [] });
   })();
   NV.aoReiniciar(codigo);
+  MH.aoReiniciar(codigo);
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
@@ -752,7 +761,7 @@ app.post("/api/salvar-ficha", authMw, (req, res) => {
     // saguão: livre dentro das regras de criação; XP, nível e pendências são do servidor; vida e mana cheias
     const criacao = ultimaCriacao(req.uid);
     nova = R.normalizarFicha({ ...recebida, xp: antiga?.xp ?? 0, nivel: antiga?.nivel ?? 1, pendencias: antiga?.pendencias ?? null,
-      ouro: antiga?.ouro, descanso: antiga?.descanso ?? 0,
+      ouro: antiga?.ouro, descanso: antiga?.descanso ?? 0, status: undefined,
       pv: undefined, mana: undefined, anotacoes: anotacoesRecebidas(recebida, antiga),
       magias: magiasPermitidas(recebida, antiga, criacao), inventario: inventarioPermitido(recebida, antiga, criacao) }, req.uid);
   }
@@ -991,12 +1000,13 @@ app.post("/api/rolar", authMw, limiteIA, async (req, res) => {
   try {
     const natural = valor ?? R.d(20);
     const combate = ctx.mesa.combate;
-    const r2 = R.resolverRolagem(rol, natural, combate, f.nome);
+    const r2 = R.resolverRolagem(rol, natural, combate, f.nome, MH.opcoesDeRolagem(ctx));
     registrar(codigo, {
       tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${r2.natural}${R.sinal(rol.bonus)} = ${r2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}`,
-      res: r2.dano !== undefined ? `acertou, ${r2.dano} de dano` : r2.sucesso ? "sucesso" : "falha",
+      res: r2.selo || (r2.dano !== undefined ? `acertou, ${r2.dano} de dano` : r2.sucesso ? "sucesso" : "falha"),
       ok: r2.sucesso,
     });
+    for (const aviso of r2.avisos || []) registrar(codigo, { tipo: "sys", texto: aviso });
     salvarMesa(codigo, combate ? { rolagem: null, combate } : { rolagem: null });
     ctx.mesa.combate = combate;
     const fim = combate && R.combateAcabou(combate, ctx.fichas);
@@ -1133,8 +1143,9 @@ app.post("/api/acao-combate", authMw, limiteIA, async (req, res) => {
       registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: magia ? `Conjura ${noTema(tema, magia.nome)} em ${alvo.nome}.` : `Ataca ${alvo.nome} com ${noTema(tema, arma.nome)}.` });
       if (p.aviso) registrar(codigo, { tipo: "sys", texto: p.aviso });
       if (magia) f.mana -= magia.custo;
+      MH.aoMontarRolagem(ctx, p.rolagem);
       salvarMesa(codigo, { combate: c, rolagem: p.rolagem });
-      ganharXp(ctx, f, 5);
+      ganharXp(ctx, f, xpPorAcao());
       broadcast(codigo, "atualizar", {});
       return res.json({ ok: true, rolagem: p.rolagem });
     }
@@ -1342,6 +1353,7 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
     duracao: T.duracaoValida(mesa.duracao), desejos: mesa.desejos || "", arco, nomes: tema.nomes });
   const av = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
   NV.mesaPublica(mesa, req.uid, M.idiomaValido(req.get("x-idioma")));
+  MH.mesaPublica(mesa);
   mesa.aventura = av ? av.id : "";
   mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";
   res.json(mesa);
@@ -1423,7 +1435,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
 
   // XP: +5 para quem agiu, a cada ação narrada
   const ator = ctx.fichas[uidAtor];
-  if (ator && r?.narracao && permitirTeste) ganharXp(ctx, ator, 5);
+  if (ator && r?.narracao && permitirTeste) ganharXp(ctx, ator, xpPorAcao());
 
   let combate = ctx.mesa.combate;
   for (const ef of Array.isArray(r?.efeitos) ? r.efeitos.slice(0, 6) : []) {
@@ -1443,6 +1455,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
       campos.combate = combate;
     }
   }
+  MH.aoNarrar(ctx, r, { combate, campos, permitirTeste });          // memória, clima, condições, XP por marco, encontros
   aplicarItens(ctx, r?.itens);
 
   let combateNovo = false;
@@ -1485,7 +1498,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
         if (at.custo) { minha.mana -= at.custo; salvarFicha(codigo, minha); }
       }
     } else rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
-    if (rolagem) campos.rolagem = rolagem;
+    if (rolagem) campos.rolagem = MH.aoMontarRolagem(ctx, rolagem);          // clima, elemento e chance de sucesso
   }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
   ctx.mesa.combate = combate;
@@ -1760,7 +1773,7 @@ async function conjurarSemRolagem(ctx, f, m, alvoPedido) {
   }
   salvarFicha(codigo, f);
   if (alvo && alvo !== f && alvo.uid) salvarFicha(codigo, alvo);
-  ganharXp(ctx, f, 5);
+  ganharXp(ctx, f, xpPorAcao());
   await narrarCurto(ctx, f.uid, m.tipo === "cura"
     ? `${f.nome} (id ${f.uid}) conjura ${nomeM} (${m.descricao || "magia de cura"}) e ${alvo.uid === f.uid ? "recupera" : `${alvo.nome} recupera`} ${cura} PV (já aplicado pelo código).`
     : `${f.nome} (id ${f.uid}) conjura ${nomeM}${sobre}: ${m.descricao || "magia de utilidade"}. Diga o efeito na cena, sem dano nem cura.`);
@@ -1855,9 +1868,13 @@ function gerarImagemMapa(codigo, tema, c) {
 
 /** Imagem de fundo da cena, no estilo do tema (em segundo plano; cada imagem custa créditos). */
 function gerarFundo(codigo, tema, cena) {
-  if (!cena || !OPENROUTER_KEY || process.env.IMAGENS_DE_FUNDO === "0") return;
+  if (!cena) return;
+  // Fundo que já existe (biblioteca de prontos ou um já gerado para a mesma cena ou tipo de lugar): não gasta imagem
+  const pronto = MH?.fundoPronto(tema, cena);
+  if (pronto) { salvarMesa(codigo, { fundo: pronto }); broadcast(codigo, "atualizar", {}); return; }
+  if (!OPENROUTER_KEY || process.env.IMAGENS_DE_FUNDO === "0") return;
   M.gerarImagem(OPENROUTER_KEY, M.promptImagem(tema, cena), SERVER_BASE_URL)
-    .then((url) => { if (url) { salvarMesa(codigo, { fundo: url }); broadcast(codigo, "atualizar", {}); } })
+    .then((url) => { if (url) { MH?.guardarFundo(tema, cena, url); salvarMesa(codigo, { fundo: url }); broadcast(codigo, "atualizar", {}); } })
     .catch(() => {});
 }
 
@@ -1954,11 +1971,12 @@ async function avancarCombate(ctx, quemAgiu) {
     const chaveVez = () => `${combate.rodada}:${(Number(combate.vez) || 0) % (combate.ordem?.length || 1)}`;
     const vezAntes = chaveVez();
     if (combate.mapa) MP.completarPosicoes(combate);
-    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu, combate.mapa ? { tatica: MP.criarTatica(combate) } : {});
+    const turno = MH.opcoesDeTurno(ctx);          // condições com duração, fuga de inimigos feridos e CA de quem está protegido
+    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu, { ...(combate.mapa ? { tatica: MP.criarTatica(combate) } : {}), ...turno });
     if (chaveVez() !== vezAntes || (combate.mapa && !combate.deslocamento)) zerarDeslocamento(combate, ctx.fichas); // a vez mudou: deslocamento novo
     if (chaveVez() !== vezAntes) combate.turno = null;                                                               // e turno novo
     turnoDe(combate);
-    for (const f of Object.values(ctx.fichas)) if (f.pv !== antes[f.uid]) salvarFicha(codigo, f);
+    for (const f of Object.values(ctx.fichas)) if (f.pv !== antes[f.uid] || turno.mudadas.has(f)) salvarFicha(codigo, f);
     salvarMesa(codigo, { combate });
     ctx.mesa.combate = combate;
     // ok = bom para o grupo; movimentos (ok null) são neutros
@@ -1979,6 +1997,7 @@ async function avancarCombate(ctx, quemAgiu) {
     const vivos = Object.values(ctx.fichas).filter((f) => f.pv > 0);
     salvarMesa(codigo, { combate: null });
     ctx.mesa.combate = null;
+    MH.aoFimDoCombate(ctx);
     if (vivos.length) {
       registrar(codigo, { tipo: "sys", texto: "Combate encerrado. Vitória do grupo!" });
       for (const f of vivos) ganharXp(ctx, f, 25);
@@ -1996,6 +2015,10 @@ async function avancarCombate(ctx, quemAgiu) {
 // ── Novidades: saque, loja, descanso curto, crônica, bestiário, pontos de salvamento e epílogo ──
 NV = require("./novidades").instalar({ app, db, authMw, limiteIA, mesaDoMembro, carregar, salvarMesa, salvarFicha, registrar, broadcast, erro, json, texto, agora,
   travar, destravar, M, T, TRAVA_MS, msgErro, chaveIA: () => OPENROUTER_KEY });
+
+// ── Melhorias só de servidor: memória da campanha, clima, elementos, condições, fuga, fundos reaproveitados e uso da IA ──
+MH = require("./melhorias").instalar({ app, db, adminMw, salvarMesa, salvarFicha, registrar, broadcast, erro, json, texto, M, T, ganharXp,
+  baseUrl: () => SERVER_BASE_URL, pastaPublica: require("path").join(__dirname, "public") });
 
 // ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);

@@ -472,6 +472,13 @@ function elementosDaCena(mesa) {
   return Array.isArray(e) ? e.filter((x) => typeof x === "string" && x.trim()).slice(0, 8) : [];
 }
 
+// Bloco extra do contexto e medidor de uso: quem liga é o melhorias.js (sem ele, nada muda)
+let extraDoContexto = null, medidor = null;
+function definirExtraDoContexto(f) { extraDoContexto = typeof f === "function" ? f : null; }
+function definirMedidor(f) { medidor = typeof f === "function" ? f : null; }
+function medir(tipo, modelo, uso) { if (medidor) { try { medidor({ tipo, modelo, uso }); } catch {} } }
+function blocoExtra(mesa, fichas) { if (!extraDoContexto) return ""; try { return extraDoContexto(mesa, fichas) || ""; } catch (e) { console.error("[contexto]", e.message); return ""; } }
+
 function contexto(mesa, fichas, recentes) {
   const c = campoJson(mesa.combate);
   const ini = c ? c.inimigos.filter((i) => i.pv > 0).map((i) => `- ${i.nome} [id ${i.id}]: PV ${i.pv}/${i.pvMax}, CA ${i.ca}${c.mapa ? `, ${i.alcance === "distancia" ? "ataca à distância" : "corpo a corpo"}` : ""}`).join("\n") : "";
@@ -507,7 +514,7 @@ ${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos vivos:\n${ini}${situacao}` : 
 ÚLTIMOS ACONTECIMENTOS:
 ${log || "(nenhum ainda)"}
 
-${FORMATO}${blocoIdioma(mesa.idioma)}`;
+${FORMATO}${blocoExtra(mesa, fichas)}${blocoIdioma(mesa.idioma)}`;
 }
 
 class ErroMestre extends Error {
@@ -567,6 +574,7 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
   }
 
   const json = await res.json();
+  medir("texto", model, json.usage);
   const text = json.choices?.[0]?.message?.content;
   if (!text) throw new ErroMestre("Resposta vazia da IA");
   return lerJson(text);
@@ -603,6 +611,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
       throw new ErroMestre(`Imagem: ${res.status} ${e.slice(0, 200)}`);
     }
     const data = await res.json();
+    medir("imagem", modelo, data?.usage);
     const item = data?.data?.[0];
     if (item?.url) return item.url;
     if (item?.b64_json) {
@@ -660,7 +669,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { IDIOMAS, idiomaValido, blocoIdioma,
+module.exports = { IDIOMAS, idiomaValido, blocoIdioma, definirExtraDoContexto, definirMedidor,
   REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, blocoNomes, lerJson,
   promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };
