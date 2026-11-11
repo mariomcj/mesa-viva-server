@@ -195,7 +195,24 @@ Responda SOMENTE com JSON no formato:
 {"nome":"str","raca":"str","classe":"str","antecedente":"str","atributos":{"for":N,"des":N,"con":N,"int":N,"sab":N,"car":N},"ca":N,"pericias":["str"],"ataques":[{"nome":"str","bonus":N,"dano":"NdN+?","alcance":"corpo|distancia"}],"magias":[{"nome":"nome exato da lista","descricao":"como aparece no tema, até 2 frases"}],"inventario":[{"nome":"str","qtd":N,"tipo":"pocao|rapido|equipamento|municao|outro","efeito":"cura 2d4+2 ou vazio","descricao":"curta"}],"tracos":{"personalidade":"str","ideal":"str","vinculo":"str","defeito":"str"},"dica":"conselho curto"}`;
 
 /** Prompt de criação de personagem no tema da mesa. */
-function promptCriacao(tema, conceito) {
+// ── Idioma da narração ──
+// O jogo é escrito em português: regras, nomes de perícias, ids e mensagens do diário continuam em português
+// (o app lê algumas delas). O idioma muda só o texto livre que o Mestre escreve para os jogadores.
+const IDIOMAS = ["pt", "en"];
+const idiomaValido = (v) => (IDIOMAS.includes(String(v || "").toLowerCase().slice(0, 2)) ? String(v).toLowerCase().slice(0, 2) : "pt");
+
+/** Instrução de idioma para o fim de um prompt. Em português não acrescenta nada (o prompt fica igual ao de sempre). */
+function blocoIdioma(idioma) {
+  if (idiomaValido(idioma) !== "en") return "";
+  return `
+
+LANGUAGE — THIS OVERRIDES ANY EARLIER INSTRUCTION ABOUT LANGUAGE:
+- The players of this table read English. Write in natural English EVERY free-text field meant for the players: narration, scene and summary texts, descriptions, titles, goals, suggestions, advice, backgrounds, personality traits, item and enemy names you invent.
+- Do NOT translate anything that must match a list or an id given above: JSON keys, ids, attribute codes, enum values, and the exact names of skills, races, classes, attacks, spells and items already listed. Copy those exactly as written, even though they are in Portuguese.
+- Keep the JSON format exactly as specified.`;
+}
+
+function promptCriacao(tema, conceito, idioma) {
   const t = T.temaPorId(tema?.id || tema);
   return `${CRICACAO}
 
@@ -204,7 +221,7 @@ ${t.ambientacao}
 Como os personagens existem neste tema: ${t.fichas}
 ${blocoCriacao(t)}IMPORTANTE: "raca" e "classe" são exatamente um dos nomes das listas acima (é a mecânica do jogo, não muda). Já o nome do personagem, o antecedente, os itens do inventário, os nomes dos ataques, os traços e a descrição das magias combinam com o tema. O "nome" de cada magia é exatamente o da lista; a "descricao" conta como ela aparece neste tema (até 2 frases), combinando com o nome do tema.
 
-Conceito: ${conceito}`;
+Conceito: ${conceito}${blocoIdioma(idioma)}`;
 }
 
 /** Nomes do tema na criação: todas as raças e classes , as magias de nível 1 e as técnicas (os nomes das armas não podem repeti-los). */
@@ -369,7 +386,7 @@ function arcoPublico(mesa) {
 }
 
 /** Prompt que pede à IA o arco de uma aventura nova. */
-function promptArco({ tema, duracao, fichas, tom, vetos, desejos, semente, tempero }) {
+function promptArco({ tema, duracao, fichas, tom, vetos, desejos, semente, tempero, idioma }) {
   const t = T.temaPorId(tema?.id || tema);
   const d = DURACAO_TEXTO[T.duracaoValida(duracao)];
   const grupo = (fichas || []).map((f) => {
@@ -410,7 +427,7 @@ VARIEDADE E ORIGINALIDADE:
 - Escreva em português do Brasil.
 
 Responda SOMENTE com JSON neste formato:
-{"titulo":"nome da aventura (até 6 palavras)","premissa":"2 ou 3 frases","vilao":{"nome":"str","motivacao":"1 frase"},"atos":[{"nome":"str","objetivo":"str","segredo":"str","cenas":["Lugar: situação"]},{"nome":"str","objetivo":"str","segredo":"str","cenas":["..."]},{"nome":"str","objetivo":"str","segredo":"str","cenas":["..."]}],"desfechos":["Vitória: ...","Derrota: ...","Meio-termo: ..."]}`;
+{"titulo":"nome da aventura (até 6 palavras)","premissa":"2 ou 3 frases","vilao":{"nome":"str","motivacao":"1 frase"},"atos":[{"nome":"str","objetivo":"str","segredo":"str","cenas":["Lugar: situação"]},{"nome":"str","objetivo":"str","segredo":"str","cenas":["..."]},{"nome":"str","objetivo":"str","segredo":"str","cenas":["..."]}],"desfechos":["Vitória: ...","Derrota: ...","Meio-termo: ..."]}${blocoIdioma(idioma)}`;
 }
 
 function blocoTema(t) {
@@ -490,7 +507,7 @@ ${c ? `\nEM COMBATE (rodada ${c.rodada}). Inimigos vivos:\n${ini}${situacao}` : 
 ÚLTIMOS ACONTECIMENTOS:
 ${log || "(nenhum ainda)"}
 
-${FORMATO}`;
+${FORMATO}${blocoIdioma(mesa.idioma)}`;
 }
 
 class ErroMestre extends Error {
@@ -643,7 +660,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = {
+module.exports = { IDIOMAS, idiomaValido, blocoIdioma,
   REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, blocoNomes, lerJson,
   promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };
