@@ -3,516 +3,1199 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Admin — Mesa Viva</title>
+<meta name="color-scheme" content="dark">
+<title>Administração — Mesa Viva</title>
 <style>
+:root {
+  color-scheme: dark;
+  --fundo: #0d0a0a;
+  --sup: #1a1410;
+  --sup-2: #221b15;
+  --sup-3: #2b221a;
+  --borda: #3a2f25;
+  --borda-forte: #57483a;
+  --grade: #2a221b;
+  --eixo: #4d4033;
+  --tinta: #efe7da;
+  --tinta-2: #c4b9a8;
+  --tinta-3: #9c9181;
+  --ouro: #c8a050;
+  --ouro-claro: #e6c57c;
+  --ouro-tinta: #1b1307;
+  --perigo: #8a2f26;
+  --perigo-tinta: #f0a094;
+  --bom: #7cc47f;
+  --ruim: #ec9a8a;
+  /* Séries dos gráficos: conferidas com o validador de paleta sobre a superfície #1a1410 */
+  --s1: #bf8a2c;
+  --s2: #4a90e2;
+  --s3: #d55181;
+  --raio: 10px;
+  --fonte: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font: 14px/1.5 system-ui, sans-serif; background: #0d0a0a; color: #e0d8cc; display: flex; flex-direction: column; min-height: 100vh; }
-a { color: #c8a050; }
-h1, h2, h3 { font-weight: 600; }
-h1 { font-size: 1.3rem; }
-h2 { font-size: 1.1rem; margin: 1rem 0 .5rem; border-bottom: 1px solid #443; padding-bottom: .3rem; }
-.card { background: #1a1410; border: 1px solid #332; border-radius: 8px; padding: 1rem; margin-bottom: .75rem; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
-.btn { display: inline-block; padding: .5rem 1rem; border-radius: 6px; border: none; cursor: pointer; font-size: .9rem; }
-.btn-primary { background: #8a6a30; color: #fff; }
-.btn-danger { background: #6a2020; color: #fff; }
-.btn-sm { padding: .3rem .6rem; font-size: .8rem; }
-.badge { display: inline-block; background: #443; padding: .15rem .5rem; border-radius: 4px; font-size: .8rem; }
-.badge-lobby { background: #667; color: #c8d0e0; }
-.badge-jogo { background: #4a8; color: #fff; }
-.grid { display: grid; gap: .75rem; }
-.cols-2 { grid-template-columns: 1fr 1fr; }
-.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
-.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
-input, select, textarea { background: #221e1a; color: #e0d8cc; border: 1px solid #443; border-radius: 6px; padding: .5rem; font: inherit; width: 100%; }
-label { display: block; font-size: .85rem; color: #b0a898; margin-bottom: .25rem; }
-.table { width: 100%; border-collapse: collapse; }
-.table th, .table td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #332; font-size: .85rem; }
-.table th { color: #c8a050; font-weight: 600; }
-.table tr:nth-child(even) td { background: #15110e; }
-.table tr:hover td { background: #1f1914; }
-#login { max-width: 360px; margin: 4rem auto; }
-#login .card { padding: 2rem; }
-#login h1 { text-align: center; margin-bottom: 1.5rem; color: #c8a050; }
-.erro { color: #c84a4a; font-size: .85rem; margin-top: .3rem; }
-.aviso { color: #a09070; font-size: .85rem; }
-.topo { display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: #1a1410; border-bottom: 1px solid #443; margin-bottom: 1rem; }
-.topo .user { font-size: .8rem; color: #b0a898; }
-.section-header { display: flex; justify-content: space-between; align-items: center; }
-.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal { background: #1a1410; border: 1px solid #554; border-radius: 10px; padding: 1.5rem; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
-.modal h2 { margin-top: 0; }
-.modal .btn { margin-top: .5rem; }
-.flex { display: flex; gap: .5rem; }
-.mt-1 { margin-top: .5rem; }
-.mb-1 { margin-bottom: .5rem; }
-.tabs { display: flex; gap: 0; background: #221e1a; border-radius: 6px; overflow: hidden; margin-bottom: 1rem; }
-.tabs button { background: transparent; border: none; padding: .5rem 1rem; cursor: pointer; color: #b0a898; font-size: .85rem; }
-.tabs button.ativo { background: #8a6a30; color: #fff; }
-.kpi-card { text-align: center; padding: 1.2rem .8rem; }
-.kpi-card .kpi-val { font-size: 1.8rem; font-weight: 700; display: block; color: #c8a050; }
-.kpi-card .kpi-label { font-size: .75rem; color: #b0a898; display: block; margin-top: .2rem; }
-.kpi-card .kpi-sub { font-size: .7rem; color: #887; display: block; margin-top: .15rem; }
-.nowrap { white-space: nowrap; }
-.table-wrap { overflow-x: auto; }
-@media (max-width:600px) {
-  body { font-size: 13px; }
-  .grid.cols-2 { grid-template-columns: 1fr; }
-  .grid.cols-3 { grid-template-columns: 1fr; }
-  .grid.cols-4 { grid-template-columns: 1fr 1fr; }
-  .tabs button { padding: .4rem .6rem; font-size: .8rem; }
-  .kpi-card { padding: .8rem .5rem; }
-  .kpi-card .kpi-val { font-size: 1.4rem; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body { font: 14px/1.5 var(--fonte); background: var(--fundo); color: var(--tinta); min-height: 100vh; overflow-x: hidden; }
+body.com-modal { overflow: hidden; }
+a { color: var(--ouro-claro); }
+h1, h2, h3 { font-weight: 600; line-height: 1.25; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--ouro-claro); outline-offset: 2px; border-radius: 4px; }
+.so-leitor { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.pular { position: absolute; left: 8px; top: -60px; z-index: 300; background: var(--ouro); color: var(--ouro-tinta); padding: .5rem .8rem; border-radius: 6px; font-weight: 600; }
+.pular:focus { top: 8px; }
+
+/* Botões e campos */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 38px; padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--borda-forte); background: var(--sup-2); color: var(--tinta); cursor: pointer; font-size: .9rem; font-weight: 500; text-decoration: none; transition: background .12s, border-color .12s; }
+.btn:hover { background: var(--sup-3); border-color: var(--ouro); }
+.btn[disabled] { opacity: .55; cursor: default; }
+.btn-primario { background: var(--ouro); border-color: var(--ouro); color: var(--ouro-tinta); font-weight: 600; }
+.btn-primario:hover { background: var(--ouro-claro); border-color: var(--ouro-claro); }
+.btn-perigo { background: var(--perigo); border-color: #a8473c; color: #fff; }
+.btn-perigo:hover { background: #a03a30; border-color: var(--perigo-tinta); }
+.btn-p { min-height: 32px; padding: .25rem .65rem; font-size: .82rem; }
+.btn-link { background: none; border: none; padding: 0; min-height: 0; color: var(--ouro-claro); font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.btn-link:hover { color: #fff; }
+label, .rotulo { display: block; font-size: .8rem; color: var(--tinta-2); margin-bottom: .25rem; }
+input, select, textarea { width: 100%; min-height: 38px; background: #120e0b; color: var(--tinta); border: 1px solid var(--borda-forte); border-radius: 8px; padding: .45rem .6rem; }
+textarea { min-height: 72px; resize: vertical; }
+input:hover, select:hover, textarea:hover { border-color: var(--tinta-3); }
+::placeholder { color: var(--tinta-3); opacity: 1; }
+.campos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.campos .inteira { grid-column: 1 / -1; }
+.acoes { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.acoes .empurra { margin-left: auto; }
+.erro { color: var(--ruim); font-size: .88rem; margin-top: .6rem; }
+.erro:empty { display: none; }
+.suave { color: var(--tinta-3); font-size: .85rem; }
+
+/* Login */
+.login { min-height: 100vh; display: grid; place-items: center; padding: 1rem; background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(200,160,80,.13), transparent 70%); }
+.login-caixa { width: 100%; max-width: 380px; background: var(--sup); border: 1px solid var(--borda); border-radius: 14px; padding: 2rem 1.5rem; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+.login-caixa h1 { font-size: 1.35rem; margin: .6rem 0 .2rem; }
+.login-caixa .suave { margin-bottom: 1.2rem; }
+.login-caixa label { margin-top: .9rem; }
+.login-caixa .btn { width: 100%; margin-top: 1.2rem; }
+.marca-icone { width: 28px; height: 28px; flex: none; color: var(--ouro); }
+
+/* Topo e abas */
+.topo { background: var(--sup); border-bottom: 1px solid var(--borda); position: sticky; top: 0; z-index: 50; }
+.topo-in, .abas-in, .pagina { max-width: 1312px; margin: 0 auto; padding-left: 16px; padding-right: 16px; }
+.topo-in { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding-top: .6rem; padding-bottom: .5rem; }
+.marca { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.marca h1 { font-size: 1.05rem; white-space: nowrap; }
+.marca small { color: var(--tinta-3); font-size: .78rem; font-weight: 400; margin-left: .3rem; }
+.conta { display: flex; align-items: center; gap: .6rem; font-size: .85rem; color: var(--tinta-2); min-width: 0; }
+.conta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30vw; }
+.abas { overflow-x: auto; scrollbar-width: none; }
+.abas::-webkit-scrollbar { display: none; }
+.abas-in { display: flex; gap: .25rem; }
+.aba { flex: none; background: none; border: none; border-bottom: 3px solid transparent; padding: .55rem .8rem .5rem; color: var(--tinta-2); cursor: pointer; font-size: .92rem; white-space: nowrap; }
+.aba:hover { color: var(--tinta); }
+.aba[aria-current="page"] { color: var(--ouro-claro); border-bottom-color: var(--ouro); font-weight: 600; }
+.aba .conta-n { display: inline-block; min-width: 1.5em; margin-left: .3rem; padding: 0 .4em; border-radius: 99px; background: var(--sup-3); color: var(--tinta-2); font-size: .75rem; font-weight: 600; text-align: center; }
+
+/* Página */
+.pagina { padding-top: 1.1rem; padding-bottom: 3rem; }
+.pagina:focus { outline: none; }
+.pag-topo { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-bottom: 1rem; }
+.pag-topo h2 { font-size: 1.3rem; margin-right: auto; }
+.pag-ferramentas { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.periodo { display: inline-flex; border: 1px solid var(--borda-forte); border-radius: 8px; overflow: hidden; background: var(--sup-2); }
+.periodo button { background: none; border: none; border-right: 1px solid var(--borda-forte); padding: .35rem .75rem; min-height: 36px; cursor: pointer; color: var(--tinta-2); font-size: .85rem; }
+.periodo button:last-child { border-right: none; }
+.periodo button:hover { color: var(--tinta); background: var(--sup-3); }
+.periodo button[aria-pressed="true"] { background: var(--ouro); color: var(--ouro-tinta); font-weight: 600; }
+.periodo button:focus-visible { outline-offset: -3px; }
+.periodo button[aria-pressed="true"]:focus-visible { outline-color: var(--ouro-tinta); }
+#corpo { transition: opacity .15s; }
+#corpo.ocupado { opacity: .5; pointer-events: none; }
+.secao-t { font-size: 1rem; margin: 1.5rem 0 .6rem; display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.secao-t .suave { font-weight: 400; }
+.faixa { border: 1px solid var(--borda-forte); border-left: 3px solid var(--ouro); background: var(--sup-2); border-radius: 8px; padding: .65rem .9rem; margin-bottom: 1rem; color: var(--tinta-2); font-size: .88rem; }
+.faixa strong { color: var(--tinta); }
+
+/* Cartões */
+.cartao { background: var(--sup); border: 1px solid var(--borda); border-radius: var(--raio); padding: 1rem; min-width: 0; }
+.cartao-topo { margin-bottom: .7rem; }
+.cartao-topo h3 { font-size: .98rem; }
+.cartao-topo .sub { color: var(--tinta-3); font-size: .8rem; margin-top: .1rem; }
+.cartao h4 { font-size: .85rem; font-weight: 600; color: var(--tinta-2); margin: 1rem 0 .4rem; }
+.grade { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); margin-bottom: 12px; }
+@media (min-width: 760px) { .g2, .g3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .g3 > :last-child:nth-child(odd) { grid-column: 1 / -1; } }
+@media (min-width: 1120px) { .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .g3 > :last-child:nth-child(odd) { grid-column: auto; } }
+.larga { grid-column: 1 / -1; }
+
+/* Indicadores */
+.kpis { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 12px; }
+.kpis > .kpi:first-child:nth-last-child(odd) { grid-column: 1 / -1; }
+@media (min-width: 760px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kpis > .kpi:first-child:nth-last-child(odd) { grid-column: auto; } }
+@media (min-width: 1120px) { .kpis { grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); } }
+.kpi { background: var(--sup); border: 1px solid var(--borda); border-radius: var(--raio); padding: .85rem .9rem .75rem; min-width: 0; display: flex; flex-direction: column; }
+.kpi-rot { font-size: .8rem; font-weight: 500; color: var(--tinta-2); }
+.kpi-val { font-size: clamp(1.35rem, 5.2vw, 1.8rem); font-weight: 650; line-height: 1.15; margin-top: .2rem; color: var(--tinta); overflow-wrap: anywhere; }
+.kpi-delta { font-size: .78rem; color: var(--tinta-2); margin-top: .25rem; }
+.kpi-delta b { font-weight: 600; }
+.kpi-delta.bom b { color: var(--bom); }
+.kpi-delta.ruim b { color: var(--ruim); }
+.kpi-ctx { color: var(--tinta-3); }
+.kpi-spark { margin-top: auto; padding-top: .5rem; height: 40px; }
+.kpi-spark svg { display: block; width: 100%; height: 32px; }
+.totais { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 1px; background: var(--sup); border: 1px solid var(--borda); border-radius: var(--raio); overflow: hidden; margin-bottom: 12px; }
+.totais div { background: var(--sup); padding: .55rem .8rem; box-shadow: 0 0 0 1px var(--borda); }
+.totais dt { font-size: .75rem; color: var(--tinta-3); }
+.totais dd { font-size: 1.05rem; font-weight: 600; }
+
+/* Gráficos */
+.legenda { display: flex; flex-wrap: wrap; gap: .2rem 1rem; margin-bottom: .4rem; font-size: .8rem; color: var(--tinta-2); list-style: none; }
+.legenda li { display: inline-flex; align-items: center; gap: .4rem; }
+.chave { display: inline-block; flex: none; width: 14px; height: 3px; border-radius: 2px; }
+.chave.bloco { width: 10px; height: 10px; border-radius: 2px; }
+.plot { position: relative; min-height: 60px; }
+.plot svg { display: block; width: 100%; height: auto; touch-action: pan-y; cursor: crosshair; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+.plot svg text { font: 11px var(--fonte); fill: var(--tinta-3); font-variant-numeric: tabular-nums; }
+.plot .vazio-sobre { position: absolute; inset: 0 0 26px 0; display: grid; place-items: center; color: var(--tinta-3); font-size: .85rem; pointer-events: none; text-align: center; padding: 0 1rem; }
+.dica { position: absolute; z-index: 5; top: 0; left: 0; pointer-events: none; background: #0f0b09; border: 1px solid var(--borda-forte); border-radius: 8px; padding: .45rem .6rem; font-size: .8rem; box-shadow: 0 6px 20px rgba(0,0,0,.55); white-space: nowrap; max-width: 92%; }
+.dica-t { color: var(--tinta-2); margin-bottom: .2rem; font-size: .76rem; }
+.dica-l { display: flex; align-items: center; gap: .4rem; }
+.dica-l strong { font-weight: 650; color: var(--tinta); font-variant-numeric: tabular-nums; }
+.dica-l span:last-child { color: var(--tinta-2); overflow: hidden; text-overflow: ellipsis; }
+.dica-total { border-top: 1px solid var(--borda); margin-top: .25rem; padding-top: .25rem; }
+details.dados { margin-top: .5rem; }
+details.dados summary { cursor: pointer; color: var(--tinta-3); font-size: .78rem; width: max-content; max-width: 100%; padding: .15rem 0; }
+details.dados summary:hover { color: var(--tinta); }
+details.dados .rolagem { max-height: 260px; margin-top: .4rem; }
+.vazio { border: 1px dashed var(--borda-forte); border-radius: 8px; padding: 1.4rem 1rem; text-align: center; color: var(--tinta-3); font-size: .88rem; }
+.barras { list-style: none; display: grid; gap: .5rem; }
+.barras li { display: grid; grid-template-columns: minmax(72px, 34%) minmax(0, 1fr) auto; align-items: center; gap: .6rem; font-size: .85rem; }
+.b-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tinta-2); }
+.b-trilho { height: 12px; display: block; }
+.b-barra { display: block; height: 100%; min-width: 2px; background: var(--s1); border-radius: 0 4px 4px 0; }
+.b-valor { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; white-space: nowrap; }
+.b-valor small { font-weight: 400; color: var(--tinta-3); margin-left: .3rem; }
+.segmentos { display: flex; gap: 2px; height: 8px; border-radius: 99px; overflow: hidden; margin: .4rem 0; }
+.segmentos span { display: block; min-width: 2px; }
+
+/* Tabelas */
+.rolagem { overflow: auto; border: 1px solid var(--borda); border-radius: 8px; max-width: 100%; }
+.rolagem.alta { max-height: 460px; }
+.tabela { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.tabela th, .tabela td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--grade); vertical-align: middle; }
+.tabela thead th { position: sticky; top: 0; background: var(--sup-2); color: var(--tinta-2); font-weight: 600; font-size: .78rem; white-space: nowrap; z-index: 1; }
+.tabela tbody tr:last-child td { border-bottom: none; }
+.tabela tbody tr:hover td { background: rgba(200,160,80,.06); }
+.tabela .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tabela .nq { white-space: nowrap; }
+.tabela .btn-link { padding: .4rem .25rem; margin: -.4rem -.25rem; }
+.tabela .corta { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selo { display: inline-flex; align-items: center; gap: .35rem; padding: .1rem .55rem; border-radius: 99px; font-size: .76rem; font-weight: 600; border: 1px solid var(--borda-forte); color: var(--tinta-2); white-space: nowrap; }
+.selo::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.selo-jogo { color: var(--bom); border-color: #3f6b42; }
+.selo-saguao { color: #9db7dc; border-color: #445a78; }
+.chips { display: flex; flex-wrap: wrap; gap: .35rem; list-style: none; }
+.chips li { background: var(--sup-3); border: 1px solid var(--borda); border-radius: 99px; padding: .1rem .6rem; font-size: .82rem; }
+.lista-simples { list-style: none; display: grid; gap: .3rem; font-size: .88rem; }
+.lista-simples li { overflow-wrap: anywhere; }
+.busca { max-width: 260px; }
+
+/* Estados */
+.carregando { display: grid; gap: 12px; }
+.osso { height: 92px; border-radius: var(--raio); background: linear-gradient(90deg, var(--sup) 0%, var(--sup-2) 50%, var(--sup) 100%); background-size: 200% 100%; animation: brilho 1.4s linear infinite; border: 1px solid var(--borda); }
+.osso.alto { height: 240px; }
+@keyframes brilho { to { background-position: -200% 0; } }
+.caixa-erro { border: 1px solid #7a3a31; background: #1f1210; border-radius: var(--raio); padding: 1rem; }
+.caixa-erro p { margin-bottom: .7rem; }
+
+/* Modais e avisos */
+.modal-fundo { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.66); display: flex; align-items: flex-start; justify-content: center; padding: 4vh 8px; overflow-y: auto; }
+.modal { background: var(--sup); border: 1px solid var(--borda-forte); border-radius: 12px; width: 100%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.modal-largo { max-width: 760px; }
+.modal-topo { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 1rem; border-bottom: 1px solid var(--borda); }
+.modal-topo h2 { font-size: 1.05rem; overflow-wrap: anywhere; }
+.btn-x { flex: none; width: 34px; height: 34px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--tinta-2); font-size: 1.3rem; line-height: 1; cursor: pointer; }
+.btn-x:hover { background: var(--sup-3); color: var(--tinta); }
+.modal-corpo { padding: 1rem; }
+.modal-corpo h3 { font-size: .92rem; margin: 1.2rem 0 .5rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.avisos { position: fixed; right: 12px; bottom: 12px; left: 12px; z-index: 200; display: grid; gap: .4rem; justify-items: end; pointer-events: none; }
+.aviso-item { background: #0f0b09; border: 1px solid var(--borda-forte); border-left: 3px solid var(--bom); border-radius: 8px; padding: .55rem .8rem; font-size: .88rem; max-width: 420px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+.aviso-item.falha { border-left-color: var(--ruim); }
+
+@media (max-width: 520px) {
+  .campos { grid-template-columns: minmax(0, 1fr); }
+  .marca small { display: none; }
+  .busca { max-width: none; }
+  .pag-topo h2 { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .b-barra, .chave, .segmentos span { forced-color-adjust: none; }
 }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="vivo" class="so-leitor" aria-live="polite"></div>
+<div id="avisos" class="avisos" role="status" aria-live="polite"></div>
 <script>
+'use strict';
+/* ═══════════ Utilidades ═══════════ */
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+const $ = (sel, raiz) => (raiz || document).querySelector(sel);
+const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const limitar = (v, a, b) => Math.max(a, Math.min(b, v));
+const NF = new Intl.NumberFormat('pt-BR');
+const NFC = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 });
+const fInt = (v) => NF.format(Math.round(num(v)));
+const fCompacto = (v) => (Math.abs(num(v)) >= 10000 ? NFC.format(num(v)) : fInt(v));
+const fDec = (v, casas) => num(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+/** Custo em dólares: 2 casas a partir de US$ 1, até 4 casas abaixo disso (os valores do provedor são pequenos). */
+const fUSD = (v) => { const n = num(v); return 'US$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: Math.abs(n) >= 1 ? 2 : 4 }); };
+const fUSD4 = (v) => 'US$ ' + fDec(v, 4);
+const fPct = (v) => num(v).toLocaleString('pt-BR', { maximumFractionDigits: Math.abs(v) >= 10 ? 0 : 1 }) + '%';
+
+function partesDoDia(d) { const p = String(d || '').split('-').map(Number); return p.length === 3 && p.every(Number.isFinite) ? p : null; }
+const diaCurto = (d) => { const p = String(d || '').split('-'); return p.length === 3 ? p[2] + '/' + p[1] : String(d || '—'); };
+const diaCompleto = (d) => { const p = String(d || '').split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : String(d || '—'); };
+const diaLongo = (d) => { const p = partesDoDia(d); return p ? new Date(p[0], p[1] - 1, p[2]).toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' }) : String(d || '—'); };
+function fDataHora(ms) {
+  if (!num(ms)) return '—';
+  return new Date(num(ms)).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function fData(ms) { return num(ms) ? new Date(num(ms)).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'; }
+function fHora(ms) { return new Date(num(ms) || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+function haQuanto(ms) {
+  if (!num(ms)) return '—';
+  const s = Math.max(0, (Date.now() - num(ms)) / 1000);
+  if (s < 90) return 'agora há pouco';
+  if (s < 3600) return 'há ' + Math.round(s / 60) + ' min';
+  if (s < 86400) return 'há ' + Math.round(s / 3600) + ' h';
+  const d = Math.round(s / 86400);
+  return d <= 30 ? 'há ' + d + (d === 1 ? ' dia' : ' dias') : fData(ms);
+}
+/** Cria um elemento HTML; textos sempre por textContent. */
+function h(tag, attrs, filhos) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    const v = attrs[k];
+    if (v === null || v === undefined || v === false) continue;
+    if (k === 'text') e.textContent = v; else if (k === 'class') e.className = v; else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const f of (filhos || [])) if (f) e.appendChild(f);
+  return e;
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs, pai, texto) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in (attrs || {})) e.setAttribute(k, attrs[k]);
+  if (texto !== undefined) e.textContent = texto;
+  if (pai) pai.appendChild(e);
+  return e;
+}
+function avisar(msg, falha) {
+  const item = h('div', { class: 'aviso-item' + (falha ? ' falha' : ''), text: msg });
+  $('#avisos').appendChild(item);
+  setTimeout(() => item.remove(), falha ? 7000 : 3500);
+}
+function anunciar(msg) { const v = $('#vivo'); if (v) v.textContent = msg; }
+
+/* ═══════════ API ═══════════ */
+const GUARDA = 'mesaviva_admin';
 const APP = {
-  _token: null,
-  _user: null,
-  _tab: 'geral',
+  _token: null, _user: null, _tab: 'geral', _dias: 30, _seq: 0, _n: 0, _mesas: null, _avisoLogin: '',
   async req(method, path, body) {
-    const h = { 'Content-Type': 'application/json' };
-    if (this._token) h['X-Admin-Token'] = this._token;
-    const r = await fetch(path, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
-    if (!r.ok) { const e = await r.json().catch(()=>({error:r.statusText})); throw new Error(e.error||r.statusText); }
-    return r.json();
+    const hd = { 'Content-Type': 'application/json' };
+    if (this._token) hd['X-Admin-Token'] = this._token;
+    let r;
+    try { r = await fetch(path, { method, headers: hd, body: body ? JSON.stringify(body) : undefined }); }
+    catch (e) { const er = new Error('Sem resposta do servidor. Confira se ele está no ar e tente de novo.'); er.status = 0; throw er; }
+    let dados = null, ehJson = true;
+    try { dados = await r.json(); } catch (e) { ehJson = false; }
+    if (!r.ok) {
+      const er = new Error((dados && (dados.error || dados.erro)) || ('O servidor respondeu com erro ' + r.status + '.'));
+      er.status = r.status;
+      if (r.status === 401 && path !== '/api/admin/login' && this._token) { this.sair('Sua sessão expirou. Entre de novo.'); }
+      throw er;
+    }
+    if (!ehJson) { const er = new Error('O servidor devolveu uma resposta que o painel não entende.'); er.status = r.status; er.naoJson = true; throw er; }
+    return dados;
   },
   async login(user, pass) {
     const r = await this.req('POST', '/api/admin/login', { user, pass });
-    this._token = r.token;
-    this._user = user;
-    this.render();
+    this._token = r.token; this._user = r.user || user; this._avisoLogin = '';
+    try { sessionStorage.setItem(GUARDA, JSON.stringify({ t: this._token, u: this._user })); } catch (e) {}
+    renderApp();
   },
-  async logout() { this._token = null; this._user = null; this.render(); },
-  async listarMesas() { return this.req('GET', '/api/admin/mesas'); },
-  async getMesa(cod) { return this.req('GET', `/api/admin/mesas/${cod}`); },
-  async criarMesa(d) { return this.req('POST', '/api/admin/mesas', d); },
-  async editarMesa(cod, d) { return this.req('PUT', `/api/admin/mesas/${cod}`, d); },
-  async excluirMesa(cod) { return this.req('DELETE', `/api/admin/mesas/${cod}`); },
-  async criarFicha(cod, d) { return this.req('POST', `/api/admin/fichas/${cod}`, d); },
-  async editarFicha(cod, uid, d) { return this.req('PUT', `/api/admin/fichas/${cod}/${uid}`, d); },
-  async excluirFicha(cod, uid) { return this.req('DELETE', `/api/admin/fichas/${cod}/${uid}`); },
-  async listarUsuarios() { return this.req('GET', '/api/admin/usuarios'); },
-  async getEstatisticas() { return this.req('GET', '/api/admin/estatisticas'); },
+  sair(aviso) {
+    // invalida o token no servidor (servidor antigo responde 404: tudo bem, o token some daqui do mesmo jeito)
+    if (this._token) { try { fetch('/api/admin/sair', { method: 'POST', headers: { 'X-Admin-Token': this._token } }).catch(() => {}); } catch (e) {} }
+    this._token = null; this._user = null; this._mesas = null; this._avisoLogin = aviso || '';
+    try { sessionStorage.removeItem(GUARDA); } catch (e) {}
+    fecharTodos(); renderApp();
+  },
+  listarMesas() { return this.req('GET', '/api/admin/mesas'); },
+  getMesa(cod) { return this.req('GET', '/api/admin/mesas/' + encodeURIComponent(cod)); },
+  criarMesa(d) { return this.req('POST', '/api/admin/mesas', d); },
+  editarMesa(cod, d) { return this.req('PUT', '/api/admin/mesas/' + encodeURIComponent(cod), d); },
+  excluirMesa(cod) { return this.req('DELETE', '/api/admin/mesas/' + encodeURIComponent(cod)); },
+  criarFicha(cod, d) { return this.req('POST', '/api/admin/fichas/' + encodeURIComponent(cod), d); },
+  editarFicha(cod, uid, d) { return this.req('PUT', '/api/admin/fichas/' + encodeURIComponent(cod) + '/' + encodeURIComponent(uid), d); },
+  excluirFicha(cod, uid) { return this.req('DELETE', '/api/admin/fichas/' + encodeURIComponent(cod) + '/' + encodeURIComponent(uid)); },
+  listarUsuarios() { return this.req('GET', '/api/admin/usuarios'); },
+  getEstatisticas() { return this.req('GET', '/api/admin/estatisticas'); },
+  getUso(dias) { return this.req('GET', '/api/admin/uso?dias=' + dias); },
+  getMundo(cod) { return this.req('GET', '/api/admin/mesas/' + encodeURIComponent(cod) + '/mundo'); },
+  salvarMundo(cod, corpo) { return this.req('PUT', '/api/admin/mesas/' + encodeURIComponent(cod) + '/mundo', corpo); },
+  /** Métricas dos gráficos. Devolve null quando o servidor ainda não tem a rota (versão antiga). */
+  async getMetricas(dias) {
+    try {
+      const d = await this.req('GET', '/api/admin/metricas?dias=' + dias);
+      return d && Array.isArray(d.serie) ? d : null;
+    } catch (e) { if (e.status === 404 || e.naoJson) return null; throw e; }
+  },
 };
 
-window.onload = () => APP.render();
-
-APP.render = async function() {
-  const app = document.getElementById('app');
-  if (!this._token) return renderLogin(app);
-  try {
-    const dados = await this.listarMesas();
-    renderDashboard(app, dados);
-  } catch(e) {
-    if (e.message?.includes('401') || e.message?.includes('não autenticado')) {
-      this._token = null; this._user = null;
-      return renderLogin(app);
-    }
-    app.innerHTML = `<div class="card"><p class="erro">Erro: ${e.message}</p><button class="btn btn-primary" onclick="APP.render()">Tentar novamente</button></div>`;
+/* ═══════════ Gráficos (SVG desenhado à mão) ═══════════ */
+const DESENHOS = new Map();
+const OBS = typeof ResizeObserver === 'function' ? new ResizeObserver((lista) => {
+  for (const item of lista) {
+    const d = DESENHOS.get(item.target);
+    const w = Math.round(item.contentRect.width);
+    if (d && w && w !== d.w) { d.w = w; d.fn(); }
   }
-};
+}) : null;
+if (!OBS) window.addEventListener('resize', () => DESENHOS.forEach((d) => d.fn()));
+function limparGraficos() { if (OBS) OBS.disconnect(); DESENHOS.clear(); DICA_ATIVA = null; }
+let DICA_ATIVA = null;
+document.addEventListener('pointerdown', (e) => { if (DICA_ATIVA && !DICA_ATIVA.plot.contains(e.target)) DICA_ATIVA.ocultar(); });
 
-function renderLogin(parent) {
-  parent.innerHTML = `
-    <div id="login"><div class="card">
-      <h1>🎲 Admin Mesa Viva</h1>
-      <label>Usuário</label>
-      <input id="luser" value="admin" onkeydown="if(event.key==='Enter')APP.login(this.value,document.getElementById('lpass').value)">
-      <label class="mt-1">Senha</label>
-      <input id="lpass" type="password" onkeydown="if(event.key==='Enter')APP.login(document.getElementById('luser').value,this.value)">
-      <div class="mt-1"><button class="btn btn-primary" onclick="APP.login(document.getElementById('luser').value,document.getElementById('lpass').value)">Entrar</button></div>
-      <p id="lerro" class="erro"></p>
-    </div></div>
-  `;
+/** Escala do eixo: de zero até um topo "redondo", com 3 a 5 divisões. */
+function escala(max, inteiro) {
+  if (!(max > 0)) max = inteiro ? 4 : 1;
+  const bruto = max / 4, p = Math.pow(10, Math.floor(Math.log10(bruto))), f = bruto / p;
+  let passo = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+  if (inteiro) passo = Math.max(1, Math.round(passo));
+  const n = Math.max(1, Math.ceil(max / passo - 1e-9));
+  const ticks = []; for (let i = 0; i <= n; i++) ticks.push(i * passo);
+  return { topo: n * passo, passo, ticks, casas: passo >= 1 ? 0 : limitar(Math.ceil(-Math.log10(passo) - 1e-9), 0, 8) };
 }
+const eixoInteiro = (v, e) => (e.topo >= 10000 ? NFC.format(v) : fInt(v));
+const eixoUSD = (v, e) => (e.topo >= 10000 ? 'US$ ' + NFC.format(v) : 'US$ ' + fDec(v, Math.max(e.casas, e.topo < 10 ? 2 : 0)));
+const soma = (a) => a.reduce((x, y) => x + num(y), 0);
 
-async function renderDashboard(parent, dados) {
-  const mesas = dados.mesas || [];
-  const emJogo = mesas.filter(m => m.fase === 'jogo');
-  const emLobby = mesas.filter(m => m.fase !== 'jogo');
-  const activeTab = APP._tab;
-  parent.innerHTML = `
-    <div class="topo">
-      <div><h1>🎲 Admin Mesa Viva</h1></div>
-      <div class="user">${APP._user} &mdash; <a href="#" onclick="APP.logout();return false">sair</a></div>
-    </div>
-    <div style="max-width:960px;margin:0 auto;padding:0 1rem">
-      <div class="tabs">
-        <button class="${activeTab==='geral'?'ativo':''}" onclick="APP._tab='geral';APP.render()">📊 Visão Geral</button>
-        <button class="${activeTab==='mesas'?'ativo':''}" onclick="APP._tab='mesas';APP.render()">🎲 Mesas (${mesas.length})</button>
-        <button class="${activeTab==='usuarios'?'ativo':''}" onclick="APP._tab='usuarios';APP.render()">👥 Usuários</button>
-        <button class="${activeTab==='uso'?'ativo':''}" onclick="APP._tab='uso';APP.render()">💰 Uso da IA</button>
-      </div>
-      <div id="tab-content"></div>
-    </div>
-  `;
-  if (activeTab === 'geral') renderVisaoGeral('tab-content', mesas);
-  else if (activeTab === 'usuarios') renderUsuarios('tab-content');
-  else if (activeTab === 'uso') renderUso('tab-content');
-  else renderTabMesas('tab-content', mesas, emJogo, emLobby);
-}
-
-function badgeFase(fase) {
-  const cls = fase === 'jogo' ? 'badge-jogo' : 'badge-lobby';
-  return `<span class="badge ${cls}">${fase}</span>`;
-}
-
-function fmtData(ms) {
-  if (!ms) return '—';
-  const d = new Date(Number(ms));
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtDataCurta(ms) {
-  if (!ms) return '—';
-  const d = new Date(Number(ms));
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
-}
-
-async function renderVisaoGeral(elId, mesas) {
-  const el = document.getElementById(elId);
-  try {
-    const stats = await APP.getEstatisticas();
-    const hj = new Date();
-    const dias = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(hj);
-      d.setDate(d.getDate() - i);
-      dias.push(d.toISOString().slice(0, 10));
-    }
-    // montar dict usuariosPorDia (últimos 7)
-    const usrPorDia = {};
-    (stats.usuariosPorDia||[]).forEach(r => { usrPorDia[r.dia] = r.total; });
-    const mesasPorDia = {};
-    (stats.mesasPorDia||[]).forEach(r => { mesasPorDia[r.dia] = r.total; });
-    const usr7 = dias.map(dia => ({ dia, total: usrPorDia[dia] || 0 }));
-    const mes7 = dias.map(dia => ({ dia, total: mesasPorDia[dia] || 0 }));
-    el.innerHTML = `
-      <div class="grid cols-4" style="margin-bottom:1rem">
-        <div class="card kpi-card">
-          <span class="kpi-val">${stats.totalUsuarios}</span>
-          <span class="kpi-label">👤 Usuários</span>
-          <span class="kpi-sub">${stats.usuariosHoje} hoje · ${stats.usuariosSemana} na semana</span>
-        </div>
-        <div class="card kpi-card">
-          <span class="kpi-val">${stats.totalMesas}</span>
-          <span class="kpi-label">🎲 Mesas</span>
-          <span class="kpi-sub">${stats.mesasEmJogo} em jogo</span>
-        </div>
-        <div class="card kpi-card">
-          <span class="kpi-val">${stats.totalFichas}</span>
-          <span class="kpi-label">📋 Fichas</span>
-          <span class="kpi-sub">${stats.totalMesas > 0 ? Math.round(stats.totalFichas / stats.totalMesas * 10) / 10 : 0} média/mesa</span>
-        </div>
-        <div class="card kpi-card">
-          <span class="kpi-val">${stats.totalLogs}</span>
-          <span class="kpi-label">📜 Logs</span>
-          <span class="kpi-sub">${stats.totalMesas > 0 ? Math.round(stats.totalLogs / stats.totalMesas) : 0} média/mesa</span>
-        </div>
-      </div>
-      <div class="grid cols-2">
-        <div class="card">
-          <h2>📅 Usuários por dia (7 dias)</h2>
-          ${montarTabelaDia(usr7)}
-        </div>
-        <div class="card">
-          <h2>📅 Mesas por dia (7 dias)</h2>
-          ${montarTabelaDia(mes7)}
-        </div>
-      </div>
-    `;
-  } catch(e) {
-    el.innerHTML = `<div class="card"><p class="erro">Erro ao carregar estatísticas: ${e.message}</p></div>`;
-  }
-}
-
-function montarTabelaDia(arr) {
-  if (!arr || !arr.length) return '<p class="aviso">Nenhum dado.</p>';
-  let rows = '';
-  arr.forEach(r => {
-    const data = r.dia ? r.dia.split('-').reverse().join('/') : r.dia;
-    rows += `<tr><td class="nowrap">${r.dia||'—'}</td><td style="text-align:right">${r.total}</td></tr>`;
+function resumir(titulo, rotulos, series, fmt) {
+  if (!rotulos.length) return titulo + '. Sem dados.';
+  const partes = series.map((sr) => {
+    const tot = soma(sr.valores);
+    if (!(tot > 0)) return sr.nome + ': sem registros';
+    let im = 0; sr.valores.forEach((v, i) => { if (num(v) > num(sr.valores[im])) im = i; });
+    const base = sr.media ? 'média de ' + fDec(tot / sr.valores.length, 1) + ' por dia' : 'total de ' + fmt(tot);
+    return sr.nome + ': ' + base + ', maior valor ' + fmt(sr.valores[im]) + ' em ' + rotulos[im];
   });
-  return `<div class="table-wrap"><table class="table"><tr><th>Dia</th><th style="text-align:right">Total</th></tr>${rows}</table></div>`;
+  return titulo + ', de ' + rotulos[0] + ' a ' + rotulos[rotulos.length - 1] + '. ' + partes.join('; ') + '.';
+}
+function caixaVazia(msg) { return h('p', { class: 'vazio', text: msg || 'Ainda não há dados para mostrar.' }); }
+
+/** Tabela com os mesmos números do gráfico (valor exato sem depender do mouse). */
+function tabelaDeDados(colunaX, rotulos, series, fmt) {
+  const cab = h('tr', null, [h('th', { scope: 'col', text: colunaX })].concat(series.map((sr) => h('th', { scope: 'col', class: 'num', text: sr.nome }))));
+  const corpo = h('tbody');
+  rotulos.forEach((r, i) => corpo.appendChild(h('tr', null, [h('td', { class: 'nq', text: r })].concat(series.map((sr) => h('td', { class: 'num', text: fmt(sr.valores[i]) }))))));
+  return h('details', { class: 'dados' }, [
+    h('summary', { text: 'Ver os números em tabela' }),
+    h('div', { class: 'rolagem', tabindex: '0', role: 'region', 'aria-label': 'Tabela de dados do gráfico' }, [h('table', { class: 'tabela' }, [h('thead', null, [cab]), corpo])]),
+  ]);
 }
 
-function renderTabMesas(elId, mesas, emJogo, emLobby) {
-  const el = document.getElementById(elId);
-  el.innerHTML = `
-    <div class="section-header">
-      <h2>Mesas ativas (${emJogo.length})</h2>
-      <button class="btn btn-primary btn-sm" onclick="novaMesa()">+ Nova mesa</button>
-    </div>
-    <div id="lista-jogo"></div>
-    ${emLobby.length ? `<h2 class="mt-1">Lobby (${emLobby.length})</h2><div id="lista-lobby"></div>` : ''}
-  `;
-  renderLista('lista-jogo', emJogo);
-  if (emLobby.length) renderLista('lista-lobby', emLobby);
-}
-
-function renderLista(id, mesas) {
-  const el = document.getElementById(id);
-  if (!mesas.length) { el.innerHTML = '<p class="aviso">Nenhuma mesa.</p>'; return; }
-  el.innerHTML = `<div class="table-wrap"><table class="table">
-    <tr><th>Código</th><th>Dono</th><th>Fase</th><th>Cena</th><th>Membros</th><th>Fichas</th><th></th></tr>
-    ${mesas.map(m => `<tr>
-      <td><a href="#" onclick="APP.verMesa('${m.codigo}');return false"><strong>${m.codigo}</strong></a></td>
-      <td>${esc(m.dono_nome||m.dono||'—')}</td>
-      <td>${badgeFase(m.fase)}</td>
-      <td>${esc(m.cena||'—')}</td>
-      <td>${m.qtd_membros}</td>
-      <td>${m.qtd_fichas}</td>
-      <td><button class="btn btn-danger btn-sm" onclick="confirmarExcluir('${m.codigo}')">🗑</button></td>
-    </tr>`).join('')}
-  </table></div>`;
-}
-
-async function renderUsuarios(elId) {
-  const el = document.getElementById(elId);
-  try {
-    const dados = await APP.listarUsuarios();
-    const usuarios = dados.usuarios || [];
-    el.innerHTML = `
-      <h2>👥 Usuários registrados (${usuarios.length})</h2>
-      ${usuarios.length ? `<div class="table-wrap"><table class="table">
-        <tr><th>ID</th><th>Nome</th><th>Email</th><th>Registro</th><th>Mesas (criou)</th><th>Mesas (membro)</th></tr>
-        ${usuarios.map(u => `<tr>
-          <td>${esc(u.id)}</td>
-          <td>${esc(u.nome)}</td>
-          <td>${esc(u.email||'—')}</td>
-          <td class="nowrap">${fmtData(u.criadoEm)}</td>
-          <td>${u.qtd_mesas_criadas}</td>
-          <td>${u.qtd_mesas_membro}</td>
-        </tr>`).join('')}
-      </table></div>` : '<p class="aviso">Nenhum usuário.</p>'}
-    `;
-  } catch(e) {
-    el.innerHTML = `<div class="card"><p class="erro">Erro ao carregar usuários: ${e.message}</p></div>`;
+/**
+ * Gráfico com eixo X de categorias ou dias e um único eixo Y a partir do zero.
+ * cfg: { tipo: 'linha' | 'coluna', titulo, rotulos, rotulosLongos, series: [{ nome, cor, valores, area, media }],
+ *        empilhar, inteiro, fmt, fmtEixo, altura, colunaX, vazio }
+ */
+function graficoXY(host, cfg) {
+  host.textContent = '';
+  const series = cfg.series, rot = cfg.rotulos, n = rot.length;
+  const longos = cfg.rotulosLongos || rot;
+  const fmt = cfg.fmt || fInt;
+  if (!n) { host.appendChild(caixaVazia(cfg.vazio)); return; }
+  const coluna = cfg.tipo === 'coluna';
+  const temDado = series.some((sr) => sr.valores.some((v) => num(v) > 0));
+  if (series.length > 1) {
+    host.appendChild(h('ul', { class: 'legenda', 'aria-label': 'Legenda' }, series.map((sr) => {
+      const chave = h('span', { class: 'chave' + (coluna ? ' bloco' : ''), 'aria-hidden': 'true' }); chave.style.background = sr.cor;
+      return h('li', null, [chave, h('span', { text: sr.nome })]);
+    })));
   }
-}
+  const plot = h('div', { class: 'plot' });
+  const dica = h('div', { class: 'dica', hidden: true });
+  plot.appendChild(dica);
+  if (!temDado) plot.appendChild(h('div', { class: 'vazio-sobre', text: cfg.vazio || 'Sem registros neste período.' }));
+  host.appendChild(plot);
+  host.appendChild(tabelaDeDados(cfg.colunaX || 'Dia', longos, series, fmt));
+  const resumo = resumir(cfg.titulo, rot, series, fmt);
+  let sel = -1, svgAtual = null;
+  const reg = { plot, ocultar() { sel = -1; dica.hidden = true; if (svgAtual && svgAtual._marca) svgAtual._marca(-1); if (DICA_ATIVA === reg) DICA_ATIVA = null; } };
 
-async function novaMesa() {
-  const cod = Math.random().toString(36).slice(2, 7).toUpperCase();
-  const html = `
-    <div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
-      <h2>Nova mesa</h2>
-      <label>Código</label><input id="fcod" value="${cod}">
-      <label class="mt-1">Cena inicial</label><input id="fcena" value="Taverna Javali Cego">
-      <label class="mt-1">Tom</label>
-      <select id="ftom"><option value="epico">Épico</option><option value="sombrio">Sombrio</option><option value="humor">Humor</option></select>
-      <div class="flex mt-1">
-        <button class="btn btn-primary" onclick="criarMesa()">Criar</button>
-        <button class="btn" onclick="fecharModal()">Cancelar</button>
-      </div>
-      <p id="merro" class="erro"></p>
-    </div></div>
-  `;
-  const m = document.createElement('div'); m.innerHTML = html; document.body.appendChild(m.firstElementChild);
-  window.criarMesa = async () => {
-    try {
-      await APP.criarMesa({ codigo: document.getElementById('fcod').value, cena: document.getElementById('fcena').value, tom: document.getElementById('ftom').value });
-      fecharModal(); APP.render();
-    } catch(e) { document.getElementById('merro').textContent = e.message; }
-  };
-}
-
-function verMesa(cod) {
-  APP.verMesa(cod);
-}
-
-APP.verMesa = async function(cod) {
-  const dados = await this.getMesa(cod);
-  const m = dados.mesa, fichas = dados.fichas || [], membros = dados.membros || [];
-  const html = `
-    <div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
-      <h2>${esc(m.codigo)}</h2>
-      <div class="grid cols-2" style="margin-bottom:.5rem">
-        <div><label>Cena</label><input id="mcena" value="${esc(m.cena||'')}"></div>
-        <div><label>Fase</label><select id="mfase"><option ${m.fase==='lobby'?'selected':''}>lobby</option><option ${m.fase==='jogo'?'selected':''}>jogo</option></select></div>
-        <div><label>Tom</label><input id="mtom" value="${esc(m.tom||'')}"></div>
-        <div><label>Resumo</label><textarea id="mresumo" rows="2">${esc(m.resumo||'')}</textarea></div>
-      </div>
-      <div class="flex"><button class="btn btn-primary btn-sm" onclick="APP.editarMesa('${cod}',{cena:document.getElementById('mcena').value,fase:document.getElementById('mfase').value,tom:document.getElementById('mtom').value,resumo:document.getElementById('mresumo').value});APP.render()">Salvar mesa</button></div>
-      <h3>Fichas (${fichas.length})</h3>
-      ${fichas.length ? `<table class="table"><tr><th>Nome</th><th>Raça</th><th>Classe</th><th>PV</th><th>Nível</th><th></th></tr>
-        ${fichas.map(f => `<tr>
-          <td><a href="#" onclick="editarFicha('${cod}','${f.uid}');return false">${esc(f.nome||'?')}</a></td>
-          <td>${esc(f.raca||'—')}</td>
-          <td>${esc(f.classe||'—')}</td>
-          <td>${f.pv||0}/${f.pvMax||0}</td>
-          <td>${f.nivel||1}</td>
-          <td><button class="btn btn-danger btn-sm" onclick="if(confirm('Excluir ${esc(f.nome)}?'))APP.excluirFicha('${cod}','${f.uid}').then(()=>APP.verMesa('${cod}'))">🗑</button></td>
-        </tr>`).join('')}</table>` : '<p class=\"aviso\">Nenhuma ficha.</p>'}
-      <button class="btn btn-primary btn-sm mt-1" onclick="novaFicha('${cod}')">+ Nova ficha</button>
-      <h3 class="mt-1">Membros (${membros.length})</h3>
-      ${membros.length ? `<div class="flex" style="flex-wrap:wrap;gap:.3rem">${membros.map(p => `<span class="badge">${esc(p.nome||p.uid.slice(0,8))}</span>`).join(' ')}</div>` : '<p class=\"aviso\">Nenhum membro.</p>'}
-      <div class="flex mt-1">
-        <button class="btn btn-danger" onclick="if(confirm('Excluir mesa ${cod}? Isso apaga fichas, membros e logs.')){APP.excluirMesa('${cod}');fecharModal();APP.render()}">Excluir mesa</button>
-        <button class="btn" onclick="fecharModal();APP.verMundo('${cod}')">🌦 Mundo (depuração)</button>
-        <button class="btn" onclick="fecharModal()">Fechar</button>
-      </div>
-    </div></div>
-  `;
-  const mEl = document.createElement('div'); mEl.innerHTML = html; document.body.appendChild(mEl.firstElementChild);
-};
-
-// ── Uso da IA (chamadas, tokens e custo por dia) e depuração do mundo da mesa ──
-async function renderUso(elId) {
-  const el = document.getElementById(elId);
-  try {
-    const u = await APP.req('GET', '/api/admin/uso?dias=30');
-    const n = (v) => Number(v || 0).toLocaleString('pt-BR');
-    const us = (v) => 'US$ ' + Number(v || 0).toFixed(4);
-    const tipos = Object.entries(u.total || {});
-    el.innerHTML = `
-      <div class="card">
-        <h2>💰 Uso da IA nos últimos ${u.dias} dias</h2>
-        ${tipos.length ? `<table class="table"><tr><th>Tipo</th><th>Chamadas</th><th>Tokens de entrada</th><th>Tokens de saída</th><th>Custo informado</th></tr>
-          ${tipos.map(([t, x]) => `<tr><td>${esc(t)}</td><td>${n(x.chamadas)}</td><td>${n(x.entrada)}</td><td>${n(x.saida)}</td><td>${us(x.custo)}</td></tr>`).join('')}</table>`
-          : '<p class="aviso">Nenhuma chamada registrada ainda.</p>'}
-        <p class="aviso">"fundo-reaproveitado" e "fundo-biblioteca" são imagens que deixaram de ser geradas. O custo só aparece quando o provedor informa.</p>
-      </div>
-      <div class="card">
-        <h2>Por dia</h2>
-        ${(u.linhas || []).length ? `<table class="table"><tr><th>Dia</th><th>Tipo</th><th>Modelo</th><th>Chamadas</th><th>Entrada</th><th>Saída</th><th>Custo</th></tr>
-          ${u.linhas.map((l) => `<tr><td>${esc(l.dia)}</td><td>${esc(l.tipo)}</td><td>${esc(l.modelo)}</td><td>${n(l.chamadas)}</td><td>${n(l.entrada)}</td><td>${n(l.saida)}</td><td>${us(l.custo)}</td></tr>`).join('')}</table>`
-          : '<p class="aviso">Sem dados.</p>'}
-      </div>`;
-  } catch (e) {
-    el.innerHTML = `<div class="card"><p class="erro">Erro ao carregar o uso: ${esc(e.message)}</p></div>`;
-  }
-}
-
-APP.verMundo = async function(cod, dados) {
-  let d;
-  try { d = dados || await this.req('GET', `/api/admin/mesas/${cod}/mundo`); } catch (e) { alert(e.message); return; }
-  const opcoes = (lista, atual) => ['', ...lista].map((x) => `<option value="${esc(x)}" ${x === atual ? 'selected' : ''}>${esc(x || '(nenhum)')}</option>`).join('');
-  const linhas = (o, f) => Object.entries(o || {}).map(f).join('') || '<li class="aviso">nada ainda</li>';
-  const salvar = `APP.salvarMundo('${cod}',{clima:document.getElementById('wclima').value,periodo:document.getElementById('wperiodo').value,ato:Number(document.getElementById('wato').value)})`;
-  const html = `
-    <div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
-      <h2>Mundo da mesa ${esc(d.codigo)}</h2>
-      <p class="aviso">Fase ${esc(d.fase)} · dia ${d.dia} · cena: ${esc(d.cena || '—')}${d.concluida ? ' · história concluída' : ''}</p>
-      <div class="grid cols-2" style="margin-bottom:.5rem">
-        <div><label>Clima</label><select id="wclima">${opcoes(d.climas, d.mundo.clima)}</select></div>
-        <div><label>Período</label><select id="wperiodo">${opcoes(d.periodos, d.mundo.periodo)}</select></div>
-        <div><label>Ato (só com a aventura em andamento)</label><select id="wato">${[1, 2, 3].map((a) => `<option ${a === d.ato ? 'selected' : ''}>${a}</option>`).join('')}</select></div>
-        <div><label>Encontro à espera</label><p>${esc(d.mundo.encontro || '(nenhum)')}</p></div>
-      </div>
-      <div class="flex" style="flex-wrap:wrap;gap:.3rem">
-        <button class="btn btn-primary btn-sm" onclick="${salvar}">Salvar clima, período e ato</button>
-        <button class="btn btn-sm" onclick="APP.salvarMundo('${cod}',{encontro:true})">Sortear encontro de estrada</button>
-        <button class="btn btn-danger btn-sm" onclick="if(confirm('Apagar a memória desta mesa (fatos, NPCs, reputação, clima)?'))APP.salvarMundo('${cod}',{limpar:true})">Limpar memória</button>
-      </div>
-      <h3 class="mt-1">Fatos</h3><ul>${linhas(d.mundo.fatos, ([k, x]) => `<li><b>${esc(k)}</b>: ${esc(x.v)}</li>`)}</ul>
-      <h3>NPCs</h3><ul>${linhas(d.mundo.npcs, ([k, x]) => `<li><b>${esc(k)}</b>: ${esc(x.v)}</li>`)}</ul>
-      <h3>Reputação</h3><ul>${linhas(d.mundo.reputacao, ([k, v]) => `<li><b>${esc(k)}</b>: ${v > 0 ? '+' : ''}${v}</li>`)}</ul>
-      <div class="flex mt-1"><button class="btn" onclick="fecharModal();APP.verMesa('${cod}')">Voltar</button><button class="btn" onclick="fecharModal()">Fechar</button></div>
-    </div></div>`;
-  const el = document.createElement('div'); el.innerHTML = html; document.body.appendChild(el.firstElementChild);
-};
-APP.salvarMundo = async function(cod, corpo) {
-  try {
-    const d = await this.req('PUT', `/api/admin/mesas/${cod}/mundo`, corpo);
-    fecharModal();
-    this.verMundo(cod, d);
-  } catch (e) { alert(e.message); }
-};
-
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }
-function fecharModal() { const m = document.querySelector('.modal-bg'); if(m) m.remove(); }
-
-function confirmarExcluir(cod) {
-  const el = document.createElement('div');
-  el.innerHTML = `<div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
-    <h2>Excluir ${cod}?</h2>
-    <p>Todas as fichas, membros e logs serão apagados.</p>
-    <div class="flex mt-1">
-      <button class="btn btn-danger" onclick="APP.excluirMesa('${cod}').then(()=>{fecharModal();APP.render()})">Excluir</button>
-      <button class="btn" onclick="fecharModal()">Cancelar</button>
-    </div>
-  </div></div>`;
-  document.body.appendChild(el.firstElementChild);
-}
-
-function novaFicha(cod) {
-  const html = `
-    <div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
-      <h2>Nova ficha</h2>
-      <div class="grid cols-2">
-        <div><label>Nome</label><input id="fnome"></div>
-        <div><label>UID</label><input id="fuid" value="admin_${Math.random().toString(36).slice(2,8)}"></div>
-        <div><label>Raça</label><input id="fraca" value="Humano"></div>
-        <div><label>Classe</label><input id="fclasse" value="Guerreiro"></div>
-        <div><label>PV</label><input id="fpv" value="20"></div>
-        <div><label>PV Max</label><input id="fpvmax" value="20"></div>
-      </div>
-      <div class="flex mt-1">
-        <button class="btn btn-primary" onclick="criarFicha('${cod}')">Criar</button>
-        <button class="btn" onclick="fecharModal()">Cancelar</button>
-      </div>
-      <p id="ferro" class="erro"></p>
-    </div></div>
-  `;
-  const m = document.createElement('div'); m.innerHTML = html; document.body.appendChild(m.firstElementChild);
-  window.criarFicha = async (cod) => {
-    try {
-      await APP.criarFicha(cod, {
-        uid: document.getElementById('fuid').value,
-        nome: document.getElementById('fnome').value,
-        raca: document.getElementById('fraca').value,
-        classe: document.getElementById('fclasse').value,
-        pv: Number(document.getElementById('fpv').value),
-        pvMax: Number(document.getElementById('fpvmax').value)
-      });
-      fecharModal(); APP.verMesa(cod);
-    } catch(e) { document.getElementById('ferro').textContent = e.message; }
-  };
-}
-
-function editarFicha(cod, uid) {
-  APP.getMesa(cod).then(dados => {
-    const f = (dados.fichas||[]).find(f => f.uid === uid);
-    if (!f) return;
-    const html = `
-      <div class="modal-bg" onclick="if(event.target===this)fecharModal()"><div class="modal">
-        <h2>Editar ${esc(f.nome)}</h2>
-        <div class="grid cols-2">
-          <div><label>Nome</label><input id="efnome" value="${esc(f.nome)}"></div>
-          <div><label>Raça</label><input id="efraca" value="${esc(f.raca||'')}"></div>
-          <div><label>Classe</label><input id="efclasse" value="${esc(f.classe||'')}"></div>
-          <div><label>PV</label><input id="efpv" value="${f.pv||0}"></div>
-          <div><label>PV Max</label><input id="efpvmax" value="${f.pvMax||0}"></div>
-          <div><label>Nível</label><input id="efnivel" value="${f.nivel||1}"></div>
-          <div><label>XP</label><input id="efxp" value="${f.xp||0}"></div>
-        </div>
-        <div class="flex mt-1">
-          <button class="btn btn-primary" onclick="salvarFicha('${cod}','${uid}')">Salvar</button>
-          <button class="btn" onclick="fecharModal()">Cancelar</button>
-        </div>
-        <p id="eferro" class="erro"></p>
-      </div></div>
-    `;
-    const m = document.createElement('div'); m.innerHTML = html; document.body.appendChild(m.firstElementChild);
-    window.salvarFicha = async (cod, uid) => {
-      try {
-        await APP.editarFicha(cod, uid, {
-          nome: document.getElementById('efnome').value,
-          raca: document.getElementById('efraca').value,
-          classe: document.getElementById('efclasse').value,
-          pv: Number(document.getElementById('efpv').value),
-          pvMax: Number(document.getElementById('efpvmax').value),
-          nivel: Number(document.getElementById('efnivel').value),
-          xp: Number(document.getElementById('efxp').value)
+  function desenhar() {
+    const W = Math.round(plot.clientWidth);
+    if (!W) return;
+    const H = cfg.altura || 220;
+    if (svgAtual) svgAtual.remove();
+    const totalEm = (i) => series.reduce((a, sr) => a + num(sr.valores[i]), 0);
+    let max = 0;
+    for (let i = 0; i < n; i++) max = Math.max(max, cfg.empilhar ? totalEm(i) : Math.max.apply(null, series.map((sr) => num(sr.valores[i]))));
+    const e = escala(max, cfg.inteiro !== false);
+    const fe = cfg.fmtEixo || eixoInteiro;
+    const rotY = e.ticks.map((v) => fe(v, e));
+    const mL = limitar(10 + Math.max.apply(null, rotY.map((t) => t.length)) * 6.3, 30, 92), mR = 14, mT = 12, mB = 26;
+    const pw = Math.max(40, W - mL - mR), ph = H - mT - mB, y0 = mT + ph;
+    const y = (v) => y0 - (num(v) / e.topo) * ph;
+    const banda = pw / n;
+    const x = (i) => (coluna ? mL + (i + 0.5) * banda : n === 1 ? mL + pw / 2 : mL + (i * pw) / (n - 1));
+    const svg = s('svg', { viewBox: '0 0 ' + W + ' ' + H, width: W, height: H, role: 'img', 'aria-label': resumo, tabindex: '0', focusable: 'true' });
+    // grade e eixo Y
+    e.ticks.forEach((v, k) => {
+      const yy = Math.round(y(v)) + 0.5;
+      s('line', { x1: mL, x2: mL + pw, y1: yy, y2: yy, stroke: k === 0 ? 'var(--eixo)' : 'var(--grade)', 'stroke-width': 1 }, svg);
+      s('text', { x: mL - 7, y: yy, dy: '.32em', 'text-anchor': 'end' }, svg, rotY[k]);
+    });
+    // rótulos do eixo X: só os que cabem
+    const cabem = limitar(Math.floor(pw / (cfg.larguraRotulo || 64)), 2, cfg.maxRotulos || 12);
+    const salto = Math.max(1, Math.ceil(n / cabem)), marcados = [];
+    if (coluna) { for (let i = 0; i < n; i += salto) marcados.push(i); }
+    else { for (let i = n - 1; i >= 0; i -= salto) marcados.push(i); }   // de trás para a frente: o dia mais recente sempre aparece
+    marcados.forEach((i) => {
+      const ancora = coluna || n === 1 ? 'middle' : i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+      s('text', { x: x(i), y: y0 + 17, 'text-anchor': ancora }, svg, rot[i]);
+    });
+    // marcas
+    if (coluna) {
+      const lb = limitar(banda - 2, 1, 24);
+      for (let i = 0; i < n; i++) {
+        let base = y0, desenhou = false;
+        const ultimo = series.reduce((a, sr, k) => (num(sr.valores[i]) > 0 ? k : a), -1);
+        series.forEach((sr, k) => {
+          const v = num(sr.valores[i]);
+          if (!(v > 0)) return;
+          let alt = Math.max(1, (v / e.topo) * ph);
+          const topo = base - alt;
+          if (desenhou && alt > 4) alt -= 2;            // vão de 2px entre segmentos empilhados
+          const r = k === ultimo ? Math.min(4, lb / 2, alt) : 0;
+          const xe = x(i) - lb / 2;
+          s('path', { d: 'M' + xe + ',' + (topo + alt) + 'V' + (topo + r) + 'Q' + xe + ',' + topo + ' ' + (xe + r) + ',' + topo + 'H' + (xe + lb - r) + 'Q' + (xe + lb) + ',' + topo + ' ' + (xe + lb) + ',' + (topo + r) + 'V' + (topo + alt) + 'Z', fill: sr.cor }, svg);
+          base = topo; desenhou = true;
+          if (!cfg.empilhar) base = y0;
         });
-        fecharModal(); APP.verMesa(cod);
-      } catch(e) { document.getElementById('eferro').textContent = e.message; }
+      }
+    } else {
+      series.forEach((sr) => {
+        if (n === 1) { s('circle', { cx: x(0), cy: y(sr.valores[0]), r: 4.5, fill: sr.cor, stroke: 'var(--sup)', 'stroke-width': 2 }, svg); return; }
+        const pts = sr.valores.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1));
+        if (sr.area) s('path', { d: 'M' + pts.join('L') + 'L' + x(n - 1).toFixed(1) + ',' + y0 + 'L' + x(0).toFixed(1) + ',' + y0 + 'Z', fill: sr.cor, 'fill-opacity': 0.12 }, svg);
+        s('path', { d: 'M' + pts.join('L'), fill: 'none', stroke: sr.cor, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+        if (temDado) s('circle', { cx: x(n - 1), cy: y(sr.valores[n - 1]), r: 3.5, fill: sr.cor, stroke: 'var(--sup)', 'stroke-width': 2 }, svg);
+      });
+    }
+    // camada de leitura: faixa ou linha-guia + pontos
+    const guia = coluna
+      ? s('rect', { x: 0, y: mT, width: Math.max(1, banda), height: ph, fill: 'var(--tinta)', 'fill-opacity': 0.08, visibility: 'hidden' }, svg)
+      : s('line', { y1: mT, y2: y0, stroke: 'var(--tinta-3)', 'stroke-width': 1, visibility: 'hidden' }, svg);
+    const pontos = coluna ? [] : series.map((sr) => s('circle', { r: 4.5, fill: sr.cor, stroke: 'var(--sup)', 'stroke-width': 2, visibility: 'hidden' }, svg));
+    s('rect', { x: mL, y: 0, width: pw, height: H, fill: 'transparent' }, svg);
+    svg._marca = (i) => {
+      const vis = i >= 0 ? 'visible' : 'hidden';
+      guia.setAttribute('visibility', vis);
+      pontos.forEach((p) => p.setAttribute('visibility', vis));
+      if (i < 0) return;
+      if (coluna) guia.setAttribute('x', mL + i * banda); else { guia.setAttribute('x1', x(i)); guia.setAttribute('x2', x(i)); }
+      pontos.forEach((p, k) => { p.setAttribute('cx', x(i)); p.setAttribute('cy', y(series[k].valores[i])); });
     };
+    const mostrar = (i, falar) => {
+      sel = limitar(i, 0, n - 1);
+      svg._marca(sel);
+      dica.textContent = '';
+      dica.appendChild(h('div', { class: 'dica-t', text: longos[sel] }));
+      series.forEach((sr) => {
+        const chave = h('span', { class: 'chave' + (coluna ? ' bloco' : ''), 'aria-hidden': 'true' }); chave.style.background = sr.cor;
+        dica.appendChild(h('div', { class: 'dica-l' }, [chave, h('strong', { text: fmt(sr.valores[sel]) }), h('span', { text: sr.nome })]));
+      });
+      if (cfg.empilhar && series.length > 1) dica.appendChild(h('div', { class: 'dica-l dica-total' }, [h('strong', { text: fmt(totalEm(sel)) }), h('span', { text: 'no total' })]));
+      dica.hidden = false;
+      const lw = dica.offsetWidth, px = x(sel) * (plot.clientWidth / W);
+      let esq = px + 12; if (esq + lw > plot.clientWidth - 4) esq = px - 12 - lw;
+      dica.style.left = limitar(esq, 4, Math.max(4, plot.clientWidth - lw - 4)) + 'px';
+      dica.style.top = mT + 'px';
+      if (DICA_ATIVA && DICA_ATIVA !== reg) DICA_ATIVA.ocultar();
+      DICA_ATIVA = reg;
+      if (falar) anunciar(longos[sel] + ': ' + series.map((sr) => sr.nome + ' ' + fmt(sr.valores[sel])).join(', '));
+    };
+    const indiceDe = (ev) => {
+      const cx = svg.getBoundingClientRect();
+      const px = ((ev.clientX - cx.left) * W) / (cx.width || W);
+      return coluna ? Math.floor((px - mL) / banda) : n === 1 ? 0 : Math.round((px - mL) / (pw / (n - 1)));
+    };
+    svg.addEventListener('pointermove', (ev) => mostrar(indiceDe(ev)));
+    svg.addEventListener('pointerdown', (ev) => mostrar(indiceDe(ev)));
+    svg.addEventListener('pointerleave', (ev) => { if (ev.pointerType === 'mouse') reg.ocultar(); });
+    svg.addEventListener('focus', () => { if (sel < 0 && svg.matches(':focus-visible')) mostrar(n - 1, true); });
+    svg.addEventListener('blur', () => reg.ocultar());
+    svg.addEventListener('keydown', (ev) => {
+      const k = ev.key; let i = sel < 0 ? n - 1 : sel;
+      if (k === 'ArrowLeft') i -= 1; else if (k === 'ArrowRight') i += 1; else if (k === 'Home') i = 0; else if (k === 'End') i = n - 1;
+      else if (k === 'Escape') { if (sel >= 0) { ev.stopPropagation(); reg.ocultar(); } return; } else return;
+      ev.preventDefault(); mostrar(i, true);
+    });
+    plot.insertBefore(svg, plot.firstChild);
+    svgAtual = svg;
+    if (sel >= 0) mostrar(sel);
+  }
+  DESENHOS.set(plot, { fn: desenhar, w: Math.round(plot.clientWidth) });
+  if (OBS) OBS.observe(plot);
+  desenhar();
+}
+
+/** Barras horizontais para categorias (uma cor só; o valor fica escrito ao lado). */
+function barrasH(host, itens, opc) {
+  opc = opc || {};
+  host.textContent = '';
+  let lista = itens.filter((it) => num(it.valor) > 0).sort((a, b) => num(b.valor) - num(a.valor));
+  if (!lista.length) { host.appendChild(caixaVazia(opc.vazio)); return; }
+  const limite = opc.max || 8;
+  if (lista.length > limite) {
+    const resto = lista.slice(limite - 1);
+    lista = lista.slice(0, limite - 1).concat([{ nome: 'Outros (' + resto.length + ')', valor: soma(resto.map((r) => r.valor)) }]);
+  }
+  const total = soma(lista.map((it) => it.valor)), maior = Math.max.apply(null, lista.map((it) => num(it.valor)));
+  host.appendChild(h('ul', { class: 'barras' }, lista.map((it) => {
+    const barra = h('span', { class: 'b-barra' }); barra.style.width = Math.max(1, (num(it.valor) / maior) * 100) + '%';
+    const pct = fPct((num(it.valor) / total) * 100);
+    return h('li', { title: it.nome + ': ' + fInt(it.valor) + ' (' + pct + ')' }, [
+      h('span', { class: 'b-nome', text: it.nome }),
+      h('span', { class: 'b-trilho', 'aria-hidden': 'true' }, [barra]),
+      h('span', { class: 'b-valor' }, [document.createTextNode(fInt(it.valor)), h('small', { text: pct })]),
+    ]);
+  })));
+}
+
+/** Minilinha do cartão de indicador (decorativa: o número está escrito no cartão). */
+function minilinha(host, valores) {
+  if (!host || !valores || valores.length < 2 || !valores.some((v) => num(v) > 0)) return;
+  const W = 120, H = 32, n = valores.length, max = Math.max.apply(null, valores.map(num));
+  const pts = valores.map((v, i) => ((i * W) / (n - 1)).toFixed(1) + ',' + (H - 3 - (num(v) / max) * (H - 7)).toFixed(1));
+  const svg = s('svg', { viewBox: '0 0 ' + W + ' ' + H, preserveAspectRatio: 'none', 'aria-hidden': 'true', focusable: 'false' });
+  s('path', { d: 'M' + pts.join('L') + 'L' + W + ',' + H + 'L0,' + H + 'Z', fill: 'var(--s1)', 'fill-opacity': 0.12 }, svg);
+  s('path', { d: 'M' + pts.join('L'), fill: 'none', stroke: 'var(--s1)', 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'round' }, svg);
+  host.appendChild(svg);
+}
+
+/** Acima de 31 pontos, colunas por dia ficam finas demais: junta em semanas (de trás para a frente). */
+function agruparDias(serie, campos) {
+  if (serie.length <= 31) {
+    return { porSemana: false, rotulos: serie.map((d) => diaCurto(d.dia)), longos: serie.map((d) => diaLongo(d.dia)), valores: campos.map((c) => serie.map((d) => num(d[c]))) };
+  }
+  const grupos = [];
+  for (let fim = serie.length; fim > 0; fim -= 7) grupos.unshift(serie.slice(Math.max(0, fim - 7), fim));
+  return {
+    porSemana: true,
+    rotulos: grupos.map((g) => diaCurto(g[0].dia)),
+    longos: grupos.map((g) => (g.length > 1 ? diaCurto(g[0].dia) + ' a ' + diaCurto(g[g.length - 1].dia) : diaCurto(g[0].dia))),
+    valores: campos.map((c) => grupos.map((g) => soma(g.map((d) => d[c])))),
+  };
+}
+
+/* ═══════════ Peças de página ═══════════ */
+const ICONE = '<svg class="marca-icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 7.5 16.5 15h-9z" fill="currentColor" fill-opacity=".85"/></svg>';
+const ABAS = [['geral', 'Visão geral'], ['mesas', 'Mesas'], ['usuarios', 'Usuários'], ['uso', 'Uso da IA']];
+const PERIODOS = [7, 30, 90];
+function htmlCarregando() {
+  return '<div class="carregando" role="status"><span class="so-leitor">Carregando…</span><div class="osso"></div><div class="osso alto"></div></div>';
+}
+function htmlErro(e, oQue) {
+  return '<div class="caixa-erro" role="alert"><p><strong>Não foi possível carregar ' + esc(oQue) + '.</strong><br>' + esc(e && e.message ? e.message : 'Erro desconhecido.') +
+    '</p><button type="button" class="btn" data-acao="recarregar">Tentar de novo</button></div>';
+}
+function htmlPeriodo() {
+  return '<div class="periodo" role="group" aria-label="Período">' + PERIODOS.map((d) =>
+    '<button type="button" data-acao="periodo" data-dias="' + d + '" aria-pressed="' + (APP._dias === d) + '">' + d + ' dias</button>').join('') + '</div>';
+}
+function htmlTopoPagina(titulo, extras) {
+  return '<div class="pag-topo"><h2>' + esc(titulo) + '</h2><div class="pag-ferramentas">' + (extras || '') +
+    '<span class="suave" id="atualizado"></span><button type="button" class="btn btn-p" data-acao="recarregar">Atualizar</button></div></div>';
+}
+function htmlCartao(id, titulo, sub, classe) {
+  return '<section class="cartao ' + (classe || '') + '" aria-labelledby="t-' + id + '"><div class="cartao-topo"><h3 id="t-' + id + '">' + esc(titulo) + '</h3>' +
+    (sub ? '<p class="sub">' + esc(sub) + '</p>' : '') + '</div><div id="' + id + '"></div></section>';
+}
+/** Variação contra o período anterior. bomSubir: true (subir é bom), false (subir é ruim) ou null (neutro). */
+function htmlDelta(atual, anterior, contexto, bomSubir) {
+  atual = num(atual); anterior = num(anterior);
+  const ctx = ' <span class="kpi-ctx">' + esc(contexto) + '</span>';
+  if (!anterior && !atual) return '<p class="kpi-delta"><b>Sem movimento</b>' + ctx + '</p>';
+  if (!anterior) return '<p class="kpi-delta"><b>Sem base de comparação</b> <span class="kpi-ctx">(o período anterior ficou em zero)</span></p>';
+  const p = ((atual - anterior) / anterior) * 100;
+  if (Math.abs(p) < 0.05) return '<p class="kpi-delta"><b><span aria-hidden="true">＝</span> Estável</b>' + ctx + '</p>';
+  const sobe = p > 0, cls = bomSubir === null || bomSubir === undefined ? '' : (sobe === bomSubir ? ' bom' : ' ruim');
+  const txt = Math.abs(p) > 999 ? 'mais de 999%' : fPct(Math.abs(p));
+  return '<p class="kpi-delta' + cls + '"><b><span aria-hidden="true">' + (sobe ? '▲' : '▼') + '</span><span class="so-leitor">' + (sobe ? 'subiu' : 'caiu') + '</span> ' + txt + '</b>' + ctx + '</p>';
+}
+function htmlKpi(rotulo, valor, deltaHtml, sparkId) {
+  return '<article class="kpi"><h3 class="kpi-rot">' + esc(rotulo) + '</h3><p class="kpi-val">' + esc(valor) + '</p>' + (deltaHtml || '') +
+    (sparkId ? '<div class="kpi-spark" id="' + sparkId + '"></div>' : '') + '</article>';
+}
+const htmlSub = (txt) => '<p class="kpi-delta"><span class="kpi-ctx">' + esc(txt) + '</span></p>';
+function seloFase(fase) {
+  if (fase === 'jogo') return '<span class="selo selo-jogo">Em jogo</span>';
+  if (fase === 'lobby') return '<span class="selo selo-saguao">No saguão</span>';
+  return '<span class="selo">' + esc(fase || '—') + '</span>';
+}
+function marcarAtualizado(ms) { const e = $('#atualizado'); if (e) e.textContent = 'Atualizado às ' + fHora(ms); }
+
+/* ═══════════ Estrutura: login e casca ═══════════ */
+function renderApp() {
+  const app = $('#app');
+  limparGraficos();
+  if (!APP._token) {
+    app.innerHTML =
+      '<main class="login"><form class="login-caixa" data-form="login" novalidate>' + ICONE +
+      '<h1>Mesa Viva — Administração</h1><p class="suave">Entre com a conta de administrador do servidor.</p>' +
+      (APP._avisoLogin ? '<p class="faixa" role="status">' + esc(APP._avisoLogin) + '</p>' : '') +
+      '<label for="luser">Usuário</label><input id="luser" name="user" value="admin" autocomplete="username" autocapitalize="none" spellcheck="false" required>' +
+      '<label for="lpass">Senha</label><input id="lpass" name="pass" type="password" autocomplete="current-password" required>' +
+      '<button class="btn btn-primario" type="submit">Entrar</button><p class="erro" role="alert" data-erro></p></form></main>';
+    const campo = $('#lpass'); if (campo) campo.focus();
+    return;
+  }
+  app.innerHTML =
+    '<a class="pular" href="#conteudo">Pular para o conteúdo</a>' +
+    '<header class="topo"><div class="topo-in"><div class="marca">' + ICONE + '<h1>Mesa Viva <small>Administração</small></h1></div>' +
+    '<div class="conta"><span title="Conta conectada">' + esc(APP._user) + '</span><button type="button" class="btn btn-p" data-acao="sair">Sair</button></div></div>' +
+    '<nav class="abas" aria-label="Seções do painel"><div class="abas-in">' + ABAS.map((a) =>
+      '<button type="button" class="aba" data-acao="aba" data-aba="' + a[0] + '">' + a[1] + (a[0] === 'mesas' ? '<span class="conta-n" id="n-mesas" hidden></span>' : '') + '</button>').join('') +
+    '</div></nav></header><main id="conteudo" class="pagina" tabindex="-1"></main>';
+  renderAba();
+  if (!APP._mesas) APP.listarMesas().then((d) => { APP._mesas = d.mesas || []; marcarContagem(); }).catch(() => {});
+}
+function marcarContagem() {
+  const e = $('#n-mesas'); if (!e || !APP._mesas) return;
+  e.hidden = false; e.textContent = fInt(APP._mesas.length); e.setAttribute('aria-label', APP._mesas.length + ' mesas');
+}
+function renderAba(manter) {
+  document.querySelectorAll('.aba').forEach((b) => {
+    if (b.dataset.aba !== APP._tab) { b.removeAttribute('aria-current'); return; }
+    b.setAttribute('aria-current', 'page');
+    const faixa = b.closest('.abas'), rb = b.getBoundingClientRect(), rf = faixa ? faixa.getBoundingClientRect() : null;   // no celular a faixa de abas rola: a aba atual tem de ficar inteira à vista
+    if (rf && rb.right > rf.right) faixa.scrollLeft += rb.right - rf.right + 8; else if (rf && rb.left < rf.left) faixa.scrollLeft -= rf.left - rb.left + 8;
+  });
+  marcarContagem();
+  const main = $('#conteudo'); if (!main) return;
+  const seq = ++APP._seq;
+  let corpo = manter ? $('#corpo[data-aba="' + APP._tab + '"]', main) : null;
+  if (!corpo) {
+    limparGraficos();
+    const tem = APP._tab === 'geral' || APP._tab === 'uso';
+    const titulo = ABAS.find((a) => a[0] === APP._tab)[1];
+    main.innerHTML = htmlTopoPagina(titulo, tem ? htmlPeriodo() : '') + '<div id="corpo" data-aba="' + APP._tab + '">' + htmlCarregando() + '</div>';
+    corpo = $('#corpo', main);
+  } else {
+    corpo.classList.add('ocupado');
+    main.querySelectorAll('.periodo button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.dias) === APP._dias)));
+  }
+  corpo.setAttribute('aria-busy', 'true');
+  const vivo = () => seq === APP._seq && document.contains(corpo);
+  const fim = () => {
+    if (!vivo()) return;
+    corpo.classList.remove('ocupado'); corpo.removeAttribute('aria-busy');
+    // a lista foi refeita e o botão que tinha o foco sumiu (mesa excluída, por exemplo): o foco volta para o conteúdo, e não para o topo da página
+    if (!MODAIS.length && document.activeElement === document.body) main.focus({ preventScroll: true });
+  };
+  const telas = { geral: telaGeral, mesas: telaMesas, usuarios: telaUsuarios, uso: telaUso };
+  const nomes = { geral: 'a visão geral', mesas: 'as mesas', usuarios: 'os usuários', uso: 'o uso da IA' };
+  telas[APP._tab](corpo, vivo).catch((e) => { if (vivo() && APP._token) { limparGraficos(); corpo.innerHTML = htmlErro(e, nomes[APP._tab]); } }).then(fim);
+}
+
+/* ═══════════ Visão geral ═══════════ */
+async function telaGeral(corpo, vivo) {
+  const m = await APP.getMetricas(APP._dias);
+  if (!vivo()) return;
+  if (!m) { const st = await APP.getEstatisticas(); if (vivo()) montarGeralAntigo(corpo, st); return; }
+  limparGraficos();
+  const seletor = $('.periodo'); if (seletor) seletor.hidden = false;
+  const t = m.totais || {}, p = m.periodo || {}, a = m.anterior || {}, serie = m.serie || [], dias = num(m.dias) || serie.length;
+  const ctx = 'em relação aos ' + dias + ' dias anteriores';
+  // jogadores ativos: média diária dos últimos 7 dias contra os 7 anteriores (quando o período permite)
+  const ativos = serie.map((d) => num(d.jogadoresAtivos));
+  let deltaAtivos = htmlSub('contas que jogaram nos últimos 7 dias');
+  if (ativos.length >= 14) {
+    const u7 = soma(ativos.slice(-7)) / 7, a7 = soma(ativos.slice(-14, -7)) / 7;
+    deltaAtivos = htmlDelta(u7, a7, 'na média diária, contra os 7 dias anteriores', true);
+  }
+  corpo.innerHTML =
+    '<section class="kpis" aria-label="Indicadores principais">' +
+      htmlKpi('Jogadores ativos em 7 dias', fInt(t.jogadoresAtivos7d), deltaAtivos, 'sp-ativos') +
+      htmlKpi('Mesas em jogo', fInt(t.mesasEmJogo), htmlSub(fInt(t.mesasNoSaguao) + ' no saguão · ' + fInt(t.mesasAtivas7d) + ' ativas em 7 dias')) +
+      htmlKpi('Narrações em ' + dias + ' dias', fCompacto(p.narracoes), htmlDelta(p.narracoes, a.narracoes, ctx, true), 'sp-narr') +
+      htmlKpi('Custo de IA em ' + dias + ' dias', fUSD(p.custo), htmlDelta(p.custo, a.custo, ctx, null), 'sp-custo') +
+      htmlKpi('Novos usuários em ' + dias + ' dias', fInt(p.usuariosNovos), htmlDelta(p.usuariosNovos, a.usuariosNovos, ctx, true), 'sp-usr') +
+    '</section>' +
+    '<dl class="totais" aria-label="Totais desde o início">' +
+      [['Usuários', t.usuarios], ['Mesas', t.mesas], ['Aventuras concluídas', t.aventurasConcluidas], ['Personagens', t.fichas], ['Narrações', t.narracoes], ['Ações', t.acoes], ['Rolagens', t.rolagens]]
+        .map((x) => '<div><dt>' + x[0] + '</dt><dd>' + fInt(x[1]) + '</dd></div>').join('') +
+    '</dl>' +
+    '<div class="grade g2">' +
+      htmlCartao('g-atividade', 'Atividade por dia', 'Narrações do mestre e ações dos jogadores, de ' + diaCurto(m.desde) + ' a ' + diaCurto(m.ate), 'larga') +
+      htmlCartao('g-novos', 'Novos usuários e novas mesas', 'Cadastros e mesas criadas por dia') +
+      htmlCartao('g-horas', 'Quando se joga', 'Narrações por hora do dia, no horário de Brasília') +
+    '</div><div class="grade g3">' +
+      htmlCartao('g-temas', 'Mesas por tema', 'Todas as mesas') +
+      htmlCartao('g-classes', 'Personagens por classe', 'Todas as fichas') +
+      htmlCartao('g-niveis', 'Personagens por nível', 'Todas as fichas') +
+    '</div><div class="grade">' +
+      htmlCartao('g-ativas', 'Mesas mais ativas', 'Por narrações em ' + dias + ' dias') +
+    '</div>';
+  marcarAtualizado(m.geradoEm);
+  minilinha($('#sp-ativos'), ativos);
+  minilinha($('#sp-narr'), serie.map((d) => d.narracoes));
+  minilinha($('#sp-custo'), serie.map((d) => d.custo));
+  minilinha($('#sp-usr'), serie.map((d) => d.usuariosNovos));
+
+  const rot = serie.map((d) => diaCurto(d.dia)), longos = serie.map((d) => diaLongo(d.dia));
+  const at = $('#g-atividade');
+  const a1 = h('div'), a2 = h('div');
+  at.appendChild(a1); at.appendChild(h('h4', { text: 'Jogadores ativos por dia' })); at.appendChild(a2);
+  graficoXY(a1, { tipo: 'linha', titulo: 'Narrações e ações por dia', rotulos: rot, rotulosLongos: longos, altura: 240, series: [
+    { nome: 'Narrações', cor: 'var(--s1)', valores: serie.map((d) => num(d.narracoes)) },
+    { nome: 'Ações', cor: 'var(--s2)', valores: serie.map((d) => num(d.acoes)) }] });
+  graficoXY(a2, { tipo: 'linha', titulo: 'Jogadores ativos por dia', rotulos: rot, rotulosLongos: longos, altura: 150, series: [
+    { nome: 'Jogadores ativos', cor: 'var(--s3)', valores: ativos, area: true, media: true }] });
+  graficoXY($('#g-novos'), { tipo: 'linha', titulo: 'Novos usuários e novas mesas por dia', rotulos: rot, rotulosLongos: longos, series: [
+    { nome: 'Novos usuários', cor: 'var(--s1)', valores: serie.map((d) => num(d.usuariosNovos)) },
+    { nome: 'Novas mesas', cor: 'var(--s2)', valores: serie.map((d) => num(d.mesasNovas)) }] });
+  const horas = Array.isArray(m.horas) ? m.horas.slice(0, 24) : [];
+  graficoXY($('#g-horas'), { tipo: 'coluna', titulo: 'Narrações por hora do dia', colunaX: 'Hora', larguraRotulo: 44,
+    rotulos: horas.map((_, i) => i + 'h'), rotulosLongos: horas.map((_, i) => 'Das ' + i + 'h às ' + (i + 1) + 'h'),
+    series: [{ nome: 'Narrações', cor: 'var(--s1)', valores: horas.map(num) }] });
+
+  barrasH($('#g-temas'), (m.temas || []).map((x) => ({ nome: x.nome || x.id || '—', valor: x.mesas })), { vazio: 'Nenhuma mesa criada ainda.' });
+  montarIdiomas($('#g-temas'), m.idiomas);
+  barrasH($('#g-classes'), (m.classes || []).map((x) => ({ nome: x.classe || '—', valor: x.personagens })), { vazio: 'Nenhum personagem criado ainda.' });
+  const niveis = m.niveis || [];
+  graficoXY($('#g-niveis'), { tipo: 'coluna', titulo: 'Personagens por nível', colunaX: 'Nível', larguraRotulo: 40, vazio: 'Nenhum personagem criado ainda.',
+    rotulos: niveis.map((x) => String(x.nivel)), rotulosLongos: niveis.map((x) => 'Nível ' + x.nivel),
+    series: [{ nome: 'Personagens', cor: 'var(--s1)', valores: niveis.map((x) => num(x.personagens)) }] });
+  montarMaisAtivas($('#g-ativas'), m.mesasMaisAtivas || []);
+}
+function montarIdiomas(host, idiomas) {
+  const nomes = { pt: 'Português', en: 'Inglês', es: 'Espanhol' };
+  const lista = Object.keys(idiomas || {}).map((k) => ({ nome: nomes[k] || k, valor: num(idiomas[k]) })).filter((x) => x.valor > 0);
+  const total = soma(lista.map((x) => x.valor));
+  if (!total) return;
+  host.appendChild(h('h4', { text: 'Idioma das mesas' }));
+  const cores = ['var(--s1)', 'var(--s2)', 'var(--s3)'];
+  if (lista.length <= 3) {
+    host.appendChild(h('div', { class: 'segmentos', 'aria-hidden': 'true' }, lista.map((x, i) => { const sg = h('span'); sg.style.flex = String(x.valor); sg.style.background = cores[i]; return sg; })));
+  }
+  host.appendChild(h('ul', { class: 'legenda' }, lista.map((x, i) => {
+    const chave = h('span', { class: 'chave bloco', 'aria-hidden': 'true' }); chave.style.background = lista.length <= 3 ? cores[i] : 'var(--tinta-3)';
+    return h('li', null, [chave, h('span', { text: x.nome + ': ' + fInt(x.valor) + ' (' + fPct((x.valor / total) * 100) + ')' })]);
+  })));
+}
+function montarMaisAtivas(host, mesas) {
+  host.textContent = '';
+  if (!mesas.length) { host.appendChild(caixaVazia('Nenhuma mesa teve narrações neste período.')); return; }
+  host.innerHTML = '<div class="rolagem" tabindex="0" role="region" aria-label="Mesas mais ativas"><table class="tabela"><thead><tr>' +
+    '<th scope="col">Mesa</th><th scope="col">Cena</th><th scope="col">Tema</th><th scope="col">Fase</th><th scope="col" class="num">Narrações</th><th scope="col" class="num">Jogadores</th><th scope="col">Última atividade</th></tr></thead><tbody>' +
+    mesas.map((x) => '<tr><td><button type="button" class="btn-link" data-acao="abrir-mesa" data-cod="' + esc(x.codigo) + '" aria-label="Abrir a mesa ' + esc(x.codigo) + '">' + esc(x.codigo) + '</button></td>' +
+      '<td class="corta" title="' + esc(x.cena || '') + '">' + esc(x.cena || '—') + '</td><td class="nq">' + esc(x.tema || '—') + '</td><td>' + seloFase(x.fase) + '</td>' +
+      '<td class="num">' + fInt(x.narracoes) + '</td><td class="num">' + fInt(x.jogadores) + '</td><td class="nq" title="' + esc(fDataHora(x.ultimaAtividade)) + '">' + esc(haQuanto(x.ultimaAtividade)) + '</td></tr>').join('') +
+    '</tbody></table></div>';
+}
+/** Servidor sem /api/admin/metricas: mostra o que /api/admin/estatisticas oferece. */
+function montarGeralAntigo(corpo, st) {
+  limparGraficos();
+  const media = (a, b) => (num(b) > 0 ? fDec(num(a) / num(b), 1) : '0');
+  const per = $('.periodo'); if (per) per.hidden = true;
+  corpo.innerHTML =
+    '<p class="faixa" role="status"><strong>Gráficos completos indisponíveis.</strong> Este servidor ainda não tem a rota de métricas (<code>/api/admin/metricas</code>). Atualize o servidor para ver atividade, custos e distribuições. Abaixo, os indicadores que já existem.</p>' +
+    '<section class="kpis" style="--n:4" aria-label="Indicadores principais">' +
+      htmlKpi('Usuários', fInt(st.totalUsuarios), htmlSub(fInt(st.usuariosHoje) + ' nas últimas 24 h · ' + fInt(st.usuariosSemana) + ' em 7 dias')) +
+      htmlKpi('Mesas', fInt(st.totalMesas), htmlSub(fInt(st.mesasEmJogo) + ' em jogo')) +
+      htmlKpi('Personagens', fInt(st.totalFichas), htmlSub(media(st.totalFichas, st.totalMesas) + ' por mesa, em média')) +
+      htmlKpi('Registros no diário', fCompacto(st.totalLogs), htmlSub(media(st.totalLogs, st.totalMesas) + ' por mesa, em média')) +
+    '</section><div class="grade g2">' +
+      htmlCartao('g-usr', 'Novos usuários por dia', 'Últimos 30 dias (dias em UTC)') + htmlCartao('g-mes', 'Novas mesas por dia', 'Últimos 30 dias (dias em UTC)') + '</div>';
+  marcarAtualizado(Date.now());
+  const dias = []; for (let i = 29; i >= 0; i--) dias.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+  const preencher = (linhas) => { const mapa = {}; (linhas || []).forEach((l) => { mapa[l.dia] = num(l.total); }); return dias.map((d) => mapa[d] || 0); };
+  const base = { tipo: 'linha', rotulos: dias.map(diaCurto), rotulosLongos: dias.map(diaLongo) };
+  graficoXY($('#g-usr'), Object.assign({ titulo: 'Novos usuários por dia', series: [{ nome: 'Novos usuários', cor: 'var(--s1)', valores: preencher(st.usuariosPorDia), area: true }] }, base));
+  graficoXY($('#g-mes'), Object.assign({ titulo: 'Novas mesas por dia', series: [{ nome: 'Novas mesas', cor: 'var(--s2)', valores: preencher(st.mesasPorDia), area: true }] }, base));
+}
+
+/* ═══════════ Uso da IA ═══════════ */
+async function telaUso(corpo, vivo) {
+  const [m, uso] = await Promise.all([APP.getMetricas(APP._dias), APP.getUso(APP._dias).then((u) => ({ u }), (e) => ({ e }))]);
+  if (!vivo()) return;
+  limparGraficos();
+  let html = '';
+  const per = $('.periodo'); if (per) per.hidden = !m;
+  if (!m) {
+    html += '<p class="faixa" role="status"><strong>Gráficos indisponíveis.</strong> Este servidor ainda não tem a rota de métricas (<code>/api/admin/metricas</code>). As tabelas abaixo continuam funcionando.</p>';
+  } else {
+    const p = m.periodo || {}, a = m.anterior || {}, dias = num(m.dias);
+    const ctx = 'em relação aos ' + dias + ' dias anteriores';
+    const fundos = num(p.imagens) + num(p.fundosReaproveitados);
+    html +=
+      '<section class="kpis" aria-label="Indicadores de uso da IA">' +
+        htmlKpi('Custo em ' + dias + ' dias', fUSD(p.custo), htmlDelta(p.custo, a.custo, ctx, null), 'sp-custo') +
+        htmlKpi('Chamadas à IA', fCompacto(p.chamadasIA), htmlDelta(p.chamadasIA, a.chamadasIA, ctx, null), 'sp-cham') +
+        htmlKpi('Tokens', fCompacto(num(p.tokensEntrada) + num(p.tokensSaida)), htmlSub(fCompacto(p.tokensEntrada) + ' de entrada · ' + fCompacto(p.tokensSaida) + ' de saída')) +
+        htmlKpi('Imagens geradas', fInt(p.imagens), htmlDelta(p.imagens, a.imagens, ctx, null)) +
+        htmlKpi('Fundos reaproveitados', fInt(p.fundosReaproveitados), htmlSub(fundos ? fPct((num(p.fundosReaproveitados) / fundos) * 100) + ' dos fundos não precisaram ser gerados' : 'nenhum fundo pedido no período')) +
+      '</section><div class="grade g2">' +
+        htmlCartao('u-custo', 'Custo por dia', 'Em dólares, como o provedor informa') +
+        htmlCartao('u-cham', 'Chamadas à IA', '') +
+        htmlCartao('u-tokens', 'Tokens por dia', 'Entrada (o que o jogo envia) e saída (o que a IA escreve)') +
+        htmlCartao('u-img', 'Imagens geradas e fundos reaproveitados', '') +
+      '</div><div class="grade">' + htmlCartao('u-modelos', 'Por modelo', 'Soma de ' + diaCurto(m.desde) + ' a ' + diaCurto(m.ate)) + '</div>';
+  }
+  html += '<div class="grade">' + htmlCartao('u-tipos', 'Totais por tipo de chamada', '') + htmlCartao('u-dias', 'Detalhe por dia', 'Uma linha por dia, tipo e modelo') + '</div>';
+  corpo.innerHTML = html;
+  marcarAtualizado(m ? m.geradoEm : Date.now());
+
+  if (m) {
+    const serie = m.serie || [];
+    const rot = serie.map((d) => diaCurto(d.dia)), longos = serie.map((d) => diaLongo(d.dia));
+    minilinha($('#sp-custo'), serie.map((d) => d.custo));
+    minilinha($('#sp-cham'), serie.map((d) => d.chamadasIA));
+    graficoXY($('#u-custo'), { tipo: 'linha', titulo: 'Custo de IA por dia', rotulos: rot, rotulosLongos: longos, inteiro: false, fmt: fUSD4, fmtEixo: eixoUSD,
+      series: [{ nome: 'Custo', cor: 'var(--s1)', valores: serie.map((d) => num(d.custo)), area: true }] });
+    const ch = agruparDias(serie, ['chamadasIA']);
+    $('#t-u-cham').parentNode.appendChild(h('p', { class: 'sub', text: ch.porSemana ? 'Somadas por semana' : 'Por dia' }));
+    graficoXY($('#u-cham'), { tipo: 'coluna', titulo: 'Chamadas à IA ' + (ch.porSemana ? 'por semana' : 'por dia'), colunaX: ch.porSemana ? 'Semana' : 'Dia', rotulos: ch.rotulos, rotulosLongos: ch.longos,
+      series: [{ nome: 'Chamadas', cor: 'var(--s1)', valores: ch.valores[0] }] });
+    graficoXY($('#u-tokens'), { tipo: 'linha', titulo: 'Tokens de entrada e de saída por dia', rotulos: rot, rotulosLongos: longos, fmt: fInt, series: [
+      { nome: 'Entrada', cor: 'var(--s1)', valores: serie.map((d) => num(d.tokensEntrada)) },
+      { nome: 'Saída', cor: 'var(--s2)', valores: serie.map((d) => num(d.tokensSaida)) }] });
+    const im = agruparDias(serie, ['imagens', 'fundosReaproveitados']);
+    $('#t-u-img').parentNode.appendChild(h('p', { class: 'sub', text: (im.porSemana ? 'Por semana. ' : 'Por dia. ') + 'Cada fundo reaproveitado é uma imagem que deixou de ser paga.' }));
+    graficoXY($('#u-img'), { tipo: 'coluna', empilhar: true, titulo: 'Imagens geradas e fundos reaproveitados ' + (im.porSemana ? 'por semana' : 'por dia'), colunaX: im.porSemana ? 'Semana' : 'Dia',
+      rotulos: im.rotulos, rotulosLongos: im.longos, series: [
+        { nome: 'Imagens geradas', cor: 'var(--s1)', valores: im.valores[0] },
+        { nome: 'Fundos reaproveitados', cor: 'var(--s2)', valores: im.valores[1] }] });
+    const modelos = m.modelos || [];
+    $('#u-modelos').innerHTML = modelos.length
+      ? '<div class="rolagem" tabindex="0" role="region" aria-label="Uso por modelo"><table class="tabela"><thead><tr><th scope="col">Modelo</th><th scope="col">Tipo</th><th scope="col" class="num">Chamadas</th><th scope="col" class="num">Tokens de entrada</th><th scope="col" class="num">Tokens de saída</th><th scope="col" class="num">Custo</th></tr></thead><tbody>' +
+        modelos.map((x) => '<tr><td>' + esc(x.modelo || '—') + '</td><td class="nq">' + esc(x.tipo || '—') + '</td><td class="num">' + fInt(x.chamadas) + '</td><td class="num">' + fInt(x.entrada) + '</td><td class="num">' + fInt(x.saida) + '</td><td class="num">' + fUSD4(x.custo) + '</td></tr>').join('') + '</tbody></table></div>'
+      : '<p class="vazio">Nenhuma chamada à IA registrada neste período.</p>';
+  }
+
+  if (uso.e) { $('#u-tipos').innerHTML = '<p class="erro" role="alert">Não foi possível carregar a tabela de uso: ' + esc(uso.e.message) + '</p>'; $('#u-dias').innerHTML = '<p class="vazio">Sem dados.</p>'; return; }
+  const u = uso.u || {}, tipos = Object.entries(u.total || {}), linhas = u.linhas || [];
+  $('#t-u-tipos').parentNode.appendChild(h('p', { class: 'sub', text: 'Últimos ' + num(u.dias) + ' dias' + (u.desde ? ', desde ' + diaCompleto(u.desde) : '') }));
+  $('#u-tipos').innerHTML = (tipos.length
+    ? '<div class="rolagem" tabindex="0" role="region" aria-label="Totais por tipo"><table class="tabela"><thead><tr><th scope="col">Tipo</th><th scope="col" class="num">Chamadas</th><th scope="col" class="num">Tokens de entrada</th><th scope="col" class="num">Tokens de saída</th><th scope="col" class="num">Custo informado</th></tr></thead><tbody>' +
+      tipos.map(([t, x]) => '<tr><td>' + esc(t) + '</td><td class="num">' + fInt(x.chamadas) + '</td><td class="num">' + fInt(x.entrada) + '</td><td class="num">' + fInt(x.saida) + '</td><td class="num">' + fUSD4(x.custo) + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<p class="vazio">Nenhuma chamada registrada ainda.</p>') +
+    '<p class="suave" style="margin-top:.6rem">“fundo-reaproveitado” e “fundo-biblioteca” são imagens que deixaram de ser geradas. O custo só aparece quando o provedor informa.</p>';
+  $('#u-dias').innerHTML = linhas.length
+    ? '<div class="rolagem alta" tabindex="0" role="region" aria-label="Uso da IA por dia"><table class="tabela"><thead><tr><th scope="col">Dia</th><th scope="col">Tipo</th><th scope="col">Modelo</th><th scope="col" class="num">Chamadas</th><th scope="col" class="num">Entrada</th><th scope="col" class="num">Saída</th><th scope="col" class="num">Custo</th></tr></thead><tbody>' +
+      linhas.map((l) => '<tr><td class="nq">' + esc(diaCompleto(l.dia)) + '</td><td class="nq">' + esc(l.tipo) + '</td><td>' + esc(l.modelo) + '</td><td class="num">' + fInt(l.chamadas) + '</td><td class="num">' + fInt(l.entrada) + '</td><td class="num">' + fInt(l.saida) + '</td><td class="num">' + fUSD4(l.custo) + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<p class="vazio">Sem dados neste período.</p>';
+}
+
+/* ═══════════ Mesas ═══════════ */
+async function telaMesas(corpo, vivo) {
+  const dados = await APP.listarMesas();
+  if (!vivo()) return;
+  const mesas = APP._mesas = dados.mesas || [];
+  marcarContagem(); marcarAtualizado(Date.now());
+  const emJogo = mesas.filter((m) => m.fase === 'jogo'), saguao = mesas.filter((m) => m.fase !== 'jogo');
+  const tabela = (lista, id, vazio) => !lista.length ? '<p class="vazio">' + vazio + '</p>' :
+    '<div class="rolagem" tabindex="0" role="region" aria-label="Lista de mesas"><table class="tabela"><thead><tr><th scope="col">Código</th><th scope="col">Dono</th><th scope="col">Fase</th><th scope="col">Cena</th><th scope="col">Tom</th><th scope="col" class="num">Membros</th><th scope="col" class="num">Fichas</th><th scope="col">Criada em</th><th scope="col"><span class="so-leitor">Ações</span></th></tr></thead><tbody id="' + id + '">' +
+    lista.map((m) => '<tr data-busca="' + esc([m.codigo, m.dono_nome, m.dono, m.cena, m.tom].join(' ').toLowerCase()) + '">' +
+      '<td><button type="button" class="btn-link" data-acao="abrir-mesa" data-cod="' + esc(m.codigo) + '" aria-label="Abrir a mesa ' + esc(m.codigo) + '">' + esc(m.codigo) + '</button></td>' +
+      '<td>' + esc(m.dono_nome || m.dono || '—') + '</td><td>' + seloFase(m.fase) + '</td><td class="corta" title="' + esc(m.cena || '') + '">' + esc(m.cena || '—') + '</td><td class="nq">' + esc(m.tom || '—') + '</td>' +
+      '<td class="num">' + fInt(m.qtd_membros) + '</td><td class="num">' + fInt(m.qtd_fichas) + '</td><td class="nq">' + esc(fData(m.criadaEm)) + '</td>' +
+      '<td class="num"><button type="button" class="btn btn-p btn-perigo" data-acao="excluir-mesa" data-cod="' + esc(m.codigo) + '" aria-label="Excluir a mesa ' + esc(m.codigo) + '">Excluir</button></td></tr>').join('') +
+    '<tr class="sem-resultado" hidden><td colspan="9" class="suave">Nenhuma mesa combina com a busca.</td></tr></tbody></table></div>';
+  corpo.innerHTML =
+    '<div class="pag-ferramentas" style="margin-bottom:.4rem"><div style="flex:1;min-width:180px"><label for="busca-mesas">Buscar mesa</label><input id="busca-mesas" class="busca" type="search" placeholder="Código, dono ou cena" data-filtro="#lista-jogo, #lista-saguao"></div>' +
+    '<button type="button" class="btn btn-primario" data-acao="nova-mesa">Nova mesa</button></div>' +
+    '<h3 class="secao-t">Em jogo <span class="suave">' + fInt(emJogo.length) + '</span></h3>' + tabela(emJogo, 'lista-jogo', 'Nenhuma mesa em jogo no momento.') +
+    '<h3 class="secao-t">No saguão <span class="suave">' + fInt(saguao.length) + '</span></h3>' + tabela(saguao, 'lista-saguao', 'Nenhuma mesa esperando no saguão.');
+}
+function atualizarMesas() {
+  if (APP._tab === 'mesas' || APP._tab === 'geral') renderAba(true);
+  else APP.listarMesas().then((d) => { APP._mesas = d.mesas || []; marcarContagem(); }).catch(() => {});
+}
+
+/* ═══════════ Usuários ═══════════ */
+async function telaUsuarios(corpo, vivo) {
+  const dados = await APP.listarUsuarios();
+  if (!vivo()) return;
+  const us = dados.usuarios || [];
+  marcarAtualizado(Date.now());
+  corpo.innerHTML = !us.length ? '<p class="vazio">Nenhum usuário registrado ainda.</p>' :
+    '<div class="pag-ferramentas" style="margin-bottom:.8rem"><div style="flex:1;min-width:180px"><label for="busca-usr">Buscar usuário</label><input id="busca-usr" class="busca" type="search" placeholder="Nome, e-mail ou ID" data-filtro="#lista-usr"></div>' +
+    '<p class="suave">' + fInt(us.length) + (us.length === 1 ? ' usuário registrado' : ' usuários registrados') + '</p></div>' +
+    '<div class="rolagem" tabindex="0" role="region" aria-label="Lista de usuários"><table class="tabela"><thead><tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Registro</th><th scope="col" class="num">Mesas criadas</th><th scope="col" class="num">Mesas como membro</th><th scope="col">ID</th></tr></thead><tbody id="lista-usr">' +
+    us.map((u) => '<tr data-busca="' + esc([u.nome, u.email, u.id].join(' ').toLowerCase()) + '"><td>' + esc(u.nome || '—') + '</td><td>' + esc(u.email || '—') + '</td><td class="nq">' + esc(fDataHora(u.criadoEm)) + '</td>' +
+      '<td class="num">' + fInt(u.qtd_mesas_criadas) + '</td><td class="num">' + fInt(u.qtd_mesas_membro) + '</td><td class="nq suave">' + esc(u.id) + '</td></tr>').join('') +
+    '<tr class="sem-resultado" hidden><td colspan="6" class="suave">Nenhum usuário combina com a busca.</td></tr></tbody></table></div>';
+}
+
+/* ═══════════ Modais ═══════════ */
+const MODAIS = [];
+function abrirModal(titulo, html, opc) {
+  opc = opc || {};
+  const id = 'mt' + (++APP._n);
+  const fundo = h('div', { class: 'modal-fundo' });
+  fundo.innerHTML = '<div class="modal' + (opc.largo ? ' modal-largo' : '') + '" role="dialog" aria-modal="true" aria-labelledby="' + id + '"><div class="modal-topo"><h2 id="' + id + '">' + esc(titulo) +
+    '</h2><button type="button" class="btn-x" data-acao="fechar-modal" aria-label="Fechar">×</button></div><div class="modal-corpo">' + html + '</div></div>';
+  const reg = { fundo, corpo: $('.modal-corpo', fundo), antes: document.activeElement, aoFechar: opc.aoFechar };
+  fundo.addEventListener('mousedown', (e) => { if (e.target === fundo && e.clientX < fundo.clientWidth) fecharModal(); });   // clicar na barra de rolagem do fundo não fecha
+  document.body.appendChild(fundo);
+  MODAIS.push(reg);
+  document.body.classList.add('com-modal');
+  focarModal(reg);
+  return reg;
+}
+function focarModal(reg) {
+  const alvo = $('[autofocus]', reg.corpo) || $('input:not([type=hidden]), select, textarea', reg.corpo) || $('.btn-x', reg.fundo);
+  if (alvo) alvo.focus();
+}
+function fecharModal() {
+  const reg = MODAIS.pop(); if (!reg) return;
+  reg.fundo.remove();
+  if (!MODAIS.length) document.body.classList.remove('com-modal');
+  if (reg.aoFechar) reg.aoFechar();
+  let alvo = reg.antes;
+  // a lista por trás pode ter sido refeita com a janela aberta: procura o botão equivalente (mesma ação e mesma mesa ou ficha)
+  if (alvo && !document.contains(alvo) && alvo.dataset && alvo.dataset.acao) {
+    alvo = Array.prototype.find.call(document.querySelectorAll('[data-acao]'), (x) => x.dataset.acao === alvo.dataset.acao && x.dataset.cod === alvo.dataset.cod && x.dataset.uid === alvo.dataset.uid);
+  }
+  if (!alvo || !document.contains(alvo)) { const topo = MODAIS[MODAIS.length - 1]; if (topo) { focarModal(topo); return; } alvo = $('#conteudo'); }
+  if (alvo) alvo.focus();
+}
+/** Depois de refazer o conteúdo de uma janela, o foco não pode ficar perdido fora dela. */
+function manterFoco(reg) { if (MODAIS[MODAIS.length - 1] === reg && !reg.fundo.contains(document.activeElement)) focarModal(reg); }
+function fecharTodos() { while (MODAIS.length) fecharModal(); }
+const modalAberto = (reg) => MODAIS.indexOf(reg) >= 0;
+const modalDoTipo = (tipo) => { for (let i = MODAIS.length - 1; i >= 0; i--) if (MODAIS[i].tipo === tipo) return MODAIS[i]; return null; };
+function confirmar(titulo, texto, rotulo) {
+  return new Promise((resolver) => {
+    let ok = false;
+    const reg = abrirModal(titulo, '<p>' + esc(texto) + '</p><div class="acoes"><button type="button" class="btn" data-acao="fechar-modal" autofocus>Cancelar</button><button type="button" class="btn btn-perigo" data-sim>' + esc(rotulo) + '</button></div>',
+      { aoFechar: () => resolver(ok) });
+    $('[data-sim]', reg.corpo).addEventListener('click', () => { ok = true; fecharModal(); });
   });
 }
+document.addEventListener('keydown', (e) => {
+  const reg = MODAIS[MODAIS.length - 1]; if (!reg) return;
+  if (e.key === 'Escape') { e.preventDefault(); fecharModal(); return; }
+  if (e.key !== 'Tab') return;
+  const itens = Array.prototype.filter.call(reg.fundo.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex="0"]'), (x) => !x.disabled && x.offsetParent !== null);
+  if (!itens.length) return;
+  const pri = itens[0], ult = itens[itens.length - 1];
+  if (!reg.fundo.contains(document.activeElement)) { e.preventDefault(); pri.focus(); }
+  else if (e.shiftKey && document.activeElement === pri) { e.preventDefault(); ult.focus(); }
+  else if (!e.shiftKey && document.activeElement === ult) { e.preventDefault(); pri.focus(); }
+});
+
+/* ── Mesa: dados, fichas, membros ── */
+function abrirMesa(cod) {
+  const reg = abrirModal('Mesa ' + cod, htmlCarregando(), { largo: true });
+  reg.tipo = 'mesa'; reg.cod = cod;
+  return preencherMesa(reg);
+}
+async function preencherMesa(reg) {
+  let dados;
+  try { dados = await APP.getMesa(reg.cod); }
+  catch (e) { if (modalAberto(reg)) reg.corpo.innerHTML = '<p class="erro" role="alert">Não foi possível abrir a mesa: ' + esc(e.message) + '</p><div class="acoes"><button type="button" class="btn" data-acao="fechar-modal">Fechar</button></div>'; return; }
+  if (!modalAberto(reg)) return;
+  const m = dados.mesa || {}, fichas = reg.fichas = dados.fichas || [], membros = dados.membros || [];
+  const cod = esc(reg.cod);
+  const fases = [['lobby', 'No saguão (lobby)'], ['jogo', 'Em jogo']];
+  if (m.fase && m.fase !== 'lobby' && m.fase !== 'jogo') fases.push([m.fase, m.fase]);
+  reg.corpo.innerHTML =
+    '<form data-form="mesa" novalidate><div class="campos">' +
+      '<div><label for="mcena">Cena</label><input id="mcena" name="cena" value="' + esc(m.cena || '') + '"></div>' +
+      '<div><label for="mfase">Fase</label><select id="mfase" name="fase">' + fases.map((f) => '<option value="' + esc(f[0]) + '"' + (m.fase === f[0] ? ' selected' : '') + '>' + esc(f[1]) + '</option>').join('') + '</select></div>' +
+      '<div class="inteira"><label for="mtom">Tom</label><input id="mtom" name="tom" value="' + esc(m.tom || '') + '"></div>' +
+      '<div class="inteira"><label for="mresumo">Resumo</label><textarea id="mresumo" name="resumo" rows="3">' + esc(m.resumo || '') + '</textarea></div>' +
+    '</div><div class="acoes"><button type="submit" class="btn btn-primario">Salvar mesa</button></div><p class="erro" role="alert" data-erro></p></form>' +
+    '<h3><span>Fichas (' + fichas.length + ')</span><button type="button" class="btn btn-p" data-acao="nova-ficha">Nova ficha</button></h3>' +
+    (fichas.length
+      ? '<div class="rolagem" tabindex="0" role="region" aria-label="Fichas da mesa"><table class="tabela"><thead><tr><th scope="col">Nome</th><th scope="col">Raça</th><th scope="col">Classe</th><th scope="col" class="num">PV</th><th scope="col" class="num">Nível</th><th scope="col" class="num">XP</th><th scope="col"><span class="so-leitor">Ações</span></th></tr></thead><tbody>' +
+        fichas.map((f) => '<tr><td><button type="button" class="btn-link" data-acao="editar-ficha" data-uid="' + esc(f.uid) + '" aria-label="Editar a ficha de ' + esc(f.nome || 'sem nome') + '">' + esc(f.nome || '(sem nome)') + '</button></td>' +
+          '<td>' + esc(f.raca || '—') + '</td><td>' + esc(f.classe || '—') + '</td><td class="num">' + fInt(f.pv) + '/' + fInt(f.pvMax) + '</td><td class="num">' + fInt(f.nivel || 1) + '</td><td class="num">' + fInt(f.xp) + '</td>' +
+          '<td class="num"><button type="button" class="btn btn-p btn-perigo" data-acao="excluir-ficha" data-uid="' + esc(f.uid) + '" aria-label="Excluir a ficha de ' + esc(f.nome || 'sem nome') + '">Excluir</button></td></tr>').join('') + '</tbody></table></div>'
+      : '<p class="vazio">Esta mesa ainda não tem fichas.</p>') +
+    '<h3><span>Membros (' + membros.length + ')</span></h3>' +
+    (membros.length ? '<ul class="chips">' + membros.map((p) => '<li>' + esc(p.nome || String(p.uid || '').slice(0, 8)) + '</li>').join('') + '</ul>' : '<p class="vazio">Ninguém entrou nesta mesa ainda.</p>') +
+    '<div class="acoes"><button type="button" class="btn" data-acao="mundo">Mundo (depuração)</button><button type="button" class="btn btn-perigo" data-acao="excluir-mesa" data-cod="' + cod + '">Excluir mesa</button>' +
+    '<button type="button" class="btn empurra" data-acao="fechar-modal">Fechar</button></div>';
+  manterFoco(reg);
+}
+function htmlFormFicha(f, nova) {
+  const campo = (id, rot, val, extra) => '<div><label for="' + id + '">' + rot + '</label><input id="' + id + '" name="' + id.slice(2) + '" value="' + esc(val) + '" ' + (extra || '') + '></div>';
+  const n = 'type="number" min="0" step="1" inputmode="numeric"';
+  return '<form data-form="' + (nova ? 'nova-ficha' : 'editar-ficha') + '" novalidate' + (nova ? '' : ' data-uid="' + esc(f.uid) + '"') + '><div class="campos">' +
+    campo('f_nome', 'Nome', f.nome || '', 'required') +
+    (nova ? campo('f_uid', 'UID (identificador do jogador)', f.uid, 'autocapitalize="none" spellcheck="false"') : '') +
+    campo('f_raca', 'Raça', f.raca || '') + campo('f_classe', 'Classe', f.classe || '') +
+    campo('f_pv', 'PV', num(f.pv), n) + campo('f_pvMax', 'PV máximo', num(f.pvMax), n) +
+    (nova ? '' : campo('f_nivel', 'Nível', num(f.nivel) || 1, n) + campo('f_xp', 'XP', num(f.xp), n)) +
+    '</div><div class="acoes"><button type="submit" class="btn btn-primario">' + (nova ? 'Criar ficha' : 'Salvar ficha') + '</button><button type="button" class="btn" data-acao="fechar-modal">Cancelar</button></div><p class="erro" role="alert" data-erro></p></form>';
+}
+
+/* ── Mundo da mesa (depuração) ── */
+async function abrirMundo(cod) {
+  const reg = abrirModal('Mundo da mesa ' + cod, htmlCarregando(), { largo: true });
+  reg.tipo = 'mundo'; reg.cod = cod;
+  try { const d = await APP.getMundo(cod); if (modalAberto(reg)) preencherMundo(reg, d); }
+  catch (e) { if (modalAberto(reg)) reg.corpo.innerHTML = '<p class="erro" role="alert">Não foi possível abrir o mundo da mesa: ' + esc(e.message) + '</p><div class="acoes"><button type="button" class="btn" data-acao="fechar-modal">Voltar</button></div>'; }
+}
+function preencherMundo(reg, d) {
+  const mundo = d.mundo || {};
+  const opcoes = (lista, atual) => [''].concat(lista || []).map((x) => '<option value="' + esc(x) + '"' + (x === (atual || '') ? ' selected' : '') + '>' + esc(x || '(nenhum)') + '</option>').join('');
+  const linhas = (o, f) => { const e = Object.entries(o || {}); return e.length ? '<ul class="lista-simples">' + e.map(f).join('') + '</ul>' : '<p class="suave">Nada registrado ainda.</p>'; };
+  reg.corpo.innerHTML =
+    '<p class="suave">Fase: ' + esc(d.fase === 'jogo' ? 'em jogo' : d.fase === 'lobby' ? 'no saguão' : d.fase) + ' · dia ' + fInt(d.dia) + ' · cena: ' + esc(d.cena || '—') + (d.concluida ? ' · história concluída' : '') + '</p>' +
+    '<form data-form="mundo" novalidate style="margin-top:.8rem"><div class="campos">' +
+      '<div><label for="wclima">Clima</label><select id="wclima" name="clima">' + opcoes(d.climas, mundo.clima) + '</select></div>' +
+      '<div><label for="wperiodo">Período</label><select id="wperiodo" name="periodo">' + opcoes(d.periodos, mundo.periodo) + '</select></div>' +
+      '<div><label for="wato">Ato (só muda com a aventura em andamento)</label><select id="wato" name="ato">' + [1, 2, 3].map((a) => '<option' + (a === d.ato ? ' selected' : '') + '>' + a + '</option>').join('') + '</select></div>' +
+      '<div><span class="rotulo">Encontro à espera</span><p>' + esc(mundo.encontro || '(nenhum)') + '</p></div>' +
+    '</div><div class="acoes"><button type="submit" class="btn btn-primario">Salvar clima, período e ato</button><button type="button" class="btn" data-acao="mundo-encontro">Sortear encontro de estrada</button>' +
+    '<button type="button" class="btn btn-perigo" data-acao="mundo-limpar">Limpar memória</button></div><p class="erro" role="alert" data-erro></p></form>' +
+    '<h3><span>Fatos</span></h3>' + linhas(mundo.fatos, ([k, x]) => '<li><b>' + esc(k) + '</b>: ' + esc(x && typeof x === 'object' ? x.v : x) + '</li>') +
+    '<h3><span>NPCs</span></h3>' + linhas(mundo.npcs, ([k, x]) => '<li><b>' + esc(k) + '</b>: ' + esc(x && typeof x === 'object' ? x.v : x) + '</li>') +
+    '<h3><span>Reputação</span></h3>' + linhas(mundo.reputacao, ([k, v]) => '<li><b>' + esc(k) + '</b>: ' + (num(v) > 0 ? '+' : '') + esc(num(v)) + '</li>') +
+    '<div class="acoes"><button type="button" class="btn empurra" data-acao="fechar-modal">' + (modalDoTipo('mesa') ? 'Voltar para a mesa' : 'Fechar') + '</button></div>';
+  manterFoco(reg);
+}
+async function mudarMundo(reg, corpoReq, okMsg) {
+  const erroEl = $('[data-erro]', reg.corpo); if (erroEl) erroEl.textContent = '';
+  try { const d = await APP.salvarMundo(reg.cod, corpoReq); if (modalAberto(reg)) preencherMundo(reg, d); avisar(okMsg); }
+  catch (e) { if (erroEl && modalAberto(reg)) erroEl.textContent = e.message; else avisar(e.message, true); }
+}
+
+/* ═══════════ Ações (cliques) e formulários ═══════════ */
+const ACOES = {
+  sair() { APP.sair(); },
+  aba(b) { APP._tab = b.dataset.aba; renderAba(); window.scrollTo(0, 0); },
+  periodo(b) { const d = Number(b.dataset.dias); if (PERIODOS.indexOf(d) < 0 || d === APP._dias) return; APP._dias = d; renderAba(true); },
+  recarregar() { renderAba(true); },
+  'fechar-modal'() { fecharModal(); },
+  'abrir-mesa'(b) { abrirMesa(b.dataset.cod); },
+  'nova-mesa'() {
+    const cod = Math.random().toString(36).slice(2, 7).toUpperCase();
+    abrirModal('Nova mesa',
+      '<form data-form="nova-mesa" novalidate><div class="campos">' +
+      '<div><label for="fcod">Código (3 a 6 letras ou números)</label><input id="fcod" name="codigo" value="' + esc(cod) + '" maxlength="6" autocapitalize="characters" spellcheck="false"></div>' +
+      '<div><label for="ftom">Tom</label><select id="ftom" name="tom"><option value="epico">Épico</option><option value="sombrio">Sombrio</option><option value="humor">Humor</option></select></div>' +
+      '<div class="inteira"><label for="fcena">Cena inicial</label><input id="fcena" name="cena" value="Taverna Javali Cego"></div>' +
+      '</div><div class="acoes"><button type="submit" class="btn btn-primario">Criar mesa</button><button type="button" class="btn" data-acao="fechar-modal">Cancelar</button></div><p class="erro" role="alert" data-erro></p></form>');
+  },
+  async 'excluir-mesa'(b) {
+    const cod = b.dataset.cod;
+    if (!(await confirmar('Excluir a mesa ' + cod + '?', 'As fichas, os membros e o diário desta mesa serão apagados. Não dá para desfazer.', 'Excluir mesa'))) return;
+    try { await APP.excluirMesa(cod); fecharTodos(); avisar('Mesa ' + cod + ' excluída.'); atualizarMesas(); }
+    catch (e) { avisar('Não foi possível excluir a mesa ' + cod + ': ' + e.message, true); }
+  },
+  'nova-ficha'() {
+    const mesa = modalDoTipo('mesa'); if (!mesa) return;
+    const reg = abrirModal('Nova ficha na mesa ' + mesa.cod, htmlFormFicha({ uid: 'admin_' + Math.random().toString(36).slice(2, 8), raca: 'Humano', classe: 'Guerreiro', pv: 20, pvMax: 20 }, true));
+    reg.tipo = 'ficha';
+  },
+  'editar-ficha'(b) {
+    const mesa = modalDoTipo('mesa'); if (!mesa) return;
+    const f = (mesa.fichas || []).find((x) => String(x.uid) === b.dataset.uid); if (!f) return;
+    const reg = abrirModal('Editar ' + (f.nome || 'ficha'), htmlFormFicha(f, false));
+    reg.tipo = 'ficha';
+  },
+  async 'excluir-ficha'(b) {
+    const mesa = modalDoTipo('mesa'); if (!mesa) return;
+    const uid = b.dataset.uid, f = (mesa.fichas || []).find((x) => String(x.uid) === uid) || {};
+    if (!(await confirmar('Excluir a ficha?', 'A ficha de ' + (f.nome || 'sem nome') + ' será apagada da mesa ' + mesa.cod + '.', 'Excluir ficha'))) return;
+    try { await APP.excluirFicha(mesa.cod, uid); avisar('Ficha excluída.'); await preencherMesa(mesa); atualizarMesas(); }
+    catch (e) { avisar('Não foi possível excluir a ficha: ' + e.message, true); }
+  },
+  mundo() { const mesa = modalDoTipo('mesa'); if (mesa) abrirMundo(mesa.cod); },
+  'mundo-encontro'() { const reg = modalDoTipo('mundo'); if (reg) mudarMundo(reg, { encontro: true }, 'Encontro sorteado.'); },
+  async 'mundo-limpar'() {
+    const reg = modalDoTipo('mundo'); if (!reg) return;
+    if (await confirmar('Limpar a memória da mesa?', 'Fatos, NPCs, reputação e clima da mesa ' + reg.cod + ' serão apagados.', 'Limpar memória')) mudarMundo(reg, { limpar: true }, 'Memória da mesa apagada.');
+  },
+};
+const FORMS = {
+  async login(f) { await APP.login(f.elements.user.value.trim(), f.elements.pass.value); },
+  async 'nova-mesa'(f) {
+    const r = await APP.criarMesa({ codigo: f.elements.codigo.value, cena: f.elements.cena.value, tom: f.elements.tom.value });
+    fecharModal(); avisar('Mesa ' + ((r && r.codigo) || '') + ' criada.'); atualizarMesas();
+  },
+  async mesa(f) {
+    const mesa = modalDoTipo('mesa'); if (!mesa) return;
+    await APP.editarMesa(mesa.cod, { cena: f.elements.cena.value, fase: f.elements.fase.value, tom: f.elements.tom.value, resumo: f.elements.resumo.value });
+    avisar('Mesa ' + mesa.cod + ' salva.'); atualizarMesas();
+  },
+  async 'nova-ficha'(f) {
+    const mesa = modalDoTipo('mesa'); if (!mesa) return;
+    const e = f.elements;
+    if (!e.nome.value.trim()) throw new Error('Dê um nome ao personagem.');
+    await APP.criarFicha(mesa.cod, { uid: e.uid.value.trim(), nome: e.nome.value.trim(), raca: e.raca.value, classe: e.classe.value, pv: Number(e.pv.value), pvMax: Number(e.pvMax.value) });
+    fecharModal(); avisar('Ficha criada.'); await preencherMesa(mesa); atualizarMesas();
+  },
+  async 'editar-ficha'(f) {
+    const mesa = modalDoTipo('mesa'); if (!mesa) return;
+    const e = f.elements;
+    await APP.editarFicha(mesa.cod, f.dataset.uid, { nome: e.nome.value, raca: e.raca.value, classe: e.classe.value, pv: Number(e.pv.value), pvMax: Number(e.pvMax.value), nivel: Number(e.nivel.value), xp: Number(e.xp.value) });
+    fecharModal(); avisar('Ficha salva.'); await preencherMesa(mesa);
+  },
+  async mundo(f) {
+    const reg = modalDoTipo('mundo'); if (!reg) return;
+    const d = await APP.salvarMundo(reg.cod, { clima: f.elements.clima.value, periodo: f.elements.periodo.value, ato: Number(f.elements.ato.value) });
+    if (modalAberto(reg)) preencherMundo(reg, d);
+    avisar('Mundo da mesa salvo.');
+  },
+};
+document.addEventListener('click', (e) => {
+  const b = e.target.closest ? e.target.closest('[data-acao]') : null;
+  if (!b || b.disabled) return;
+  const f = ACOES[b.dataset.acao];
+  if (f) { e.preventDefault(); f(b); }
+});
+document.addEventListener('submit', async (e) => {
+  const form = e.target, f = FORMS[form.dataset && form.dataset.form];
+  if (!f) return;
+  e.preventDefault();
+  const botao = form.querySelector('[type=submit]'), erroEl = form.querySelector('[data-erro]');
+  if (botao && botao.disabled) return;
+  if (erroEl) erroEl.textContent = '';
+  if (botao) botao.disabled = true;
+  try { await f(form); }
+  catch (er) { if (erroEl && document.contains(erroEl)) erroEl.textContent = er.message; else if (APP._token) avisar(er.message, true); }
+  finally { if (botao) botao.disabled = false; }
+});
+document.addEventListener('input', (e) => {
+  const sel = e.target.dataset && e.target.dataset.filtro; if (!sel) return;
+  const termo = e.target.value.trim().toLowerCase();
+  document.querySelectorAll(sel).forEach((corpo) => {
+    let visiveis = 0;
+    corpo.querySelectorAll('tr[data-busca]').forEach((tr) => { const ok = !termo || tr.dataset.busca.indexOf(termo) >= 0; tr.hidden = !ok; if (ok) visiveis++; });
+    const vazio = corpo.querySelector('.sem-resultado'); if (vazio) vazio.hidden = visiveis > 0;
+  });
+});
+
+/* ═══════════ Início ═══════════ */
+try { const g = JSON.parse(sessionStorage.getItem(GUARDA) || 'null'); if (g && g.t) { APP._token = g.t; APP._user = g.u || 'admin'; } } catch (e) {}
+renderApp();
 </script>
 </body>
 </html>

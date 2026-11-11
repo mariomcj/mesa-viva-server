@@ -836,6 +836,12 @@ app.post("/api/admin/login", (req, res) => {
   _adminTokens.set(token, agora() + 24 * 3600_000);
   res.json({ token, user: ADMIN_USER });
 });
+// Sair do painel: o token deixa de valer no servidor na hora (antes só expirava em 24 h)
+app.post("/api/admin/sair", (req, res) => {
+  const tok = req.headers["x-admin-token"];
+  if (typeof tok === "string") _adminTokens.delete(tok);
+  res.json({ ok: true });
+});
 
 app.get("/api/admin/mesas", adminMw, (req, res) => {
   const mesas = db.prepare(`
@@ -2019,6 +2025,9 @@ NV = require("./novidades").instalar({ app, db, authMw, limiteIA, mesaDoMembro, 
 // ── Melhorias só de servidor: memória da campanha, clima, elementos, condições, fuga, fundos reaproveitados e uso da IA ──
 MH = require("./melhorias").instalar({ app, db, adminMw, salvarMesa, salvarFicha, registrar, broadcast, erro, json, texto, M, T, ganharXp,
   baseUrl: () => SERVER_BASE_URL, pastaPublica: require("path").join(__dirname, "public") });
+
+// ── Painel de administração: métricas para os gráficos (só leitura) ──
+require("./painel").instalar({ app, db, adminMw, erro, json, T });
 
 // ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);
