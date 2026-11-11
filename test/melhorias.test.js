@@ -198,6 +198,9 @@ test("fundos: biblioteca primeiro, mesma cena sempre, mesmo tipo de lugar depois
   const pasta = fs.mkdtempSync(path.join(os.tmpdir(), "mesa-viva-fundos-"));
   const db = new Database(":memory:");
   db.exec("CREATE TABLE mesas (codigo TEXT PRIMARY KEY)");
+  // banco que passou por uma versão antiga: já existe uma "uso_ia" com outras colunas e dados; ela tem de ficar como está
+  db.exec("CREATE TABLE uso_ia (id INTEGER PRIMARY KEY AUTOINCREMENT, conta TEXT, codigo TEXT, tipo TEXT, modelo TEXT, tokensEntrada INTEGER, tokensSaida INTEGER, custoUsd REAL, creditos REAL, deTeste INTEGER, t INTEGER)");
+  db.exec("INSERT INTO uso_ia (conta, tipo, modelo, tokensEntrada, tokensSaida, custoUsd, t) VALUES ('c1', 'narr', 'm/antigo', 10, 20, 0.5, 1)");
   try {
     fs.mkdirSync(path.join(pasta, "images"));
     const imagem = (nome) => { fs.writeFileSync(path.join(pasta, "images", nome), "x"); return `https://jogo.exemplo/images/${nome}`; };
@@ -243,11 +246,12 @@ test("fundos: biblioteca primeiro, mesma cena sempre, mesmo tipo de lugar depois
     MH.medir({ tipo: "texto", modelo: "m/rapido", uso: { prompt_tokens: 4700, completion_tokens: 900, cost: 0.001 } });
     MH.medir({ tipo: "texto", modelo: "m/rapido", uso: { prompt_tokens: 300, completion_tokens: 100, cost: 0.002 } });
     MH.medir({ tipo: "imagem", modelo: "m/imagem", uso: null });
-    const uso = Object.fromEntries(db.prepare("SELECT tipo, chamadas, entrada, saida, custo FROM uso_ia").all().map((l) => [l.tipo, l]));
+    const uso = Object.fromEntries(db.prepare("SELECT tipo, chamadas, entrada, saida, custo FROM uso_ia_diario").all().map((l) => [l.tipo, l]));
     assert.deepEqual([uso.texto.chamadas, uso.texto.entrada, uso.texto.saida], [2, 5000, 1000]);
     assert.ok(Math.abs(uso.texto.custo - 0.003) < 1e-9);
     assert.equal(uso.imagem.chamadas, 1);
     assert.equal(uso["fundo-reaproveitado"].chamadas, 4);
     assert.equal(uso["fundo-biblioteca"].chamadas, 3);
+    assert.deepEqual(db.prepare("SELECT conta, modelo, tokensEntrada, custoUsd FROM uso_ia").all(), [{ conta: "c1", modelo: "m/antigo", tokensEntrada: 10, custoUsd: 0.5 }]);
   } finally { db.close(); fs.rmSync(pasta, { recursive: true, force: true }); }
 });

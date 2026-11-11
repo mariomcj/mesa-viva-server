@@ -300,7 +300,8 @@ function instalar(d) {
   try { db.exec("ALTER TABLE mesas ADD COLUMN mundo TEXT DEFAULT NULL"); } catch (e) {}
   db.exec("CREATE TABLE IF NOT EXISTS fundos (id INTEGER PRIMARY KEY AUTOINCREMENT, chave TEXT NOT NULL, url TEXT NOT NULL, criadoEm INTEGER NOT NULL)");
   db.exec("CREATE INDEX IF NOT EXISTS fundos_chave ON fundos (chave)");
-  db.exec("CREATE TABLE IF NOT EXISTS uso_ia (dia TEXT NOT NULL, tipo TEXT NOT NULL, modelo TEXT NOT NULL, chamadas INTEGER NOT NULL DEFAULT 0, entrada INTEGER NOT NULL DEFAULT 0, saida INTEGER NOT NULL DEFAULT 0, custo REAL NOT NULL DEFAULT 0, PRIMARY KEY (dia, tipo, modelo))");
+  // "uso_ia_diario", e não "uso_ia": bancos que passaram por uma versão antiga já têm uma tabela "uso_ia" com outras colunas, que fica como está
+  db.exec("CREATE TABLE IF NOT EXISTS uso_ia_diario (dia TEXT NOT NULL, tipo TEXT NOT NULL, modelo TEXT NOT NULL, chamadas INTEGER NOT NULL DEFAULT 0, entrada INTEGER NOT NULL DEFAULT 0, saida INTEGER NOT NULL DEFAULT 0, custo REAL NOT NULL DEFAULT 0, PRIMARY KEY (dia, tipo, modelo))");
 
   /** Nenhuma melhoria pode derrubar uma ação do jogo: se um gancho falhar, o erro vai para o log e vale o comportamento de antes. */
   const seguro = (nome, f, padrao) => (...a) => {
@@ -492,10 +493,15 @@ function instalar(d) {
   }
 
   // ── Medição do uso da IA ──
-  const somar = db.prepare(`INSERT INTO uso_ia (dia, tipo, modelo, chamadas, entrada, saida, custo) VALUES (?, ?, ?, 1, ?, ?, ?)
-    ON CONFLICT (dia, tipo, modelo) DO UPDATE SET chamadas = chamadas + 1, entrada = entrada + excluded.entrada, saida = saida + excluded.saida, custo = custo + excluded.custo`);
+  // se a tabela não servir (banco com um formato inesperado), a medição fica desligada e o jogo segue
+  let somar = null;
+  try {
+    somar = db.prepare(`INSERT INTO uso_ia_diario (dia, tipo, modelo, chamadas, entrada, saida, custo) VALUES (?, ?, ?, 1, ?, ?, ?)
+      ON CONFLICT (dia, tipo, modelo) DO UPDATE SET chamadas = chamadas + 1, entrada = entrada + excluded.entrada, saida = saida + excluded.saida, custo = custo + excluded.custo`);
+  } catch (e) { console.error("[melhorias] medição de uso desligada:", e.message); }
   /** Soma uma chamada no dia (tokens e custo vêm do campo "usage" da resposta, quando o provedor manda). */
   function medir({ tipo, modelo, uso }) {
+    if (!somar) return;
     try {
       const n = (v) => Math.max(0, Math.round(Number(v)) || 0);
       somar.run(new Date().toISOString().slice(0, 10), curto(tipo, 30) || "texto", curto(modelo, 80) || "?", n(uso?.prompt_tokens), n(uso?.completion_tokens), Math.max(0, Number(uso?.cost) || 0));
@@ -555,7 +561,7 @@ function instalar(d) {
     app.get("/api/admin/uso", adminMw, (req, res) => {
       const dias = inteiro(req.query.dias, 1, 365, 30);
       const desde = new Date(Date.now() - (dias - 1) * 86_400_000).toISOString().slice(0, 10);
-      const linhas = db.prepare("SELECT dia, tipo, modelo, chamadas, entrada, saida, custo FROM uso_ia WHERE dia >= ? ORDER BY dia DESC, tipo, modelo").all(desde);
+      const linhas = db.prepare("SELECT dia, tipo, modelo, chamadas, entrada, saida, custo FROM uso_ia_diario WHERE dia >= ? ORDER BY dia DESC, tipo, modelo").all(desde);
       const total = {};
       for (const l of linhas) {
         const t = total[l.tipo] || (total[l.tipo] = { chamadas: 0, entrada: 0, saida: 0, custo: 0 });

@@ -154,5 +154,5 @@ Valem com o app já instalado: aparecem na narração, no diário e no texto das
 - **Inimigos que fogem**: com 1/4 da vida ou menos e em desvantagem numérica, metade das vezes o inimigo foge em vez de atacar (chefes com 40 PV ou mais e criaturas com menos de 6 PV não fogem).
 - **XP**: `XP_POR_ACAO` por ação narrada e um marco para todos na virada de cada ato e no fim da história.
 - **Fundos reaproveitados**: antes de gerar uma imagem, o servidor procura um arquivo em `public/fundos/<tema>/` ou `public/fundos/geral/` com o nome da cena ou do tipo de lugar (`taverna.webp`, `floresta.jpg`...), depois um fundo já gerado para a mesma cena do mesmo tema e, havendo 2 variantes, um do mesmo tipo de lugar. Só reaproveita imagens salvas neste servidor (`public/images/`).
-- **Uso da IA**: cada chamada soma chamadas, tokens e custo (quando o provedor informa) em `uso_ia`, por dia, tipo e modelo. `GET /api/admin/uso?dias=30` e a aba "Uso da IA" do painel.
+- **Uso da IA**: cada chamada soma chamadas, tokens e custo (quando o provedor informa) em `uso_ia_diario`, por dia, tipo e modelo. `GET /api/admin/uso?dias=30` e a aba "Uso da IA" do painel.
 - **Depuração**: `GET` e `PUT /api/admin/mesas/:codigo/mundo` (e o botão "Mundo" no painel) forçam clima, período, ato, fatos, reputação e o próximo encontro.
