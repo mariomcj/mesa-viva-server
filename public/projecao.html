@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Mesa Viva — Projeção da mesa</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root {
+    --fundo: #111518; --sup: #192025; --sup2: #1f272d; --linha: #2d373e; --texto: #e6e1d5; --apagado: #9aa4a8;
+    --brasa: #e39a4a; --arcano: #86bcd3; --bom: #7cc48f; --ruim: #ec7f6f; --ambar: #e6b450;
+    --u: clamp(8px, 1.05vw, 22px);                 /* unidade: tudo cresce com a tela */
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--fundo); color: var(--texto); overflow: hidden;
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-size: calc(var(--u) * 1.6); }
+  .titulo { font-family: Georgia, "Times New Roman", serif; letter-spacing: .04em; }
+  [hidden] { display: none !important; }
+
+  /* ── Pareamento ── */
+  #parear { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 6); padding: calc(var(--u) * 4);
+    background: radial-gradient(ellipse at 30% 20%, #25313a 0%, var(--fundo) 60%); }
+  #parear .lado { max-width: 46vw; }
+  #parear h1 { font-size: calc(var(--u) * 5); margin: 0 0 calc(var(--u) * 1); color: var(--brasa); font-weight: 600; }
+  #parear p.sub { margin: 0 0 calc(var(--u) * 3); color: var(--apagado); font-size: calc(var(--u) * 2); }
+  #parear ol { margin: 0; padding-left: 1.3em; font-size: calc(var(--u) * 2.1); line-height: 1.65; }
+  #parear ol b { color: var(--ambar); font-weight: 600; }
+  #qrCaixa { width: min(38vh, 30vw); height: min(38vh, 30vw); background: #fff; border-radius: calc(var(--u) * 1.4); padding: calc(var(--u) * .6);
+    box-shadow: 0 0 0 calc(var(--u) * .35) var(--brasa), 0 calc(var(--u) * 2) calc(var(--u) * 6) rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; color: #333; text-align: center; }
+  #qrCaixa svg { width: 100%; height: 100%; display: block; }
+  #codigoTela { margin-top: calc(var(--u) * 2); text-align: center; color: var(--apagado); font-size: calc(var(--u) * 1.7); }
+  #codigoTela b { display: block; color: var(--texto); font-size: calc(var(--u) * 4.2); letter-spacing: .28em; font-family: Consolas, "Courier New", monospace; margin-top: calc(var(--u) * .4); }
+  #avisoParear { margin-top: calc(var(--u) * 2.4); color: var(--ruim); font-size: calc(var(--u) * 1.7); min-height: 1.4em; }
+
+  /* ── Palco ── */
+  #palco { position: fixed; inset: 0; }
+  .camadaFundo { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0; transition: opacity 1.6s ease; }
+  .camadaFundo.visivel { opacity: 1; }
+  #veu { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(17,21,24,.82) 0%, rgba(17,21,24,.18) 22%, rgba(17,21,24,.3) 55%, rgba(17,21,24,.94) 100%); transition: background .8s; }
+  #palco.batalha #veu { background: rgba(17,21,24,.86); }
+
+  #topo { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: calc(var(--u) * 2); padding: calc(var(--u) * 1.6) calc(var(--u) * 2.4); }
+  #cena { font-size: calc(var(--u) * 3.4); margin: 0; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
+  #chips { display: flex; flex-wrap: wrap; gap: calc(var(--u) * .7); margin-top: calc(var(--u) * .7); }
+  .chip { padding: calc(var(--u) * .25) calc(var(--u) * .9); border-radius: 99px; background: rgba(25,32,37,.82); border: 1px solid var(--linha); color: var(--apagado); font-size: calc(var(--u) * 1.35); white-space: nowrap; }
+  #cantoMesa { text-align: right; color: var(--apagado); font-size: calc(var(--u) * 1.35); white-space: nowrap; }
+  #cantoMesa b { color: var(--texto); letter-spacing: .16em; font-family: Consolas, "Courier New", monospace; font-size: calc(var(--u) * 1.9); }
+  #ponto { display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: var(--bom); margin-right: .45em; vertical-align: middle; }
+  #ponto.fora { background: var(--ruim); }
+
+  /* Grupo (à direita) */
+  #grupo { position: absolute; right: calc(var(--u) * 2.4); top: calc(var(--u) * 9); width: calc(var(--u) * 27); display: flex; flex-direction: column; gap: calc(var(--u) * .9); }
+  .cartao { display: flex; gap: calc(var(--u) * 1); align-items: center; padding: calc(var(--u) * .8) calc(var(--u) * 1); border-radius: calc(var(--u) * 1); background: rgba(25,32,37,.88); border: 1px solid var(--linha); transition: border-color .3s, box-shadow .3s, opacity .4s; }
+  .cartao.vez { border-color: var(--ambar); box-shadow: 0 0 calc(var(--u) * 1.4) rgba(230,180,80,.35); }
+  .cartao.caido { opacity: .55; }
+  .cartao.ini { background: rgba(48,26,24,.88); }
+  .cartao.fugiu { opacity: .4; }
+  .retrato { flex: none; width: calc(var(--u) * 4.6); height: calc(var(--u) * 4.6); border-radius: 50%; overflow: hidden; background: var(--sup2); border: 2px solid var(--arcano); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--arcano); font-size: calc(var(--u) * 1.6); }
+  .cartao.ini .retrato { border-color: var(--ruim); color: var(--ruim); }
+  .retrato img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .dados { flex: 1; min-width: 0; }
+  .linha1 { display: flex; justify-content: space-between; gap: .6em; align-items: baseline; }
+  .nomeP { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: calc(var(--u) * 1.65); }
+  .sub { color: var(--apagado); font-size: calc(var(--u) * 1.2); white-space: nowrap; }
+  .barra { height: calc(var(--u) * .75); border-radius: 99px; background: #0b0e10; border: 1px solid var(--linha); overflow: hidden; margin-top: calc(var(--u) * .35); }
+  .barra i { display: block; height: 100%; background: var(--bom); transition: width .6s ease, background .4s; }
+  .barra.mana { height: calc(var(--u) * .45); }
+  .barra.mana i { background: var(--arcano); }
+  .barra i.media { background: var(--ambar); } .barra i.baixa { background: var(--ruim); }
+  .selos { display: flex; flex-wrap: wrap; gap: calc(var(--u) * .35); margin-top: calc(var(--u) * .4); }
+  .selo { font-size: calc(var(--u) * 1.05); padding: 0 calc(var(--u) * .55); border-radius: 99px; border: 1px solid currentColor; line-height: 1.6; white-space: nowrap; }
+  .st-envenenado { color: #9bd35a; } .st-em_chamas { color: #ff9a4d; } .st-atordoado { color: #e6d36a; } .st-protegido { color: var(--arcano); } .st-regenerando { color: var(--bom); }
+  .el-fogo { color: #ff9a4d; } .el-gelo { color: #9fd8ff; } .el-raio { color: #f3e36b; } .el-veneno { color: #9bd35a; } .el-luz { color: #fff2c2; } .el-sombra { color: #b9a2e8; }
+  .cartao.pulso-dano { animation: pulsoDano .6s; } .cartao.pulso-cura { animation: pulsoCura .7s; }
+  @keyframes pulsoDano { 0%,100% { transform: translateX(0); } 20% { transform: translateX(-6px); background: rgba(120,40,34,.95); } 45% { transform: translateX(5px); } 70% { transform: translateX(-3px); } }
+  @keyframes pulsoCura { 0%,100% { box-shadow: none; } 40% { box-shadow: 0 0 calc(var(--u) * 2) rgba(124,196,143,.8); border-color: var(--bom); } }
+
+  /* Narração e diário (embaixo) */
+  #baixo { position: absolute; left: calc(var(--u) * 2.4); right: calc(var(--u) * 31); bottom: calc(var(--u) * 2); }
+  #palco.batalha #chips { display: none; }
+  #palco.batalha .ev { white-space: normal; font-size: calc(var(--u) * 1.3); }
+  #palco.batalha #grupo { left: 58vw; width: auto; top: calc(var(--u) * 6.4); display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--u) * .6); }
+  #palco.batalha #grupo.muitos { grid-template-columns: 1fr 1fr 1fr; }
+  #palco.batalha .cartao { padding: calc(var(--u) * .5) calc(var(--u) * .7); gap: calc(var(--u) * .7); }
+  #palco.batalha .retrato { width: calc(var(--u) * 3.2); height: calc(var(--u) * 3.2); font-size: calc(var(--u) * 1.2); }
+  #palco.batalha .nomeP { font-size: calc(var(--u) * 1.35); } #palco.batalha .selo.classe { display: none; }
+  #palco.batalha #grupo.muitos .retrato { display: none; }
+  #palco.batalha #baixo { left: 58vw; right: calc(var(--u) * 2.4); }
+  #eventos { display: flex; flex-direction: column; gap: calc(var(--u) * .4); margin-bottom: calc(var(--u) * .9); }
+  .ev { align-self: flex-start; max-width: 100%; padding: calc(var(--u) * .35) calc(var(--u) * 1); border-radius: calc(var(--u) * .8); background: rgba(25,32,37,.86); border-left: 3px solid var(--linha); font-size: calc(var(--u) * 1.45); animation: entra .35s ease; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev b { color: var(--ambar); font-weight: 600; }
+  .ev.acao { border-left-color: var(--arcano); } .ev.bom { border-left-color: var(--bom); } .ev.ruim { border-left-color: var(--ruim); }
+  .ev .res { color: var(--apagado); margin-left: .6em; }
+  @keyframes entra { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  #narracao { padding: calc(var(--u) * 1.3) calc(var(--u) * 1.8); border-radius: calc(var(--u) * 1.2); background: rgba(17,21,24,.9); border: 1px solid var(--linha); border-left: 4px solid var(--brasa);
+    font-family: Georgia, "Times New Roman", serif; font-size: calc(var(--u) * 2.15); line-height: 1.45; max-height: 38vh; overflow: hidden; }
+  #palco.batalha #narracao { font-size: calc(var(--u) * 1.6); max-height: 30vh; }
+  #narracao.nova { animation: entra .5s ease; }
+  #situacao { margin-top: calc(var(--u) * .8); min-height: 1.5em; color: var(--ambar); font-size: calc(var(--u) * 1.5); }
+  #situacao.pisca { animation: pisca 1.4s ease-in-out infinite; }
+  @keyframes pisca { 50% { opacity: .45; } }
+
+  /* ── Tabuleiro ── */
+  #arena { position: absolute; left: calc(var(--u) * 2.4); right: 44vw; top: calc(var(--u) * 9.6); bottom: calc(var(--u) * 2); display: flex; align-items: center; justify-content: center; }
+  #tabuleiro { position: relative; background: #1a2026 center/cover no-repeat; border: 2px solid var(--linha); border-radius: calc(var(--u) * .6); box-shadow: 0 calc(var(--u) * 1) calc(var(--u) * 4) rgba(0,0,0,.6); overflow: hidden; }
+  #grade { position: absolute; inset: 0; pointer-events: none;
+    background-image: linear-gradient(rgba(230,225,213,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(230,225,213,.13) 1px, transparent 1px); }
+  .terreno { position: absolute; border-radius: 4px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: calc(var(--u) * .95); color: rgba(255,255,255,.75); overflow: hidden; line-height: 1.1; padding: 2px; }
+  .terreno.obstaculo { background: rgba(70,76,84,.92); border: 1px solid #8a929b; }
+  .terreno.cobertura { background: rgba(120,86,48,.8); border: 1px dashed #c89a5c; }
+  .terreno.dificil { background: repeating-linear-gradient(45deg, rgba(110,120,60,.55) 0 6px, rgba(110,120,60,.25) 6px 12px); }
+  .terreno.agua { background: rgba(48,110,160,.6); }
+  .terreno.abismo { background: rgba(0,0,0,.92); border: 1px solid #333; }
+  #tabuleiro.comImagem .terreno { background: transparent; border-color: transparent; color: transparent; }
+  .peca { position: absolute; transition: left .7s cubic-bezier(.3,.8,.3,1), top .7s cubic-bezier(.3,.8,.3,1), opacity .8s, filter .8s; z-index: 2; }
+  .peca .disco { position: absolute; left: 14%; right: 14%; top: 5%; bottom: 23%; border-radius: 50%; overflow: hidden; background: var(--sup2); border: 3px solid var(--arcano); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--arcano); box-shadow: 0 3px 8px rgba(0,0,0,.6); }
+  .peca.ini .disco { border-color: var(--ruim); color: var(--ruim); background: #2a1716; }
+  .peca .disco img { width: 100%; height: 100%; object-fit: cover; }
+  .peca .rot { position: absolute; left: -32%; right: -32%; bottom: 0; line-height: 1.15; text-align: center; font-size: .6em; font-weight: 600; text-shadow: 0 1px 3px #000, 0 0 6px #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .peca .pv { position: absolute; left: 14%; right: 14%; top: 0; height: 8%; z-index: 1; min-height: 4px; border-radius: 99px; background: #0b0e10; overflow: hidden; border: 1px solid rgba(0,0,0,.6); }
+  .peca .pv i { display: block; height: 100%; background: var(--bom); transition: width .6s; }
+  .peca.ini .pv i { background: var(--ruim); }
+  .peca.vez { z-index: 3; }
+  .peca.vez .disco { box-shadow: 0 0 0 3px var(--ambar), 0 0 18px 6px rgba(230,180,80,.6); animation: respira 1.5s ease-in-out infinite; }
+  @keyframes respira { 50% { box-shadow: 0 0 0 3px var(--ambar), 0 0 28px 10px rgba(230,180,80,.85); } }
+  .peca.caido { opacity: .32; filter: grayscale(1); z-index: 1; }
+  .peca.ini.caido { opacity: 0; }
+  .peca.tremor .disco { animation: tremor .5s; }
+  @keyframes tremor { 0%,100% { transform: translate(0,0); } 15% { transform: translate(-12%,4%); } 35% { transform: translate(10%,-5%); } 55% { transform: translate(-7%,3%); } 75% { transform: translate(4%,-2%); } }
+  .peca.brilho .disco { animation: brilho .8s; }
+  @keyframes brilho { 40% { box-shadow: 0 0 0 4px var(--bom), 0 0 26px 10px rgba(124,196,143,.9); } }
+  #fx { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  .flutua { position: absolute; transform: translate(-50%,-50%); font-weight: 800; font-size: calc(var(--u) * 2.6); text-shadow: 0 2px 4px #000, 0 0 10px #000; animation: sobe 1.5s ease-out forwards; white-space: nowrap; }
+  .flutua.dano { color: #ff8b7a; } .flutua.cura { color: #8be0a0; } .flutua.erro { color: #cfd6da; font-size: calc(var(--u) * 1.8); } .flutua.critico { color: var(--ambar); font-size: calc(var(--u) * 3.6); }
+  @keyframes sobe { 0% { opacity: 0; margin-top: 0; transform: translate(-50%,-50%) scale(.6); } 15% { opacity: 1; transform: translate(-50%,-50%) scale(1.15); } 100% { opacity: 0; margin-top: calc(var(--u) * -6); transform: translate(-50%,-50%) scale(1); } }
+  .projetil { position: absolute; width: calc(var(--u) * 1.4); height: calc(var(--u) * 1.4); border-radius: 50%; transform: translate(-50%,-50%); background: var(--ambar); box-shadow: 0 0 14px 6px currentColor; color: var(--ambar); }
+  .impacto { position: absolute; width: 0; height: 0; border-radius: 50%; transform: translate(-50%,-50%); border: 3px solid #fff; animation: impacto .5s ease-out forwards; }
+  @keyframes impacto { to { width: calc(var(--u) * 9); height: calc(var(--u) * 9); opacity: 0; border-width: 1px; } }
+
+  /* Ordem de iniciativa */
+  #ordem { position: absolute; left: calc(var(--u) * 2.4); right: 44vw; top: calc(var(--u) * 6.4); display: flex; gap: calc(var(--u) * .6); align-items: center; overflow: hidden; }
+  #ordem .rodada { color: var(--ambar); font-weight: 700; margin-right: calc(var(--u) * .6); white-space: nowrap; font-size: calc(var(--u) * 1.4); }
+  #ordem .item { padding: calc(var(--u) * .2) calc(var(--u) * .9); border-radius: 99px; border: 1px solid var(--linha); background: rgba(25,32,37,.86); font-size: calc(var(--u) * 1.25); white-space: nowrap; color: var(--apagado); }
+  #ordem .item.ini { color: #e7a79d; } #ordem .item.agora { border-color: var(--ambar); color: var(--texto); background: rgba(90,66,20,.9); font-weight: 700; }
+  #ordem .item.fora { opacity: .35; text-decoration: line-through; }
+
+  /* ── Sobreposições ── */
+  #faixa { position: absolute; left: 0; right: 0; top: 38%; text-align: center; padding: calc(var(--u) * 2) 0; font-size: calc(var(--u) * 7); font-weight: 700; letter-spacing: .12em; z-index: 20; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(17,21,24,.94) 18%, rgba(17,21,24,.94) 82%, transparent); border-top: 2px solid currentColor; border-bottom: 2px solid currentColor; text-shadow: 0 0 30px currentColor; animation: faixa 2.2s ease forwards; }
+  @keyframes faixa { 0% { opacity: 0; transform: scale(.8); } 12% { opacity: 1; transform: scale(1); } 78% { opacity: 1; } 100% { opacity: 0; transform: scale(1.04); } }
+  #clarao { position: absolute; inset: 0; pointer-events: none; z-index: 19; opacity: 0; }
+  #clarao.dano { animation: clarao .55s; background: radial-gradient(ellipse at center, transparent 55%, rgba(236,127,111,.75) 100%); }
+  #clarao.critico { animation: clarao .7s; background: radial-gradient(ellipse at center, transparent 45%, rgba(230,180,80,.8) 100%); }
+  @keyframes clarao { 0% { opacity: 1; } 100% { opacity: 0; } }
+  #dado { position: absolute; left: 50%; top: 44%; transform: translate(-50%,-50%); z-index: 18; text-align: center; pointer-events: none; animation: dadoEntra 2.4s ease forwards; }
+  #dado .d20 { width: calc(var(--u) * 13); height: calc(var(--u) * 13); margin: 0 auto; position: relative; filter: drop-shadow(0 6px 18px rgba(0,0,0,.7)); }
+  #dado .d20 svg { width: 100%; height: 100%; animation: gira .7s cubic-bezier(.2,.7,.3,1); }
+  #dado .d20 span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: calc(var(--u) * 5); font-weight: 800; color: #111; padding-top: 6%; }
+  #dado .txt { margin-top: calc(var(--u) * 1); padding: calc(var(--u) * .6) calc(var(--u) * 1.6); border-radius: 99px; background: rgba(17,21,24,.92); border: 1px solid var(--linha); font-size: calc(var(--u) * 1.8); display: inline-block; max-width: 70vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #dado.bom .d20 path { fill: var(--bom); } #dado.ruim .d20 path { fill: var(--ruim); } #dado.critico .d20 path { fill: var(--ambar); }
+  @keyframes gira { from { transform: rotate(-540deg) scale(.3); } to { transform: none; } }
+  @keyframes dadoEntra { 0% { opacity: 0; } 8% { opacity: 1; } 82% { opacity: 1; } 100% { opacity: 0; } }
+  #votacao { position: absolute; left: 50%; top: 20%; transform: translateX(-50%); width: min(62vw, calc(var(--u) * 70)); z-index: 15; padding: calc(var(--u) * 2) calc(var(--u) * 2.4); border-radius: calc(var(--u) * 1.4); background: rgba(25,32,37,.97); border: 2px solid var(--ambar); box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 6) rgba(0,0,0,.6); }
+  #votacao h2 { margin: 0 0 calc(var(--u) * .4); font-size: calc(var(--u) * 1.4); color: var(--ambar); font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+  #votacao .pergunta { font-size: calc(var(--u) * 2.6); margin-bottom: calc(var(--u) * 1.4); }
+  #votacao .op { position: relative; margin-top: calc(var(--u) * .8); padding: calc(var(--u) * .8) calc(var(--u) * 1.2); border-radius: calc(var(--u) * .8); background: var(--sup2); border: 1px solid var(--linha); overflow: hidden; display: flex; justify-content: space-between; gap: 1em; font-size: calc(var(--u) * 1.9); }
+  #votacao .op i { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(230,180,80,.25); transition: width .5s; }
+  #votacao .op span { position: relative; } #votacao .op .quem { color: var(--apagado); font-size: calc(var(--u) * 1.4); }
+  #votacao .tempo { height: calc(var(--u) * .5); border-radius: 99px; background: #0b0e10; margin-top: calc(var(--u) * 1.4); overflow: hidden; }
+  #votacao .tempo i { display: block; height: 100%; background: var(--ambar); transition: width 1s linear; }
+  #telaCheia { position: absolute; right: calc(var(--u) * 2.4); bottom: calc(var(--u) * 2); z-index: 30; padding: calc(var(--u) * .6) calc(var(--u) * 1.2); border-radius: 99px; border: 1px solid var(--linha); background: rgba(25,32,37,.9); color: var(--apagado); font: inherit; font-size: calc(var(--u) * 1.3); cursor: pointer; opacity: .0; transition: opacity .4s; }
+  body:hover #telaCheia, #telaCheia:focus { opacity: 1; }
+  #espera { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: calc(var(--u) * 1.4); padding: 10vh 10vw; }
+  #espera h2 { font-size: calc(var(--u) * 4.4); margin: 0; color: var(--brasa); font-weight: 600; }
+  #espera p { margin: 0; color: var(--apagado); font-size: calc(var(--u) * 2.1); }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; transition-duration: .01s !important; } }
+  @media (max-aspect-ratio: 1/1) {              /* tela em pé (celular, tablet): o grupo vai para baixo do tabuleiro */
+    #parear { flex-direction: column; gap: calc(var(--u) * 3); } #parear .lado { max-width: 90vw; } #qrCaixa { width: min(60vw, 40vh); height: min(60vw, 40vh); }
+    #grupo { right: calc(var(--u) * 1.5); left: calc(var(--u) * 1.5); width: auto; top: auto; bottom: 30vh; flex-direction: row; flex-wrap: wrap; }
+    #grupo .cartao { flex: 1 1 42%; } #baixo, #palco.batalha #baixo { right: calc(var(--u) * 2.4); }
+    #arena, #ordem { right: calc(var(--u) * 2.4); } #arena { bottom: 56vh; }
+    #palco.batalha #grupo { left: calc(var(--u) * 1.5); top: auto; bottom: 30vh; } #palco.batalha #baixo { left: calc(var(--u) * 2.4); }
+  }
+</style>
+</head>
+<body>
+
+<div id="parear">
+  <div class="lado">
+    <h1 class="titulo">Mesa Viva</h1>
+    <p class="sub" id="tSub"></p>
+    <ol id="passos"></ol>
+    <div id="avisoParear" role="status"></div>
+  </div>
+  <div>
+    <div id="qrCaixa" aria-label="QR Code"></div>
+    <div id="codigoTela"><span id="tCodigo"></span><b id="codigo">······</b></div>
+  </div>
+</div>
+
+<div id="palco" hidden>
+  <div class="camadaFundo" id="fundoA"></div>
+  <div class="camadaFundo" id="fundoB"></div>
+  <div id="veu"></div>
+  <div id="topo">
+    <div><h1 class="titulo" id="cena"></h1><div id="chips"></div></div>
+    <div id="cantoMesa"><span id="ponto"></span><span id="tMesa"></span> <b id="codMesa"></b></div>
+  </div>
+  <div id="ordem" hidden></div>
+  <div id="arena" hidden><div id="tabuleiro"><div id="grade"></div><div id="fx"></div></div></div>
+  <div id="grupo"></div>
+  <div id="baixo">
+    <div id="eventos"></div>
+    <div id="narracao" hidden></div>
+    <div id="situacao"></div>
+  </div>
+  <div id="espera" hidden><h2 class="titulo" id="esperaTitulo"></h2><p id="esperaTexto"></p></div>
+  <div id="votacao" hidden></div>
+  <div id="clarao"></div>
+  <button id="telaCheia" type="button"></button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var el = function (tag, classe, texto) { var e = document.createElement(tag); if (classe) e.className = classe; if (texto !== undefined) e.textContent = texto; return e; };
+  var idioma = (navigator.language || 'pt').toLowerCase().indexOf('pt') === 0 ? 'pt' : 'en';
+  var tr = function (pt, en) { return idioma === 'en' ? en : pt; };
+  var GUARDA = 'mesaviva.projecao';
+
+  // ── Estado ──
+  var sessao = null;            // { id, chave }
+  var ws = null, wsTentativas = 0, buscando = false, pedirDeNovo = false, ultimaBusca = 0, timerBusca = null;
+  var anterior = null;          // último estado recebido
+  var ultimoLog = 0;            // id da última linha do diário já mostrada
+  var pecas = {};               // id -> elemento da peça no tabuleiro
+  var cartoes = {};             // id -> elemento do cartão (grupo e inimigos)
+  var fila = [], filaRodando = false;
+  var fundoAtual = '', camada = 0, mapaAssinatura = '';
+
+  var NOME_STATUS = { envenenado: ['Envenenado', 'Poisoned'], em_chamas: ['Em chamas', 'Burning'], atordoado: ['Atordoado', 'Stunned'], protegido: ['Protegido', 'Shielded'], regenerando: ['Regenerando', 'Regenerating'] };
+  var NOME_ELEMENTO = { fogo: ['Fogo', 'Fire'], gelo: ['Gelo', 'Ice'], raio: ['Raio', 'Lightning'], veneno: ['Veneno', 'Poison'], luz: ['Luz', 'Light'], sombra: ['Sombra', 'Shadow'] };
+  var NOME_PERIODO = { manha: ['Manhã', 'Morning'], tarde: ['Tarde', 'Afternoon'], noite: ['Noite', 'Night'], madrugada: ['Madrugada', 'Late night'] };
+  var doPar = function (par) { return par ? par[idioma === 'en' ? 1 : 0] : ''; };
+
+  function textosFixos() {
+    document.documentElement.lang = idioma === 'en' ? 'en' : 'pt-BR';
+    $('#tSub').textContent = tr('Projeção da mesa: todos acompanham a aventura nesta tela.', 'Table projection: everyone follows the adventure on this screen.');
+    var passos = $('#passos'); passos.textContent = '';
+    [[tr('Abra o Mesa Viva no celular e entre na sua mesa.', 'Open Mesa Viva on your phone and enter your table.')],
+     [tr('Em Ajustes, toque em ', 'In Settings, tap '), tr('Projetar a mesa', 'Project the table'), '.'],
+     [tr('Aponte a câmera para o QR Code ao lado, ou digite o código da tela.', 'Point the camera at the QR Code, or type the screen code.')]]
+      .forEach(function (p) { var li = el('li'); li.appendChild(document.createTextNode(p[0])); if (p[1]) { li.appendChild(el('b', '', p[1])); li.appendChild(document.createTextNode(p[2] || '')); } passos.appendChild(li); });
+    $('#tCodigo').textContent = tr('Código da tela', 'Screen code');
+    $('#tMesa').textContent = tr('Mesa', 'Table');
+    $('#telaCheia').textContent = tr('Tela cheia', 'Full screen');
+  }
+
+  // ── Rede ──
+  function pedir(metodo, rota, corpo) {
+    var cab = { 'Content-Type': 'application/json' };
+    if (sessao) cab['x-projecao-chave'] = sessao.chave;
+    return fetch(rota, { method: metodo, headers: cab, body: corpo ? JSON.stringify(corpo) : undefined, cache: 'no-store' })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { st: r.status, d: d }; }); });
+  }
+  function guardar() { try { sessionStorage.setItem(GUARDA, JSON.stringify(sessao)); } catch (e) {} }
+  function esquecer() { sessao = null; try { sessionStorage.removeItem(GUARDA); } catch (e) {} }
+  function lembrar() { try { var s = JSON.parse(sessionStorage.getItem(GUARDA) || 'null'); if (s && s.id && s.chave) return s; } catch (e) {} return null; }
+
+  function novaSessao() {
+    esquecer();
+    anterior = null; ultimoLog = 0;
+    mostrarParear();
+    $('#avisoParear').textContent = '';
+    $('#qrCaixa').textContent = '…';
+    $('#codigo').textContent = '······';
+    pedir('POST', '/api/projecao/nova', {}).then(function (r) {
+      if (r.st !== 200 || !r.d.id) throw new Error(r.d.error || 'erro');
+      sessao = { id: r.d.id, chave: r.d.chave, expiraEm: Date.now() + Math.max(60000, (r.d.expiraEm || 0) - Date.now() - 120000) };
+      guardar();
+      desenharQr(r.d.qr);
+      $('#codigo').textContent = sessao.id;
+      conectarWs();
+      buscar();
+    }).catch(function () {
+      $('#avisoParear').textContent = tr('Sem conexão com o servidor. Tentando de novo…', 'No connection to the server. Retrying…');
+      setTimeout(novaSessao, 5000);
+    });
+  }
+  function desenharQr(svg) {
+    var caixa = $('#qrCaixa'); caixa.textContent = '';
+    if (svg && svg.indexOf('<svg') === 0) {
+      var doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+      if (doc.documentElement && doc.documentElement.nodeName === 'svg') { caixa.appendChild(document.importNode(doc.documentElement, true)); return; }
+    }
+    caixa.textContent = tr('Digite o código abaixo no app.', 'Type the code below in the app.');
+  }
+
+  function conectarWs() {
+    if (!sessao) return;
+    try { if (ws) { ws.onclose = null; ws.close(); } } catch (e) {}
+    var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    try { ws = new WebSocket(url); } catch (e) { ws = null; return; }
+    ws.onopen = function () { wsTentativas = 0; try { ws.send(JSON.stringify({ projecao: sessao.id, chave: sessao.chave })); } catch (e) {} marcarConexao(true); };
+    ws.onmessage = function (m) {
+      var d; try { d = JSON.parse(m.data); } catch (e) { return; }
+      if (d.evento === 'recusado' || d.evento === 'encerrada') { novaSessao(); return; }
+      agendarBusca();
+    };
+    ws.onclose = function () { marcarConexao(false); wsTentativas++; setTimeout(conectarWs, Math.min(15000, 1000 * wsTentativas)); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+  function marcarConexao(ok) { var p = $('#ponto'); if (p) p.className = ok ? '' : 'fora'; }
+
+  /** Uma busca por vez, no máximo a cada 700 ms (o servidor limita os pedidos por minuto). */
+  function agendarBusca() {
+    if (timerBusca) return;
+    var espera = Math.max(0, 700 - (Date.now() - ultimaBusca));
+    timerBusca = setTimeout(function () { timerBusca = null; buscar(); }, espera);
+  }
+  function buscar() {
+    if (!sessao) return;
+    if (buscando) { pedirDeNovo = true; return; }
+    buscando = true; ultimaBusca = Date.now();
+    pedir('GET', '/api/projecao/' + sessao.id + '/estado').then(function (r) {
+      if (r.st === 404) { novaSessao(); return; }
+      if (r.st !== 200) return;
+      marcarConexao(true);
+      if (!r.d.pareada) { mostrarParear(); if (sessao.expiraEm && Date.now() > sessao.expiraEm) novaSessao(); return; }
+      try { receber(r.d); } catch (e) { if (window.console) console.error(e); }
+    }).catch(function () { marcarConexao(false); })
+      .then(function () { buscando = false; if (pedirDeNovo) { pedirDeNovo = false; agendarBusca(); } });
+  }
+  setInterval(function () { if (sessao && !document.hidden) agendarBusca(); }, 4000);
+
+  // ── Telas ──
+  function mostrarParear() { $('#parear').hidden = false; $('#palco').hidden = true; }
+  function mostrarPalco() { $('#parear').hidden = true; $('#palco').hidden = false; }
+
+  function receber(e) {
+    var primeira = !anterior || anterior.mesa.codigo !== e.mesa.codigo;
+    if (e.mesa.idioma !== idioma) { idioma = e.mesa.idioma; textosFixos(); }
+    mostrarPalco();
+    var novas = [];
+    if (primeira) {
+      ultimoLog = e.log.length ? e.log[e.log.length - 1].id : 0;
+      $('#eventos').textContent = ''; pecas = {}; cartoes = {}; mapaAssinatura = '';
+      limparTabuleiro();
+    } else {
+      novas = e.log.filter(function (l) { return l.id > ultimoLog; });
+      if (novas.length) ultimoLog = novas[novas.length - 1].id;
+    }
+    var antes = anterior;
+    anterior = e;
+    desenharTopo(e);
+    desenharFundo(e);
+    var emBatalha = !!(e.combate && e.combate.mapa);
+    $('#palco').classList.toggle('batalha', !!e.combate);
+    desenharEspera(e);
+    desenharTabuleiro(e, emBatalha);
+    desenharOrdem(e);
+    desenharGrupo(e);
+    desenharNarracao(e, primeira);
+    desenharSituacao(e);
+    desenharVotacao(e);
+    // primeiro os golpes do diário (quem ataca quem), depois os números de vida que mudaram
+    var ultimoGolpe = null;
+    novas.forEach(function (l) { var ev = interpretar(l, e, antes); if (ev) { if (ev.tipo === 'ataque') ultimoGolpe = ev; fila.push(ev); } });
+    if (antes && !primeira) {
+      var mostrar = function () { mostrarDiferencas(antes, e); };
+      if (ultimoGolpe) ultimoGolpe.depois = mostrar; else mostrar();
+    }
+    rodarFila();
+  }
+
+  function desenharTopo(e) {
+    $('#cena').textContent = e.mesa.cena || e.mesa.temaNome || 'Mesa Viva';
+    $('#codMesa').textContent = e.mesa.codigo;
+    var chips = $('#chips'); chips.textContent = '';
+    var lista = [];
+    if (e.mesa.temaNome) lista.push(e.mesa.temaNome);
+    if (e.mesa.fase === 'jogo') lista.push(tr('Dia ', 'Day ') + e.mesa.dia);
+    if (e.mesa.periodo) lista.push(doPar(NOME_PERIODO[e.mesa.periodo]) || e.mesa.periodo);
+    if (e.mesa.clima) lista.push(e.mesa.clima.charAt(0).toUpperCase() + e.mesa.clima.slice(1));
+    lista.forEach(function (t) { chips.appendChild(el('span', 'chip', t)); });
+  }
+
+  function desenharFundo(e) {
+    var url = e.mesa.fundo || '';
+    if (url === fundoAtual) return;
+    fundoAtual = url;
+    var camadas = [$('#fundoA'), $('#fundoB')];
+    if (!url) { camadas[0].classList.remove('visivel'); camadas[1].classList.remove('visivel'); return; }
+    var img = new Image();
+    img.onload = function () {
+      if (fundoAtual !== url) return;
+      camada = 1 - camada;
+      camadas[camada].style.backgroundImage = 'url("' + url.replace(/"/g, '%22') + '")';
+      camadas[camada].classList.add('visivel');
+      camadas[1 - camada].classList.remove('visivel');
+    };
+    img.src = url;
+  }
+
+  function desenharEspera(e) {
+    var esp = $('#espera');
+    if (e.mesa.fase === 'jogo') { esp.hidden = true; return; }
+    esp.hidden = false;
+    $('#esperaTitulo').textContent = tr('A aventura já vai começar', 'The adventure is about to begin');
+    $('#esperaTexto').textContent = e.fichas.length
+      ? tr('No saguão: ', 'In the lobby: ') + e.fichas.map(function (f) { return f.nome; }).join(', ')
+      : tr('Os jogadores estão criando os personagens.', 'The players are creating their characters.');
+  }
+
+  // ── Tabuleiro ──
+  function limparTabuleiro() {
+    var tab = $('#tabuleiro');
+    Array.prototype.slice.call(tab.querySelectorAll('.peca, .terreno')).forEach(function (n) { n.remove(); });
+    tab.style.backgroundImage = ''; tab.classList.remove('comImagem');
+  }
+  function ajustarTabuleiro() {
+    var e = anterior; if (!e || !e.combate || !e.combate.mapa) return;
+    var m = e.combate.mapa, arena = $('#arena'), tab = $('#tabuleiro');
+    var L = arena.clientWidth, A = arena.clientHeight; if (!L || !A) return;
+    var lado = Math.floor(Math.min(L / m.colunas, A / m.linhas));
+    tab.style.width = lado * m.colunas + 'px'; tab.style.height = lado * m.linhas + 'px';
+    $('#grade').style.backgroundSize = lado + 'px ' + lado + 'px';
+    tab.style.fontSize = Math.max(9, lado * 0.34) + 'px';
+  }
+  window.addEventListener('resize', ajustarTabuleiro);
+
+  function desenharTabuleiro(e, emBatalha) {
+    var arena = $('#arena');
+    arena.hidden = !emBatalha;
+    if (!emBatalha) { if (mapaAssinatura) { limparTabuleiro(); pecas = {}; mapaAssinatura = ''; } return; }
+    var c = e.combate, m = c.mapa, tab = $('#tabuleiro');
+    var assinatura = c.id + '|' + m.colunas + 'x' + m.linhas + '|' + JSON.stringify(m.terreno);
+    if (assinatura !== mapaAssinatura) {
+      mapaAssinatura = assinatura; limparTabuleiro(); pecas = {};
+      (m.terreno || []).forEach(function (t) {
+        var d = el('div', 'terreno ' + String(t.tipo).replace(/[^a-z]/g, ''), t.nome || '');
+        d.style.left = (t.x / m.colunas * 100) + '%'; d.style.top = (t.y / m.linhas * 100) + '%';
+        d.style.width = ((t.l || 1) / m.colunas * 100) + '%'; d.style.height = ((t.a || 1) / m.linhas * 100) + '%';
+        tab.insertBefore(d, $('#grade'));
+      });
+    }
+    ajustarTabuleiro();
+    if (m.imagem && tab.dataset.img !== m.imagem) { tab.dataset.img = m.imagem; tab.style.backgroundImage = 'url("' + m.imagem.replace(/"/g, '%22') + '")'; tab.classList.add('comImagem'); }
+    var vez = c.ordem.length ? c.ordem[c.vez % c.ordem.length] : null;
+    var vistos = {};
+    c.ordem.forEach(function (o) {
+      var pos = c.posicoes[o.id]; if (!pos) return;
+      vistos[o.id] = true;
+      var ini = o.tipo === 'ini';
+      var dono = ini ? acharPorId(c.inimigos, o.id) : acharPorUid(e.fichas, o.id);
+      if (!dono) return;
+      var p = pecas[o.id];
+      if (!p) {
+        p = el('div', 'peca ' + (ini ? 'ini' : 'pj'));
+        var disco = el('div', 'disco'); retrato(disco, ini ? '' : dono.imagem, dono.nome);
+        var pv = el('div', 'pv'); pv.appendChild(el('i'));
+        p.appendChild(pv); p.appendChild(disco); p.appendChild(el('div', 'rot', dono.nome));
+        p.style.width = (100 / m.colunas) + '%'; p.style.height = (100 / m.linhas) + '%';
+        p.style.left = (pos.x / m.colunas * 100) + '%'; p.style.top = (pos.y / m.linhas * 100) + '%';
+        tab.insertBefore(p, $('#fx'));
+        pecas[o.id] = p;
+      }
+      p.style.left = (pos.x / m.colunas * 100) + '%'; p.style.top = (pos.y / m.linhas * 100) + '%';
+      p.querySelector('.pv i').style.width = Math.max(0, Math.min(100, dono.pv / Math.max(1, dono.pvMax) * 100)) + '%';
+      p.classList.toggle('caido', dono.pv <= 0);
+      p.classList.toggle('vez', !!vez && vez.id === o.id && dono.pv > 0 && !c.pausado);
+    });
+    Object.keys(pecas).forEach(function (id) { if (!vistos[id]) { pecas[id].remove(); delete pecas[id]; } });
+  }
+  function acharPorId(lista, id) { for (var i = 0; i < lista.length; i++) if (lista[i].id === id) return lista[i]; return null; }
+  function acharPorUid(lista, uid) { for (var i = 0; i < lista.length; i++) if (lista[i].uid === uid) return lista[i]; return null; }
+  function iniciais(nome) { var p = String(nome || '?').trim().split(/\s+/); return ((p[0] || '?').charAt(0) + (p.length > 1 ? p[p.length - 1].charAt(0) : '')).toUpperCase(); }
+  function retrato(caixa, url, nome) {
+    caixa.textContent = iniciais(nome);
+    if (!url || !/^(https?:)?\/\//.test(url) && url.charAt(0) !== '/') return;
+    var img = new Image();
+    img.onload = function () { caixa.textContent = ''; caixa.appendChild(img); };
+    img.alt = ''; img.src = url;
+  }
+
+  function desenharOrdem(e) {
+    var o = $('#ordem'); var c = e.combate;
+    o.hidden = !c;
+    if (!c) return;
+    o.textContent = '';
+    o.appendChild(el('span', 'rodada', (c.pausado ? tr('Pausado · ', 'Paused · ') : '') + tr('Rodada ', 'Round ') + c.rodada));
+    var n = c.ordem.length, vez = n ? c.vez % n : 0;
+    for (var k = 0; k < n; k++) {
+      var p = c.ordem[(vez + k) % n];
+      var dono = p.tipo === 'ini' ? acharPorId(c.inimigos, p.id) : acharPorUid(e.fichas, p.id);
+      var it = el('span', 'item' + (p.tipo === 'ini' ? ' ini' : '') + (k === 0 ? ' agora' : '') + (dono && dono.pv <= 0 ? ' fora' : ''), p.nome);
+      o.appendChild(it);
+    }
+  }
+
+  // ── Grupo e inimigos ──
+  function desenharGrupo(e) {
+    var caixa = $('#grupo'); var c = e.combate;
+    var vez = c && c.ordem.length ? c.ordem[c.vez % c.ordem.length] : null;
+    var lista = e.fichas.map(function (f) { return { id: f.uid, ini: false, d: f }; });
+    if (c) c.inimigos.forEach(function (i) { lista.push({ id: i.id, ini: true, d: i }); });
+    var vistos = {};
+    lista.forEach(function (x) {
+      vistos[x.id] = true;
+      var card = cartoes[x.id];
+      if (!card) {
+        card = el('div', 'cartao' + (x.ini ? ' ini' : ''));
+        var r = el('div', 'retrato'); retrato(r, x.ini ? '' : x.d.imagem, x.d.nome);
+        var dados = el('div', 'dados');
+        var l1 = el('div', 'linha1'); l1.appendChild(el('span', 'nomeP')); l1.appendChild(el('span', 'sub'));
+        var b = el('div', 'barra'); b.appendChild(el('i'));
+        dados.appendChild(l1); dados.appendChild(b);
+        if (!x.ini) { var bm = el('div', 'barra mana'); bm.appendChild(el('i')); dados.appendChild(bm); }
+        dados.appendChild(el('div', 'selos'));
+        card.appendChild(r); card.appendChild(dados);
+        caixa.appendChild(card); cartoes[x.id] = card;
+      }
+      var d = x.d, fr = Math.max(0, Math.min(1, d.pv / Math.max(1, d.pvMax)));
+      card.querySelector('.nomeP').textContent = d.nome;
+      card.querySelector('.sub').textContent = x.ini ? (d.fugiu ? tr('fugiu', 'fled') : d.pv + ' / ' + d.pvMax) : d.pv + ' / ' + d.pvMax + ' PV';
+      var barra = card.querySelector('.barra i');
+      barra.style.width = fr * 100 + '%'; barra.className = fr <= 0.25 ? 'baixa' : fr <= 0.5 ? 'media' : '';
+      var mana = card.querySelector('.barra.mana');
+      if (mana) { mana.hidden = !(d.manaMax > 0); mana.firstChild.style.width = (d.manaMax > 0 ? d.mana / d.manaMax * 100 : 0) + '%'; }
+      card.classList.toggle('caido', d.pv <= 0 && !d.fugiu);
+      card.classList.toggle('fugiu', !!d.fugiu);
+      card.classList.toggle('vez', !!vez && vez.id === x.id && d.pv > 0);
+      var selos = card.querySelector('.selos'); selos.textContent = '';
+      if (!x.ini) selos.appendChild(el('span', 'selo classe', d.classe + ' · ' + tr('nível ', 'level ') + d.nivel)).style.color = 'var(--apagado)';
+      (d.status || []).forEach(function (s) { selos.appendChild(el('span', 'selo st-' + s.tipo, (doPar(NOME_STATUS[s.tipo]) || s.tipo) + ' ' + s.turnos)); });
+      if (x.ini) {
+        (d.fraquezas || []).forEach(function (k) { selos.appendChild(el('span', 'selo el-' + k, tr('Fraco: ', 'Weak: ') + (doPar(NOME_ELEMENTO[k]) || k))); });
+        (d.resistencias || []).forEach(function (k) { selos.appendChild(el('span', 'selo el-' + k, tr('Resiste: ', 'Resists: ') + (doPar(NOME_ELEMENTO[k]) || k))); });
+        (d.imunidades || []).forEach(function (k) { selos.appendChild(el('span', 'selo el-' + k, tr('Imune: ', 'Immune: ') + (doPar(NOME_ELEMENTO[k]) || k))); });
+      }
+    });
+    Object.keys(cartoes).forEach(function (id) { if (!vistos[id]) { cartoes[id].remove(); delete cartoes[id]; } });
+    caixa.classList.toggle('muitos', lista.length > 8);
+  }
+
+  // ── Narração, eventos e situação ──
+  var narracaoMostrada = 0;
+  function desenharNarracao(e, primeira) {
+    var ultima = null;
+    for (var i = e.log.length - 1; i >= 0; i--) if (e.log[i].tipo === 'narr') { ultima = e.log[i]; break; }
+    var n = $('#narracao');
+    if (!ultima) { n.hidden = true; return; }
+    if (ultima.id === narracaoMostrada) return;
+    narracaoMostrada = ultima.id;
+    n.hidden = false; n.textContent = ultima.texto.replace(/[*_#]/g, '');
+    n.classList.remove('nova'); if (!primeira) { void n.offsetWidth; n.classList.add('nova'); }
+  }
+  function evento(classe, nome, texto, res) {
+    var caixa = $('#eventos');
+    var e = el('div', 'ev ' + classe);
+    if (nome) { e.appendChild(el('b', '', nome)); e.appendChild(document.createTextNode(' ')); }
+    e.appendChild(document.createTextNode(texto));
+    if (res) e.appendChild(el('span', 'res', res));
+    caixa.appendChild(e);
+    while (caixa.children.length > ($('#palco').classList.contains('batalha') ? 2 : 4)) caixa.removeChild(caixa.firstChild);
+  }
+  function desenharSituacao(e) {
+    var s = $('#situacao'), m = e.mesa, c = e.combate, txt = '', pisca = false;
+    if (m.fase !== 'jogo') txt = '';
+    else if (m.narrando) { txt = tr('O Mestre está narrando…', 'The Game Master is narrating…'); pisca = true; }
+    else if (m.rolagem) txt = (m.rolagem.nome || '?') + tr(' vai rolar o dado: ', ' is about to roll: ') + m.rolagem.rotulo + (m.rolagem.cd !== undefined ? ' · ' + (m.rolagem.tipo === 'ataque' ? 'CA ' : tr('CD ', 'DC ')) + m.rolagem.cd : '');
+    else if (c && c.ordem.length && !c.pausado) { var v = c.ordem[c.vez % c.ordem.length]; txt = tr('Vez de ', 'Turn: ') + v.nome; }
+    else if (c && c.pausado) txt = tr('Combate pausado', 'Combat paused');
+    s.textContent = txt; s.classList.toggle('pisca', pisca);
+  }
+
+  var timerVoto = null;
+  function desenharVotacao(e) {
+    var v = e.mesa.votacao, caixa = $('#votacao');
+    clearInterval(timerVoto);
+    if (!v) { caixa.hidden = true; return; }
+    caixa.hidden = false; caixa.textContent = '';
+    caixa.appendChild(el('h2', '', tr('Votação do grupo', 'Party vote')));
+    caixa.appendChild(el('div', 'pergunta titulo', v.pergunta));
+    var total = Math.max(1, Object.keys(v.votos).length);
+    v.opcoes.forEach(function (o, i) {
+      var quem = Object.keys(v.votos).filter(function (u) { return v.votos[u] === i; }).map(function (u) { return e.mesa.nomes[u] || '?'; });
+      var op = el('div', 'op'); var b = el('i'); b.style.width = quem.length / total * 100 + '%';
+      op.appendChild(b); op.appendChild(el('span', '', o)); op.appendChild(el('span', 'quem', quem.length ? quem.join(', ') : '—'));
+      caixa.appendChild(op);
+    });
+    var tempo = el('div', 'tempo'), bt = el('i'); tempo.appendChild(bt); caixa.appendChild(tempo);
+    var fim = Date.now() + v.restante, dur = Math.max(1, v.ate - v.desde);
+    var tic = function () { bt.style.width = Math.max(0, Math.min(100, (fim - Date.now()) / dur * 100)) + '%'; };
+    tic(); timerVoto = setInterval(tic, 1000);
+  }
+
+  // ── Do diário para a animação ──
+  /** Acha de quem é um nome: devolve o id (ficha ou inimigo), preferindo o nome mais longo que casa. */
+  function idDoNome(texto, e, antes) {
+    var cand = [];
+    e.fichas.forEach(function (f) { cand.push({ id: f.uid, nome: f.nome }); });
+    [e.combate, antes && antes.combate].forEach(function (c) { if (c) c.inimigos.forEach(function (i) { cand.push({ id: i.id, nome: i.nome }); }); });
+    var melhor = null;
+    cand.forEach(function (x) { if (x.nome && texto.indexOf(x.nome) === 0 && (!melhor || x.nome.length > melhor.nome.length)) melhor = x; });
+    return melhor ? melhor.id : null;
+  }
+  function interpretar(l, e, antes) {
+    var t = l.texto || '';
+    if (l.tipo === 'narr') return null;                                   // a narração aparece na caixa própria
+    if (l.tipo === 'acao') return { tipo: 'linha', classe: 'acao', nome: l.nome, texto: t };
+    if (l.tipo === 'roll') {
+      var m = t.match(/^(.+?) ataca (.+?): (\d+)[+-]\d+ = \d+ vs CA \d+.*→ (.*)$/);
+      if (m) return { tipo: 'ataque', de: idDoNome(m[1], e, antes), para: idDoNome(m[2], e, antes), acertou: /acertou/.test(m[4]), critico: /crítico/.test(m[4]), texto: t, bom: l.ok, dano: (m[4].match(/(\d+) de dano/) || [])[1] };
+      m = t.match(/^(.+?) · (.+): (\d+)([+-]\d+) = (\d+) vs (CA|CD) (\d+)/);
+      if (m) {
+        var ataque = m[6] === 'CA', nat = Number(m[3]);
+        var ev = { tipo: ataque ? 'ataque' : 'teste', de: idDoNome(m[1], e, antes), acertou: l.ok === true, critico: nat === 20 || /crítico!/.test(l.res || ''), nat: nat, total: Number(m[5]),
+          nome: m[1], rotulo: m[2].replace(/ \(chance \d+%\)/, ''), res: l.res || '', bom: l.ok, texto: t, dado: true, dano: ((l.res || '').match(/(\d+) de dano/) || [])[1] };
+        if (ataque) { var alvo = m[2].split(' vs ').pop().replace(/ \(.*$/, ''); ev.para = idDoNome(alvo, e, antes); }
+        return ev;
+      }
+      return { tipo: 'linha', classe: l.ok === true ? 'bom' : l.ok === false ? 'ruim' : '', texto: t, res: l.res };
+    }
+    // avisos do jogo
+    if (t.indexOf('Combate!') === 0) return { tipo: 'faixa', texto: tr('COMBATE!', 'COMBAT!'), cor: 'var(--brasa)' };
+    if (t.indexOf('Combate encerrado') === 0) return { tipo: 'faixa', texto: tr('VITÓRIA!', 'VICTORY!'), cor: 'var(--ambar)' };
+    if (t.indexOf('O grupo caiu') === 0) return { tipo: 'faixa', texto: tr('O GRUPO CAIU', 'THE PARTY FELL'), cor: 'var(--ruim)' };
+    if (t.indexOf('subiu para o nível') > 0) return { tipo: 'faixa', texto: t.replace(/!$/, '').toUpperCase(), cor: 'var(--arcano)', pequena: true };
+    if (/^Ato \d+ — /.test(t)) return { tipo: 'faixa', texto: t.toUpperCase(), cor: 'var(--texto)', pequena: true };
+    return { tipo: 'linha', classe: l.ok === true ? 'bom' : l.ok === false ? 'ruim' : '', texto: t };
+  }
+
+  function rodarFila() {
+    if (filaRodando) return;
+    var ev = fila.shift();
+    if (!ev) return;
+    filaRodando = true;
+    var espera = 250;
+    try {
+      if (ev.tipo === 'linha') { evento(ev.classe || '', ev.nome || '', ev.texto, ev.res || ''); espera = 300; }
+      else if (ev.tipo === 'faixa') { faixa(ev.texto, ev.cor, ev.pequena); espera = fila.length > 3 ? 600 : 1500; }
+      else if (ev.tipo === 'teste') { dado(ev); evento(ev.bom ? 'bom' : 'ruim', ev.nome, ev.rotulo + ': ' + ev.total, ev.res || (ev.bom ? tr('sucesso', 'success') : tr('falha', 'failure'))); espera = 1700; }
+      else if (ev.tipo === 'ataque') {
+        if (ev.dado) dado(ev);
+        golpe(ev);
+        evento(ev.bom === true ? 'bom' : ev.bom === false ? 'ruim' : '', '', ev.texto.replace(/ \(chance \d+%\)/, ''), ev.dado ? ev.res : '');
+        if (ev.depois) setTimeout(ev.depois, 430);
+        espera = ev.dado ? 1500 : 1000;
+      }
+    } catch (x) { if (window.console) console.error(x); }
+    if (fila.length > 8) espera = Math.min(espera, 250);                 // muita coisa de uma vez: acelera para não atrasar
+    setTimeout(function () { filaRodando = false; rodarFila(); }, espera);
+  }
+
+  function centro(id) {
+    var p = pecas[id], tab = $('#tabuleiro'); if (!p || $('#arena').hidden) return null;
+    var a = p.getBoundingClientRect(), b = tab.getBoundingClientRect();
+    return { x: a.left - b.left + a.width / 2, y: a.top - b.top + a.height / 2, lado: a.width };
+  }
+  function flutuar(id, texto, classe) {
+    var c = centro(id);
+    if (c) { var f = el('div', 'flutua ' + classe, texto); f.style.left = c.x + 'px'; f.style.top = (c.y - c.lado * 0.3) + 'px'; $('#fx').appendChild(f); setTimeout(function () { f.remove(); }, 1600); }
+  }
+  function pulsar(elem, classe, ms) { if (!elem) return; elem.classList.remove(classe); void elem.offsetWidth; elem.classList.add(classe); setTimeout(function () { elem.classList.remove(classe); }, ms); }
+
+  /** Animação de um ataque: quem bate avança (corpo a corpo) ou dispara (à distância); o alvo treme ou o golpe passa. */
+  function golpe(ev) {
+    var a = centro(ev.de), b = centro(ev.para);
+    if (ev.critico && ev.acertou) clarao('critico');
+    if (!a || !b) return;                                  // sem tabuleiro (ou sem a peça): fica só a linha do evento
+    var dx = b.x - a.x, dy = b.y - a.y, dist = Math.sqrt(dx * dx + dy * dy) / a.lado;
+    var peca = pecas[ev.de];
+    if (dist <= 1.6) {
+      if (peca.animate) peca.animate([{ transform: 'translate(0,0)' }, { transform: 'translate(' + dx * 0.55 + 'px,' + dy * 0.55 + 'px)', offset: 0.45 }, { transform: 'translate(0,0)' }], { duration: 520, easing: 'ease-in-out' });
+      setTimeout(function () { acerto(ev, b); }, 230);
+    } else {
+      var pr = el('div', 'projetil'); pr.style.left = a.x + 'px'; pr.style.top = a.y + 'px'; $('#fx').appendChild(pr);
+      var fim = function () { pr.remove(); acerto(ev, b); };
+      if (pr.animate) pr.animate([{ left: a.x + 'px', top: a.y + 'px' }, { left: b.x + 'px', top: b.y + 'px' }], { duration: 380, easing: 'ease-in' }).onfinish = fim; else setTimeout(fim, 100);
+    }
+  }
+  function acerto(ev, b) {
+    if (ev.acertou) {
+      var imp = el('div', 'impacto'); imp.style.left = b.x + 'px'; imp.style.top = b.y + 'px'; $('#fx').appendChild(imp); setTimeout(function () { imp.remove(); }, 520);
+      pulsar(pecas[ev.para], 'tremor', 520);
+      if (ev.critico) flutuar(ev.para, tr('CRÍTICO!', 'CRITICAL!'), 'critico');
+    } else flutuar(ev.para, tr('errou', 'miss'), 'erro');
+  }
+
+  /** O que mudou de vida entre dois estados: número subindo na peça, tremor ou brilho no cartão. */
+  function mostrarDiferencas(a, b) {
+    var vida = function (e) { var m = {}; e.fichas.forEach(function (f) { m[f.uid] = { pv: f.pv, pj: true }; }); if (e.combate) e.combate.inimigos.forEach(function (i) { m[i.id] = { pv: i.pv }; }); return m; };
+    var va = vida(a), vb = vida(b), ferido = false;
+    Object.keys(vb).forEach(function (id) {
+      if (!va[id]) return;
+      var d = vb[id].pv - va[id].pv;
+      if (!d) return;
+      if (d < 0) { flutuar(id, '−' + (-d), 'dano'); pulsar(cartoes[id], 'pulso-dano', 620); pulsar(pecas[id], 'tremor', 520); if (vb[id].pj) ferido = true; }
+      else { flutuar(id, '+' + d, 'cura'); pulsar(cartoes[id], 'pulso-cura', 720); pulsar(pecas[id], 'brilho', 820); }
+    });
+    if (ferido) clarao('dano');
+  }
+
+  function clarao(tipo) { var c = $('#clarao'); c.className = ''; void c.offsetWidth; c.className = tipo; }
+  function faixa(texto, cor, pequena) {
+    var velha = $('#faixa'); if (velha) velha.remove();
+    var f = el('div', 'titulo', texto); f.id = 'faixa'; f.style.color = cor;
+    if (pequena) f.style.fontSize = 'calc(var(--u) * 3.6)';
+    $('#palco').appendChild(f); setTimeout(function () { f.remove(); }, 2300);
+  }
+  function dado(ev) {
+    var velho = $('#dado'); if (velho) velho.remove();
+    var d = el('div', ev.critico && ev.acertou ? 'critico' : ev.acertou ? 'bom' : 'ruim'); d.id = 'dado';
+    var caixa = el('div', 'd20');
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 100 100');
+    var p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', 'M50 3 L93 27 L93 73 L50 97 L7 73 L7 27 Z'); p.setAttribute('stroke', '#111'); p.setAttribute('stroke-width', '3'); p.setAttribute('stroke-linejoin', 'round');
+    var l = document.createElementNS('http://www.w3.org/2000/svg', 'path'); l.setAttribute('d', 'M50 3 L22 66 L78 66 Z M7 27 L22 66 M93 27 L78 66 M22 66 L50 97 L78 66'); l.setAttribute('stroke', 'rgba(0,0,0,.35)'); l.setAttribute('stroke-width', '2'); l.setAttribute('style', 'fill:none');
+    svg.appendChild(p); svg.appendChild(l); caixa.appendChild(svg); caixa.appendChild(el('span', '', String(ev.nat)));
+    d.appendChild(caixa);
+    d.appendChild(el('div', 'txt', ev.nome + ' · ' + ev.rotulo + ' = ' + ev.total + (ev.res ? ' — ' + ev.res : ev.acertou ? tr(' — sucesso', ' — success') : tr(' — falha', ' — failure'))));
+    $('#palco').appendChild(d); setTimeout(function () { d.remove(); }, 2500);
+  }
+
+  // ── Tela cheia e tela ligada ──
+  $('#telaCheia').addEventListener('click', function () {
+    var d = document.documentElement;
+    if (document.fullscreenElement) document.exitFullscreen(); else if (d.requestFullscreen) d.requestFullscreen().catch(function () {});
+  });
+  function manterLigada() { try { if (navigator.wakeLock && !document.hidden) navigator.wakeLock.request('screen').catch(function () {}); } catch (e) {} }
+  document.addEventListener('visibilitychange', function () { manterLigada(); if (!document.hidden) agendarBusca(); });
+  manterLigada();
+
+  // ── Começo ──
+  textosFixos();
+  var guardada = lembrar();
+  if (guardada) {
+    sessao = guardada;
+    $('#codigo').textContent = sessao.id;
+    conectarWs();
+    pedir('GET', '/api/projecao/' + sessao.id + '/estado').then(function (r) {
+      if (r.st !== 200) { novaSessao(); return; }
+      if (!r.d.pareada) { novaSessao(); return; }          // ainda sem mesa: pede um QR novo (o antigo não foi guardado)
+      receber(r.d);
+    }).catch(novaSessao);
+  } else novaSessao();
+})();
+</script>
+</body>
+</html>

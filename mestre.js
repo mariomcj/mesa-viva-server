@@ -477,7 +477,17 @@ let extraDoContexto = null, medidor = null;
 function definirExtraDoContexto(f) { extraDoContexto = typeof f === "function" ? f : null; }
 function definirMedidor(f) { medidor = typeof f === "function" ? f : null; }
 function medir(tipo, modelo, uso) { if (medidor) { try { medidor({ tipo, modelo, uso }); } catch {} } }
-function blocoExtra(mesa, fichas) { if (!extraDoContexto) return ""; try { return extraDoContexto(mesa, fichas) || ""; } catch (e) { console.error("[contexto]", e.message); return ""; } }
+// Outros módulos (votação…) acrescentam blocos curtos ao contexto, sem trocar o do melhorias.js
+const extrasDoContexto = [];
+function acrescentarAoContexto(f) { if (typeof f === "function") extrasDoContexto.push(f); }
+function blocoExtra(mesa, fichas) {
+  let saida = "";
+  for (const f of [extraDoContexto, ...extrasDoContexto]) {
+    if (!f) continue;
+    try { saida += f(mesa, fichas) || ""; } catch (e) { console.error("[contexto]", e.message); }
+  }
+  return saida;
+}
 
 function contexto(mesa, fichas, recentes) {
   const c = campoJson(mesa.combate);
@@ -669,7 +679,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { IDIOMAS, idiomaValido, blocoIdioma, definirExtraDoContexto, definirMedidor,
+module.exports = { IDIOMAS, idiomaValido, blocoIdioma, definirExtraDoContexto, acrescentarAoContexto, definirMedidor,
   REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, blocoNomes, lerJson,
   promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };

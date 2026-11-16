@@ -9,6 +9,7 @@
  */
 "use strict";
 const R = require("./regras");
+const PG = require("./progressao");
 
 // ── Raridade ──
 const RARIDADES = ["comum", "incomum", "raro", "epico", "lendario"];
@@ -247,7 +248,7 @@ function instalar(d) {
     const saque = saqueDaMesa(m || {});
     const partes = [];
     for (const f of vivos) {
-      const ouro = ouroDaVitoria(f, (inimigos || []).length);
+      const ouro = Math.round(ouroDaVitoria(f, (inimigos || []).length) * PG.efeitos(f).ouroMult);   // talento Negociador: +20%
       f.ouro = Math.min(99999, (f.ouro || 0) + ouro);
       salvarFicha(ctx.codigo, f);
       saque[f.uid] = gerarSaque(f);

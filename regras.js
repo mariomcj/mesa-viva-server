@@ -6,6 +6,7 @@
 
 const C = require("./catalogo");
 const MP = require("./mapa");
+const PG = require("./progressao");
 
 const ATRIBUTOS = ["for", "des", "con", "int", "sab", "car"];
 const NOME_ATRIBUTO = { for: "Força", des: "Destreza", con: "Constituição", int: "Inteligência", sab: "Sabedoria", car: "Carisma" };
@@ -343,6 +344,13 @@ function normalizarFicha(dados, uid, conceito) {
   // Condições com duração (envenenado, protegido...): só aparecem na ficha enquanto valem
   const condicoes = statusValidos(v.status);
   if (condicoes.length && f.pv > 0) f.status = condicoes;
+  // Talentos, subclasse e redistribuições: só entram na ficha quando existem (ficha antiga sai igual)
+  const prog = PG.daFicha(v, classe, lvl);
+  if (prog.talentos.length) f.talentos = prog.talentos;
+  if (prog.subclasse) f.subclasse = prog.subclasse;
+  if (prog.redistribuicoes) f.redistribuicoes = prog.redistribuicoes;
+  if (prog.escolhas) f.escolhas = prog.escolhas;
+  if (prog.bonus) f.bonus = prog.bonus;
   f.pendencias = pendenciasDe(v.pendencias, f);
   return f;
 }
@@ -412,7 +420,7 @@ function iniciarCombate(jogadores, inimigosDados) {
   const ordem = [];
   for (const f of Object.values(jogadores)) {
     if (!f.pv || f.pv <= 0) continue;
-    ordem.push({ id: f.uid, tipo: "pj", nome: f.nome, ini: d(20) + mod(f.atributos.des) });
+    ordem.push({ id: f.uid, tipo: "pj", nome: f.nome, ini: d(20) + mod(f.atributos.des) + PG.efeitos(f).iniciativa });
   }
   const inimigos = inimigosDados.map((d, i) => criarInimigo(`ini_${i}`, d));
   for (const i of inimigos) ordem.push({ id: i.id, tipo: "ini", nome: i.nome, ini: d(20) + i.des });
@@ -478,7 +486,8 @@ function resolverRolagem(rol, natural, combate, nomeAtacante, opcoes = {}) {
   let dano, descricao, ajuste = null;
   if (rol.tipo === "ataque") {
     if (sucesso) {
-      const critico = natural === 20;
+      // crítico no 20; talentos e subclasse podem baixar para 19 (rol.critMin), desde que o golpe acerte
+      const critico = natural === 20 || natural >= (Number(rol.critMin) || 20);
       const r = rolar(rol.dano || "1d4", critico);
       dano = r.total;
       const alvo = combate?.inimigos?.find((i) => i.id === rol.alvo || i.nome === rol.alvo);
@@ -508,7 +517,9 @@ function resolverRolagem(rol, natural, combate, nomeAtacante, opcoes = {}) {
  * sem alvo, o inimigo só se move. Sem tática (combate antigo), ataca um personagem de pé ao acaso.
  * Cada item de `ocorrido`: { linha, log: { texto, ok, tipo? } } (ok null = movimento, neutro).
  * Opcionais: `opcoes.inicioDoTurno(quem, "pj"|"ini")` => { linhas, pula } (condições com duração),
- * `opcoes.foge(inimigo, c, alvosVivos)` => o inimigo foge em vez de agir, `opcoes.bonusCA(alvo)` => CA extra do alvo.
+ * `opcoes.foge(inimigo, c, alvosVivos)` => o inimigo foge em vez de agir, `opcoes.bonusCA(alvo)` => CA extra do alvo,
+ * `opcoes.bonusFixoCA(alvo)` => CA de talentos e subclasse, `opcoes.aoAcertar(inimigo, alvo, dano, c)` => linhas extras
+ * depois de um golpe que acertou (pode mudar a vida dos dois).
  */
 function passarVez(c, fichas, quemAgiu, opcoes = {}) {
   const ocorrido = [];
@@ -566,7 +577,8 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
       alvo = alvos[Math.floor(Math.random() * alvos.length)];
     }
     const protecao = opcoes.bonusCA ? Number(opcoes.bonusCA(alvo)) || 0 : 0;
-    const ca = alvo.ca + bonusCA + protecao;
+    const fixo = opcoes.bonusFixoCA ? Number(opcoes.bonusFixoCA(alvo)) || 0 : 0;
+    const ca = alvo.ca + bonusCA + protecao + fixo;
     const nat = d(20);
     const total = nat + inimigo.ataque;
     const acertou = nat === 20 || (nat !== 1 && total >= ca);
@@ -575,8 +587,10 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
       dano = rolar(inimigo.dano, nat === 20).total;
       alvo.pv = Math.max(0, alvo.pv - dano);
     }
-    const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${ca}${bonusCA ? ` (cobertura +${bonusCA})` : ""}${protecao ? ` (protegido +${protecao})` : ""} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
+    const extras = acertou && opcoes.aoAcertar ? opcoes.aoAcertar(inimigo, alvo, dano, c) || [] : [];
+    const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${ca}${bonusCA ? ` (cobertura +${bonusCA})` : ""}${protecao ? ` (protegido +${protecao})` : ""}${fixo ? ` (talentos +${fixo})` : ""} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
     ocorrido.push({ linha, log: { texto: linha, ok: acertou } });
+    anotar(extras);
     avancar();
   }
   c.inicioVez = Date.now();

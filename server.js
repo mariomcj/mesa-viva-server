@@ -20,6 +20,8 @@ const M = require("./mestre");
 const AV = require("./aventuras");
 const T = require("./temas");
 const MP = require("./mapa");
+const PG = require("./progressao");
+const MG = require("./minigames");
 
 // ── Config ──
 // .env primeiro, para as variáveis valerem abaixo
@@ -292,7 +294,7 @@ function carregar(codigo, uid) {
 }
 
 const COLUNAS_MESA = new Set(["fase", "tom", "vetos", "qualidade", "cdVisivel", "cena", "resumo", "combate", "rolagem", "processando", "inicio", "ultimaNarrativa", "fundo",
-  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura", "saque", "bestiario", "epilogo", "mundo"]);
+  "tema", "duracao", "desejos", "arco", "arcoAjustes", "ato", "arcoConcluido", "atoInicio", "dia", "diaNarr", "elementos", "idioma", "aventura", "saque", "bestiario", "epilogo", "mundo", "votacaoGrupo"]);
 function salvarMesa(codigo, campos) {
   // A imagem do mapa chega em segundo plano: quem grava um combate lido antes dela não pode apagá-la
   const c = campos.combate;
@@ -348,6 +350,8 @@ function destravar(codigo) { salvarMesa(codigo, { processando: null }); NV?.fech
 let NV = null;
 // Melhorias só de servidor (memória, clima, elementos, condições, fundos, uso): ligadas mais abaixo
 let MH = null;
+// Votação do grupo e projeção da mesa (TV): ligadas mais abaixo
+let VT = null, PJ = null;
 /** XP por ação narrada. Padrão 5; XP_POR_ACAO no .env deixa a subida de nível mais lenta (recomendado: 2). */
 function xpPorAcao() {
   const v = process.env.XP_POR_ACAO;
@@ -630,6 +634,7 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
   })();
   NV.aoReiniciar(codigo);
   MH.aoReiniciar(codigo);
+  VT.aoReiniciar(codigo);
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
@@ -762,6 +767,7 @@ app.post("/api/salvar-ficha", authMw, (req, res) => {
     const criacao = ultimaCriacao(req.uid);
     nova = R.normalizarFicha({ ...recebida, xp: antiga?.xp ?? 0, nivel: antiga?.nivel ?? 1, pendencias: antiga?.pendencias ?? null,
       ouro: antiga?.ouro, descanso: antiga?.descanso ?? 0, status: undefined,
+      talentos: antiga?.talentos, subclasse: antiga?.subclasse, redistribuicoes: antiga?.redistribuicoes,
       pv: undefined, mana: undefined, anotacoes: anotacoesRecebidas(recebida, antiga),
       magias: magiasPermitidas(recebida, antiga, criacao), inventario: inventarioPermitido(recebida, antiga, criacao) }, req.uid);
   }
@@ -893,6 +899,7 @@ app.delete("/api/admin/mesas/:codigo", adminMw, (req, res) => {
   db.transaction(() => {
     for (const t of ["log", "fichas", "membros", "reacoes", "sessoes", "mesas"]) db.prepare(`DELETE FROM ${t} WHERE codigo = ?`).run(cod);
   })();
+  try { PJ?.aoApagarMesa(cod); } catch (e) {}
   res.json({ ok: true });
 });
 
@@ -1006,7 +1013,8 @@ app.post("/api/rolar", authMw, limiteIA, async (req, res) => {
   try {
     const natural = valor ?? R.d(20);
     const combate = ctx.mesa.combate;
-    const r2 = R.resolverRolagem(rol, natural, combate, f.nome, MH.opcoesDeRolagem(ctx));
+    // elementos (melhorias) + talentos e subclasse (dano extra, caçador de gigantes, sede de sangue)
+    const r2 = R.resolverRolagem(rol, natural, combate, f.nome, PG.opcoesDeRolagem(f, MH.opcoesDeRolagem(ctx), (ficha) => salvarFicha(codigo, ficha)));
     registrar(codigo, {
       tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${r2.natural}${R.sinal(rol.bonus)} = ${r2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}`,
       res: r2.selo || (r2.dano !== undefined ? `acertou, ${r2.dano} de dano` : r2.sucesso ? "sucesso" : "falha"),
@@ -1149,6 +1157,7 @@ app.post("/api/acao-combate", authMw, limiteIA, async (req, res) => {
       registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: magia ? `Conjura ${noTema(tema, magia.nome)} em ${alvo.nome}.` : `Ataca ${alvo.nome} com ${noTema(tema, arma.nome)}.` });
       if (p.aviso) registrar(codigo, { tipo: "sys", texto: p.aviso });
       if (magia) f.mana -= magia.custo;
+      PG.aoMontarRolagem(f, p.rolagem, { magia: !!magia });          // talentos e subclasse
       MH.aoMontarRolagem(ctx, p.rolagem);
       salvarMesa(codigo, { combate: c, rolagem: p.rolagem });
       ganharXp(ctx, f, xpPorAcao());
@@ -1360,6 +1369,8 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   const av = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
   NV.mesaPublica(mesa, req.uid, M.idiomaValido(req.get("x-idioma")));
   MH.mesaPublica(mesa);
+  try { VT.mesaPublica(mesa, codigo); } catch (e) { delete mesa.votacaoGrupo; }
+  try { PJ.mesaPublica(mesa, codigo); } catch (e) {}
   mesa.aventura = av ? av.id : "";
   mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";
   res.json(mesa);
@@ -1504,8 +1515,13 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
         if (at.custo) { minha.mana -= at.custo; salvarFicha(codigo, minha); }
       }
     } else rolagem = R.montarRolagem(minha, r.teste, combate, String(agora()));
-    if (rolagem) campos.rolagem = MH.aoMontarRolagem(ctx, rolagem);          // clima, elemento e chance de sucesso
+    if (rolagem) {
+      PG.aoMontarRolagem(minha, rolagem, { magia: rolagem.tipo === "ataque" && !!R.magiaDaFicha(minha, T.nomeMecanico(ctx.mesa.tema, r.teste.ataque)) });   // talentos e subclasse
+      MG.aoMontarRolagem(rolagem);                                           // minigame opcional antes do dado
+      campos.rolagem = MH.aoMontarRolagem(ctx, rolagem);                     // clima, elemento e chance de sucesso
+    }
   }
+  try { VT.aoNarrar(ctx, r, { combate, rolagem }); } catch (e) { console.error("[votacao]", e.message); }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
   ctx.mesa.combate = combate;
   if (campos.cena) ctx.mesa.cena = campos.cena;
@@ -1773,7 +1789,7 @@ async function conjurarSemRolagem(ctx, f, m, alvoPedido) {
   const nomeM = noTema(ctx.mesa.tema, m.nome);
   registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Conjura ${nomeM}${sobre}.` });
   if (m.tipo === "cura") {
-    cura = R.rolar(m.efeito || "1d4").total;
+    cura = R.rolar(m.efeito || "1d4").total + PG.efeitos(f).cura;          // subclasse Curandeiro: +2
     alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
     registrar(codigo, { tipo: "roll", texto: `${f.nome} conjura ${nomeM}: ${alvo.nome} recupera ${cura} PV`, ok: true });
   }
@@ -1951,7 +1967,7 @@ function aplicarArco(codigo, r) {
 
 /** XP e subida de nível (100 × nível, até o 20): PV e mana máximos sobem sozinhos; pontos, magias e técnicas viram pendências. */
 function ganharXp(ctx, f, quanto) {
-  f.xp = (f.xp || 0) + quanto;
+  f.xp = (f.xp || 0) + Math.round(quanto * PG.efeitos(f).xpMult);          // talento Aprendizado Rápido: +25%
   while ((f.nivel || 1) < R.NIVEL_MAXIMO && f.xp >= (f.nivel || 1) * 100) {
     f.xp -= (f.nivel || 1) * 100;
     f.nivel = (f.nivel || 1) + 1;
@@ -1978,7 +1994,8 @@ async function avancarCombate(ctx, quemAgiu) {
     const vezAntes = chaveVez();
     if (combate.mapa) MP.completarPosicoes(combate);
     const turno = MH.opcoesDeTurno(ctx);          // condições com duração, fuga de inimigos feridos e CA de quem está protegido
-    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu, { ...(combate.mapa ? { tatica: MP.criarTatica(combate) } : {}), ...turno });
+    const ocorrido = R.passarVez(combate, ctx.fichas, quemAgiu, { ...(combate.mapa ? { tatica: MP.criarTatica(combate) } : {}), ...turno,
+      ...PG.opcoesDeTurno((expr) => R.rolar(expr).total) });          // CA de talentos, Último Suspiro e Pele de Espinhos
     if (chaveVez() !== vezAntes || (combate.mapa && !combate.deslocamento)) zerarDeslocamento(combate, ctx.fichas); // a vez mudou: deslocamento novo
     if (chaveVez() !== vezAntes) combate.turno = null;                                                               // e turno novo
     turnoDe(combate);
@@ -2029,6 +2046,17 @@ MH = require("./melhorias").instalar({ app, db, adminMw, salvarMesa, salvarFicha
 // ── Painel de administração: métricas para os gráficos (só leitura) ──
 require("./painel").instalar({ app, db, adminMw, erro, json, T });
 
+// ── Progressão (talentos, subclasses, redistribuir), votação do grupo, minigames e projeção da mesa ──
+const idiomaDe = (req) => M.idiomaValido(req.get("x-idioma"));
+PG.instalar({ app, db, authMw, mesaDoMembro, salvarFicha, registrar, broadcast, erro, json, R, idiomaDe });
+VT = require("./votacao").instalar({ app, db, authMw, mesaDoMembro, salvarMesa, registrar, broadcast, erro, json, texto, agora, M, janelaOnlineMs: ONLINE_WINDOW_MS });
+MG.instalar({ app, db, authMw, mesaDoMembro, salvarMesa, registrar, broadcast, erro, json,
+  // a chance mostrada no rótulo (CHANCE_VISIVEL=1) acompanha o bônus do minigame
+  aoAjustar: (rol) => { rol.rotulo = String(rol.rotulo || "").replace(/\(chance \d+%\)/, `(chance ${require("./melhorias").chanceDeSucesso(rol.bonus, rol.cd)}%)`); } });
+PJ = require("./projecao").instalar({ app, db, authMw, mesaDoMembro, erro, json, texto, agora, broadcast, R, T, clientes: () => wss.clients,
+  votacao: (codigo) => VT.ler(codigo), mundo: (mesa) => { const m = { mundo: mesa.mundo }; MH.mesaPublica(m); return m; },
+  janelaOnlineMs: ONLINE_WINDOW_MS, travaMs: TRAVA_MS });
+
 // ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);
 server.timeout = 120_000; // 2 min — Cloudflare tunnel proxyReadTimeout
@@ -2040,6 +2068,7 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data);
+      if (PJ.aoConectar(ws, msg)) return;                 // tela de projeção: só leitura, com a chave dela
       const codigo = codigoValido(msg.mesa);
       const userId = codigo && usuarioDoToken({ headers: { authorization: `Bearer ${String(msg.token || "")}` } });
       if (codigo && userId && ehMembro(codigo, userId)) { ws.mesa = codigo; ws.uid = userId; ws.send(JSON.stringify({ evento: "pronto", dados: {} })); }

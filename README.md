@@ -39,6 +39,8 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 | `REAPROVEITAR_FUNDOS` | não | `0` gera sempre uma imagem nova; `exato` só reaproveita o fundo da mesma cena (padrão: mesma cena e mesmo tipo de lugar) |
 | `IMAGENS_DE_MAPA` | não | `0` desliga a imagem do mapa de batalha gerada a cada combate novo (economiza créditos; o app desenha um tabuleiro no lugar) |
 | `LIMITE_IA_MAX` | não | Pedidos à IA por conta a cada 10 min (padrão 40) |
+| `MINIGAMES` | não | `0` desliga os desafios opcionais antes das rolagens de Prestidigitação e Investigação |
+| `VOTACAO_DO_MESTRE` | não | `0` impede o Mestre de abrir votações (os jogadores continuam podendo) |
 
 ## Rodar
 
@@ -139,6 +141,18 @@ Tudo aqui é acréscimo: sem usar, o jogo se comporta como antes.
 - **Pontos de salvamento**: um automático a cada ato, mais `POST /api/salvamento/criar`. `POST /api/salvamento/restaurar` (só o dono) volta a mesa e as fichas ao ponto e apaga o diário posterior. Ficam os 5 mais recentes.
 - **Epílogo**: `POST /api/epilogo`, depois do fim da aventura; o Mestre conta o destino de cada personagem (uma chamada à IA, guardada na mesa).
 - Itens novos usam os tipos que já existiam; o único efeito novo é `mana N`.
+
+## Progressão, votação, minigames e projeção (leva do app)
+
+Tudo por acréscimo: quem não usa não vê diferença, e o app antigo segue funcionando (os campos novos só aparecem quando existem).
+
+- **Talentos** (`progressao.js`): um a cada 2 níveis, de uma lista de 9 (`POST /api/talento` com `id`). Efeito de uma linha: +1 na CA, crítico no 19, +25% de XP, +2 de dano em chefes (40 PV ou mais), 1 PV por acerto, ficar com 1 PV uma vez por combate, 1d4 em quem acerta, +2 na iniciativa e +20% de ouro.
+- **Subclasse**: no nível 3, uma entre duas da classe (`POST /api/subclasse`). Nomes neutros para servir em qualquer tema.
+- **Redistribuir atributos**: `POST /api/redistribuir` com os seis atributos; a soma não muda, cada um de 8 a 20. A primeira vez é grátis; depois custa `50 + 25 × nível` de ouro. Só fora de combate.
+- `GET /api/mesa/:codigo/progressao` devolve a lista de talentos e subclasses (no idioma do cabeçalho `x-idioma`), as vagas e o preço. A ficha ganha `talentos`, `subclasse`, `redistribuicoes`, `escolhas` (o que falta escolher) e `bonus` (somas para mostrar).
+- **Votação do grupo** (`votacao.js`): `POST /api/mesa/:codigo/votacao` (`pergunta`, 2 a 4 `opcoes`), `POST /api/mesa/:codigo/votar` (`opcao`) e `POST /api/mesa/:codigo/votacao/encerrar`. Fecha quando todos os jogadores online votaram, em 90 s, ou quando quem abriu (ou o dono da mesa) encerra. O Mestre também pode abrir (campo `"votacao"` na resposta) e lê o resultado no histórico. A mesa pública ganha `votacao` enquanto houver uma aberta.
+- **Minigames** (`minigames.js`): rolagens de Prestidigitação e Investigação saem com `minigame: { tipo, alvo }`. O app joga o desafio e manda `POST /api/minigame` com `acertos`; o servidor soma de −1 a +2 no bônus, uma vez. Quem não joga rola o dado como sempre.
+- **Projeção da mesa** (`projecao.js` e `public/projecao.html`): a TV abre `/projecao` (ou `/tv`), mostra um QR Code e um código de 6 letras; um jogador lê o QR pelo app (`POST /api/projecao/parear` com `codigo` e `id`) e a tela passa a mostrar a mesa em tempo real — cena, narração, personagens, tabuleiro e as animações do combate. A tela só lê: recebe um estado público (`GET /api/projecao/:id/estado`, com a chave que só ela conhece) e os mesmos avisos de WebSocket do app. `POST /api/projecao/encerrar` desliga. Telas sem uso expiram sozinhas (15 min sem parear; 12 h paradas). O QR usa o pacote `qrcode-generator`; sem ele a página mostra só o código.
 
 ## Melhorias só de servidor (`melhorias.js`)
 
