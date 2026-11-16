@@ -1369,7 +1369,7 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   const av = AV.aventuraDoTema(mesa.aventura, tema.id) ? AV.aventuraPorId(mesa.aventura) : null;
   NV.mesaPublica(mesa, req.uid, M.idiomaValido(req.get("x-idioma")));
   MH.mesaPublica(mesa);
-  try { VT.mesaPublica(mesa, codigo); } catch (e) { delete mesa.votacaoGrupo; }
+  try { VT.mesaPublica(mesa, codigo, { uid: req.uid, versao: req.get("x-app-versao") }); } catch (e) { delete mesa.votacaoGrupo; }
   try { PJ.mesaPublica(mesa, codigo); } catch (e) {}
   mesa.aventura = av ? av.id : "";
   mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";

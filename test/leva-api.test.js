@@ -52,8 +52,9 @@ let base, ana, beto, caio;
 const abertos = [];
 after(() => { for (const w of abertos) { try { w.terminate(); } catch {} } server.close(); server.closeAllConnections?.(); db.close(); fs.rmSync(pasta, { recursive: true, force: true }); });
 
-async function api(metodo, rota, { corpo, token, cabecalhos } = {}) {
-  const headers = { "Content-Type": "application/json", ...(cabecalhos || {}) };
+// Por padrão os pedidos saem como os do app novo (que sabe votar); `antigo: true` imita o app que está nos celulares hoje.
+async function api(metodo, rota, { corpo, token, cabecalhos, antigo } = {}) {
+  const headers = { "Content-Type": "application/json", ...(antigo ? {} : { "x-app-versao": "2" }), ...(cabecalhos || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   const r = await fetch(base + rota, { method: metodo, headers, body: corpo ? JSON.stringify(corpo) : undefined });
   const txt = await r.text();
@@ -195,6 +196,7 @@ test("votação: abre, todos votam, o resultado vai para o diário e para o Mest
   const codigo = await mesaEmJogo([ana, beto, caio]);
   const o = (j) => ({ token: j.token });
   assert.equal((await post(`/api/mesa/${codigo}/votacao`, { pergunta: "Vamos?", opcoes: ["Sim"] }, o(ana))).st, 400);
+  for (const j of [ana, beto, caio]) await mesaDe(codigo, j);                    // os três estão com o app novo aberto na mesa
   let r = await post(`/api/mesa/${codigo}/votacao`, { pergunta: "Aceitamos o acordo do barão?", opcoes: ["Aceitar", "Recusar"] }, o(ana));
   assert.equal(r.st, 200, JSON.stringify(r.d));
   assert.equal((await post(`/api/mesa/${codigo}/votacao`, { pergunta: "Outra?", opcoes: ["a", "b"] }, o(beto))).st, 409);
@@ -223,6 +225,14 @@ test("votação: abre, todos votam, o resultado vai para o diário e para o Mest
 
 test("votação: o Mestre abre, quem abriu ou o dono encerra, e o prazo fecha sozinho", async () => {
   const codigo = await mesaEmJogo([ana, beto]);
+  // Beto ainda está com o app antigo: o Mestre não abre votação (ninguém ficaria esperando 90 s por um voto que não vem)
+  await mesaDe(codigo, ana);
+  await get(`/api/mesa/${codigo}`, { token: beto.token, antigo: true });
+  await agir(codigo, beto, "chego na escada");
+  assert.equal((await mesaDe(codigo, ana)).votacao, undefined);
+  assert.equal(registro.ultimoPrompt.includes("VOTAÇÃO DO GRUPO"), false);
+  // Beto atualiza o app: agora o Mestre pode
+  await mesaDe(codigo, beto);
   await agir(codigo, beto, "chego na escada");
   let m = await mesaDe(codigo, ana);
   assert.deepEqual([m.votacao.pergunta, m.votacao.origem, m.votacao.opcoes], ["Descer mais um andar?", "mestre", ["Descer", "Voltar"]]);
@@ -370,9 +380,20 @@ test("projeção: telas esquecidas expiram e a página da TV existe", async () =
   assert.equal(/(src|href)\s*=\s*["']https?:\/\//i.test(html), false);
 });
 
+test("votação aberta por jogador em mesa mista: fecha quando votam todos os que têm o app novo", async () => {
+  const codigo = await mesaEmJogo([ana, beto, caio]);
+  await mesaDe(codigo, ana);
+  await mesaDe(codigo, beto);
+  await get(`/api/mesa/${codigo}`, { token: caio.token, antigo: true });         // Caio não tem a tela de votar
+  await post(`/api/mesa/${codigo}/votacao`, { pergunta: "Atravessamos a ponte?", opcoes: ["Sim", "Não"] }, { token: ana.token });
+  assert.equal((await post(`/api/mesa/${codigo}/votar`, { opcao: 0 }, { token: ana.token })).d.encerrada, false);
+  const r = await post(`/api/mesa/${codigo}/votar`, { opcao: 0 }, { token: beto.token });
+  assert.deepEqual([r.d.encerrada, r.d.vencedora], [true, 0]);                   // não fica esperando o Caio
+});
+
 test("app antigo: a mesa e a ficha de quem não usa nada disso não ganham campos novos", async () => {
   const codigo = await mesaEmJogo([ana]);
-  const m = await mesaDe(codigo, ana);
+  const m = (await get(`/api/mesa/${codigo}`, { token: ana.token, antigo: true })).d;
   for (const k of ["votacao", "votacaoGrupo", "projecoes"]) assert.equal(k in m, false, k);
   const f = (await get(`/api/mesa/${codigo}/fichas`, { token: ana.token })).d[ana.id];
   for (const k of ["talentos", "subclasse", "redistribuicoes", "escolhas", "bonus"]) assert.equal(k in f, false, k);

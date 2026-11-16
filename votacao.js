@@ -6,6 +6,10 @@
  * O resultado vira uma linha "sys" no diário — o Mestre lê essa linha no histórico e segue a escolha do grupo.
  * Nunca usa tipo "narr" (o app leria em voz alta).
  *
+ * App antigo não tem a tela de votar. O servidor sabe quem tem o app novo pelo cabeçalho `x-app-versao`
+ * (2 ou mais) que o app manda ao consultar a mesa: o Mestre só abre votação quando todos os jogadores
+ * online conseguem votar, e uma votação fecha assim que todos os que conseguem votar já votaram.
+ *
  * Guarda em `mesas.votacaoGrupo` (o nome `votacao` já existe em bancos antigos, com outro formato).
  * Desligar a votação aberta pelo Mestre: VOTACAO_DO_MESTRE=0 no .env.
  */
@@ -14,6 +18,8 @@
 const DURACAO_MS = 90_000;
 const MAX_PERGUNTA = 120;
 const MAX_OPCAO = 60;
+const VERSAO_COM_VOTACAO = 2;
+const VALIDADE_DA_VERSAO_MS = 5 * 60_000;      // depois disso sem consultar a mesa, o app deixa de contar como novo
 
 /** Pergunta e opções conferidas: { pergunta, opcoes } ou { erro }. 2 a 4 opções diferentes. */
 function conferirPedido(bruto, texto) {
@@ -58,6 +64,16 @@ function instalar(d) {
   const janela = d.janelaOnlineMs || 90_000;
   try { db.exec("ALTER TABLE mesas ADD COLUMN votacaoGrupo TEXT"); } catch (e) {}
   const temporizadores = new Map();   // codigo -> timer do fim do prazo
+  const capazes = new Map();          // uid -> última vez em que consultou a mesa com um app que sabe votar
+
+  /** Anota que este jogador está com um app que sabe votar (chamado a cada consulta da mesa). */
+  function anotarApp(uid, versao) {
+    if (!uid) return;
+    if (Number(versao) >= VERSAO_COM_VOTACAO) capazes.set(uid, agora());
+    else capazes.delete(uid);
+  }
+  const sabeVotar = (uid) => agora() - (capazes.get(uid) || 0) < VALIDADE_DA_VERSAO_MS;
+  setInterval(() => { for (const [u, t] of capazes) if (agora() - t >= VALIDADE_DA_VERSAO_MS) capazes.delete(u); }, 10 * 60_000).unref();
 
   const ler = (codigo) => json(db.prepare("SELECT votacaoGrupo FROM mesas WHERE codigo = ?").get(codigo)?.votacaoGrupo);
   const idNovo = () => Math.random().toString(36).slice(2, 10);
@@ -67,7 +83,13 @@ function instalar(d) {
     const comFicha = new Set(db.prepare("SELECT uid FROM fichas WHERE codigo = ?").all(codigo).map((r) => r.uid));
     const t = agora();
     const membros = db.prepare("SELECT uid, nome, ultimaAtividade FROM membros WHERE codigo = ?").all(codigo).filter((m) => comFicha.has(m.uid));
-    return { todos: membros.map((m) => m.uid), online: membros.filter((m) => m.ultimaAtividade && t - m.ultimaAtividade < janela).map((m) => m.uid) };
+    const online = membros.filter((m) => m.ultimaAtividade && t - m.ultimaAtividade < janela).map((m) => m.uid);
+    return { todos: membros.map((m) => m.uid), online, votantes: online.filter(sabeVotar) };
+  }
+  /** Todos os jogadores online desta mesa estão com um app que sabe votar (e há pelo menos um). */
+  function todosSabemVotar(codigo) {
+    const e = eleitores(codigo);
+    return e.online.length > 0 && e.votantes.length === e.online.length;
   }
 
   function agendar(codigo, v) {
@@ -134,8 +156,9 @@ function instalar(d) {
     const e = eleitores(codigo);
     if (!e.todos.includes(req.uid)) return erro(res, 403, "Só quem tem personagem na mesa vota.");
     v.votos = { ...(v.votos || {}), [req.uid]: i };
-    // todos os que estão jogando agora já votaram: não precisa esperar o relógio
-    const pendentes = e.online.filter((u) => v.votos[u] === undefined);
+    anotarApp(req.uid, VERSAO_COM_VOTACAO);          // quem votou, sabe votar
+    // todos os que estão jogando agora e conseguem votar já votaram: não precisa esperar o relógio
+    const pendentes = eleitores(codigo).votantes.filter((u) => v.votos[u] === undefined);
     if (!pendentes.length) { const r = fechar(codigo, v); return res.json({ ok: true, encerrada: true, vencedora: r.vencedora }); }
     salvarMesa(codigo, { votacaoGrupo: v });
     broadcast(codigo, "votacao", { id: v.id });
@@ -153,9 +176,9 @@ function instalar(d) {
   });
 
   // ── Mestre ──
-  const doMestre = () => process.env.VOTACAO_DO_MESTRE !== "0";
+  const doMestre = (codigo) => process.env.VOTACAO_DO_MESTRE !== "0" && !!codigo && todosSabemVotar(codigo);
   M.acrescentarAoContexto?.((mesa) => {
-    if (!doMestre() || mesa?.fase === "lobby") return "";
+    if (mesa?.fase === "lobby" || !doMestre(mesa?.codigo)) return "";
     const aberta = json(mesa?.votacaoGrupo);
     if (aberta) return `\nVOTAÇÃO DO GRUPO: há uma votação aberta ("${aberta.pergunta}"). Não abra outra e não decida por eles.`;
     return `\nVOTAÇÃO DO GRUPO: quando o grupo inteiro precisa escolher junto entre caminhos de risco (descer mais fundo, aceitar um acordo, se dividir), você pode acrescentar ao JSON o campo "votacao": {"pergunta": "até 100 caracteres", "opcoes": ["2 a 4 opções curtas"]}. Use raramente, nunca em combate nem junto com "teste". O resultado aparece no histórico como "(Votação encerrada: ...)": siga a escolha do grupo.`;
@@ -163,7 +186,7 @@ function instalar(d) {
 
   /** Resposta do Mestre com "votacao": abre, se não houver combate, rolagem pendente nem outra votação. */
   function aoNarrar(ctx, r, { combate = null, rolagem = null } = {}) {
-    if (!doMestre() || !r?.votacao || typeof r.votacao !== "object" || combate || rolagem || r.combate?.inimigos?.length) return null;
+    if (!r?.votacao || typeof r.votacao !== "object" || combate || rolagem || r.combate?.inimigos?.length || !doMestre(ctx.codigo)) return null;
     if (ler(ctx.codigo)) return null;
     const p = conferirPedido(r.votacao, texto);
     if (p.erro) return null;
@@ -171,7 +194,8 @@ function instalar(d) {
   }
 
   /** Troca a coluna guardada pelo formato público (ou tira o campo, quando não há votação). */
-  function mesaPublica(mesa, codigo) {
+  function mesaPublica(mesa, codigo, quem) {
+    if (quem) anotarApp(quem.uid, quem.versao);
     let v = json(mesa.votacaoGrupo);
     delete mesa.votacaoGrupo;
     if (v && agora() >= (v.ate || 0)) { fechar(codigo, v); v = null; }
@@ -180,7 +204,7 @@ function instalar(d) {
 
   const aoReiniciar = (codigo) => { clearTimeout(temporizadores.get(codigo)); temporizadores.delete(codigo); salvarMesa(codigo, { votacaoGrupo: null }); };
 
-  return { aoNarrar, mesaPublica, aoReiniciar, ler: (codigo) => publica(ler(codigo), agora()) };
+  return { aoNarrar, mesaPublica, aoReiniciar, anotarApp, todosSabemVotar, ler: (codigo) => publica(ler(codigo), agora()) };
 }
 
 module.exports = { instalar, conferirPedido, apurar, publica, DURACAO_MS };
