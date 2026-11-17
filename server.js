@@ -2095,6 +2095,8 @@ function narrarMesaParada(codigo, uid) {
   };
   return new Promise((ok) => CR.contextoMw(req, null, () => ok(executar())));
 }
+// ── Sugestões dos jogadores (Ajustes → Sobre → Enviar sugestão) e a aba Sugestões do painel ──
+require("./sugestoes").instalar({ app, db, authMw, adminMw, erro, agora });
 const RTM = require("./ritmo");
 RT = RTM.instalar({ app, db, adminMw, erro, json, agora, M, travaMs: TRAVA_MS, narrarParado: narrarMesaParada,
   temporizador: process.env.RITMO_EVENTOS !== "0",

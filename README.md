@@ -180,6 +180,11 @@ Tudo por acréscimo: quem não usa não vê diferença, e o app antigo segue fun
 - **Evento de mesa parada** (chave no painel, aba **Mesas**; vem ligado, com 4 minutos): fora de combate, sem rolagem nem votação pendente, com alguém online, ninguém digitando e o Mestre tendo falado por último, se ninguém age por N minutos o Mestre narra algo que acontece na cena. É no máximo um por cena e nunca depois de 1 hora sem nada na mesa. O evento não pede teste, não começa combate, não dá item e não vira o ato. A chamada à IA vale como as outras: o líder paga (com a cobrança ligada) e, sem créditos, o evento não acontece.
 - Rotas do painel: `GET` e `PUT /api/admin/ritmo` (`eventoAtivo`, `eventoMinutos` de 2 a 30). Tabelas novas: `ritmo_mesas` e `ritmo_config`.
 
+## Sugestões dos jogadores (`sugestoes.js`)
+
+- O app manda um texto curto em **Ajustes → Sobre → Enviar sugestão** (`POST /api/sugestao`, logado: `texto` de 5 a 1500 caracteres e `contato` opcional). Cada conta manda até 5 a cada 24 horas; depois disso, `429`.
+- Guarda a conta, a versão do app (`x-app-versao`) e o idioma. O painel tem a aba **Sugestões** (com o número de não lidas) e marca cada uma como lida ou não lida (`GET /api/admin/sugestoes`, `POST /api/admin/sugestoes/:id/lida`). Tabela nova: `sugestoes`.
+
 ## Melhorias só de servidor (`melhorias.js`)
 
 Valem com o app já instalado: aparecem na narração, no diário e no texto das rolagens. Tudo é acréscimo; as frases que já existiam no diário não mudam (o app reconhece eventos pelo texto) e nenhum aviso novo usa o tipo `narr` (o app leria em voz alta).

@@ -177,6 +177,13 @@ details.dados summary { cursor: pointer; color: var(--tinta-3); font-size: .78re
 details.dados summary:hover { color: var(--tinta); }
 details.dados .rolagem { max-height: 260px; margin-top: .4rem; }
 .vazio { border: 1px dashed var(--borda-forte); border-radius: 8px; padding: 1.4rem 1rem; text-align: center; color: var(--tinta-3); font-size: .88rem; }
+.sugestoes { list-style: none; display: grid; gap: .7rem; }
+.sugestao { border: 1px solid var(--borda); border-radius: 10px; padding: .8rem .9rem; display: grid; gap: .45rem; }
+.sugestao.nova { border-color: var(--borda-forte); }
+.sugestao.lida { opacity: .72; }
+.sugestao-txt { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.sugestao-pe { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; font-size: .8rem; color: var(--tinta-3); }
+.sugestao-pe .btn { margin-left: auto; }
 .barras { list-style: none; display: grid; gap: .5rem; }
 .barras li { display: grid; grid-template-columns: minmax(72px, 34%) minmax(0, 1fr) auto; align-items: center; gap: .6rem; font-size: .85rem; }
 .b-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tinta-2); }
@@ -357,6 +364,8 @@ const APP = {
   editarFicha(cod, uid, d) { return this.req('PUT', '/api/admin/fichas/' + encodeURIComponent(cod) + '/' + encodeURIComponent(uid), d); },
   excluirFicha(cod, uid) { return this.req('DELETE', '/api/admin/fichas/' + encodeURIComponent(cod) + '/' + encodeURIComponent(uid)); },
   listarUsuarios() { return this.req('GET', '/api/admin/usuarios'); },
+  getSugestoes() { return this.req('GET', '/api/admin/sugestoes'); },
+  marcarSugestao(id, lida) { return this.req('POST', '/api/admin/sugestoes/' + encodeURIComponent(id) + '/lida', { lida }); },
   getEstatisticas() { return this.req('GET', '/api/admin/estatisticas'); },
   getUso(dias) { return this.req('GET', '/api/admin/uso?dias=' + dias); },
   getMundo(cod) { return this.req('GET', '/api/admin/mesas/' + encodeURIComponent(cod) + '/mundo'); },
@@ -627,7 +636,7 @@ function agruparDias(serie, campos) {
 
 /* ═══════════ Peças de página ═══════════ */
 const ICONE = '<svg class="marca-icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 7.5 16.5 15h-9z" fill="currentColor" fill-opacity=".85"/></svg>';
-const ABAS = [['geral', 'Visão geral'], ['mesas', 'Mesas'], ['usuarios', 'Usuários'], ['uso', 'Uso da IA'], ['creditos', 'Créditos']];
+const ABAS = [['geral', 'Visão geral'], ['mesas', 'Mesas'], ['usuarios', 'Usuários'], ['uso', 'Uso da IA'], ['creditos', 'Créditos'], ['sugestoes', 'Sugestões']];
 const PERIODOS = [7, 30, 90];
 function htmlCarregando() {
   return '<div class="carregando" role="status"><span class="so-leitor">Carregando…</span><div class="osso"></div><div class="osso alto"></div></div>';
@@ -692,10 +701,17 @@ function renderApp() {
     '<header class="topo"><div class="topo-in"><div class="marca">' + ICONE + '<h1>Mesa Viva <small>Administração</small></h1></div>' +
     '<div class="conta"><span title="Conta conectada">' + esc(APP._user) + '</span><button type="button" class="btn btn-p" data-acao="sair">Sair</button></div></div>' +
     '<nav class="abas" aria-label="Seções do painel"><div class="abas-in">' + ABAS.map((a) =>
-      '<button type="button" class="aba" data-acao="aba" data-aba="' + a[0] + '">' + a[1] + (a[0] === 'mesas' ? '<span class="conta-n" id="n-mesas" hidden></span>' : '') + '</button>').join('') +
+      '<button type="button" class="aba" data-acao="aba" data-aba="' + a[0] + '">' + a[1] + (a[0] === 'mesas' ? '<span class="conta-n" id="n-mesas" hidden></span>' : a[0] === 'sugestoes' ? '<span class="conta-n" id="n-sugestoes" hidden></span>' : '') + '</button>').join('') +
     '</div></nav></header><main id="conteudo" class="pagina" tabindex="-1"></main>';
   renderAba();
   if (!APP._mesas) APP.listarMesas().then((d) => { APP._mesas = d.mesas || []; marcarContagem(); }).catch(() => {});
+  APP.getSugestoes().then(marcarSugestoes).catch(() => {});   // servidor sem sugestões: a aba mostra o erro só se for aberta
+}
+/** Contador de sugestões não lidas na aba. */
+function marcarSugestoes(d) {
+  const e = $('#n-sugestoes'); if (!e) return;
+  const n = num(d && d.naoLidas);
+  e.hidden = !n; e.textContent = fInt(n); e.setAttribute('aria-label', n + (n === 1 ? ' sugestão não lida' : ' sugestões não lidas'));
 }
 function marcarContagem() {
   const e = $('#n-mesas'); if (!e || !APP._mesas) return;
@@ -730,8 +746,8 @@ function renderAba(manter) {
     // a lista foi refeita e o botão que tinha o foco sumiu (mesa excluída, por exemplo): o foco volta para o conteúdo, e não para o topo da página
     if (!MODAIS.length && document.activeElement === document.body) main.focus({ preventScroll: true });
   };
-  const telas = { geral: telaGeral, mesas: telaMesas, usuarios: telaUsuarios, uso: telaUso, creditos: telaCreditos };
-  const nomes = { geral: 'a visão geral', mesas: 'as mesas', usuarios: 'os usuários', uso: 'o uso da IA', creditos: 'os créditos' };
+  const telas = { geral: telaGeral, mesas: telaMesas, usuarios: telaUsuarios, uso: telaUso, creditos: telaCreditos, sugestoes: telaSugestoes };
+  const nomes = { geral: 'a visão geral', mesas: 'as mesas', usuarios: 'os usuários', uso: 'o uso da IA', creditos: 'os créditos', sugestoes: 'as sugestões' };
   telas[APP._tab](corpo, vivo).catch((e) => { if (vivo() && APP._token) { limparGraficos(); corpo.innerHTML = htmlErro(e, nomes[APP._tab]); } }).then(fim);
 }
 
@@ -983,6 +999,25 @@ async function telaUsuarios(corpo, vivo) {
     us.map((u) => '<tr data-busca="' + esc([u.nome, u.email, u.id].join(' ').toLowerCase()) + '"><td>' + esc(u.nome || '—') + '</td><td>' + esc(u.email || '—') + '</td><td class="nq">' + esc(fDataHora(u.criadoEm)) + '</td>' +
       '<td class="num">' + fInt(u.qtd_mesas_criadas) + '</td><td class="num">' + fInt(u.qtd_mesas_membro) + '</td><td class="nq suave">' + esc(u.id) + '</td></tr>').join('') +
     '<tr class="sem-resultado" hidden><td colspan="6" class="suave">Nenhum usuário combina com a busca.</td></tr></tbody></table></div>';
+}
+
+/* ═══════════ Sugestões ═══════════ */
+async function telaSugestoes(corpo, vivo) {
+  const d = await APP.getSugestoes();
+  if (!vivo()) return;
+  marcarSugestoes(d); marcarAtualizado(Date.now());
+  const ss = d.sugestoes || [];
+  corpo.innerHTML = !ss.length ? '<p class="vazio">Nenhuma sugestão ainda. Os jogadores mandam pelo app, em Ajustes → Sobre → Enviar sugestão.</p>' :
+    '<p class="suave" style="margin-bottom:.8rem">' + fInt(d.total) + (num(d.total) === 1 ? ' sugestão' : ' sugestões') + ' · ' + fInt(d.naoLidas) + ' não ' + (num(d.naoLidas) === 1 ? 'lida' : 'lidas') + (num(d.total) > ss.length ? ' · mostrando as ' + fInt(ss.length) + ' mais novas' : '') + '</p>' +
+    '<ul class="sugestoes">' + ss.map((s) => '<li class="sugestao' + (s.lida ? ' lida' : ' nova') + '">' +
+      '<div class="sugestao-txt">' + esc(s.texto) + '</div>' +
+      '<div class="sugestao-pe">' + (s.lida ? '' : '<span class="selo selo-saguao">nova</span>') +
+        '<span>' + esc(s.usuario || 'Conta removida') + (s.email ? ' · ' + esc(s.email) : '') + '</span>' +
+        (s.contato ? '<span>Contato: ' + esc(s.contato) + '</span>' : '') +
+        '<span title="' + esc(fDataHora(s.t)) + '">' + esc(haQuanto(s.t)) + '</span>' +
+        (s.versao ? '<span>app ' + esc(s.versao) + '</span>' : '') +
+        '<button type="button" class="btn btn-p" data-acao="marcar-sugestao" data-id="' + esc(s.id) + '" data-lida="' + (s.lida ? '0' : '1') + '">' + (s.lida ? 'Marcar como não lida' : 'Marcar como lida') + '</button>' +
+      '</div></li>').join('') + '</ul>';
 }
 
 /* ═══════════ Créditos ═══════════ */
@@ -1429,6 +1464,10 @@ const ACOES = {
     if (!m || (APP._ritmo && APP._ritmo.config && APP._ritmo.config.eventoMinutos === m)) return;
     try { await APP.salvarRitmo({ eventoMinutos: m }); avisar('O evento agora espera ' + m + ' minutos.'); renderAba(true); }
     catch (e) { avisar('Não foi possível mudar os minutos: ' + e.message, true); }
+  },
+  async 'marcar-sugestao'(b) {
+    try { await APP.marcarSugestao(b.dataset.id, b.dataset.lida === '1'); renderAba(true); }
+    catch (e) { avisar('Não foi possível marcar a sugestão: ' + e.message, true); }
   },
   'extrato-conta'(b) { abrirExtrato(b.dataset.conta); },
   'ajustar-conta'(b) {
