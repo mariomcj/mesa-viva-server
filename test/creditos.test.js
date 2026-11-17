@@ -212,3 +212,15 @@ test("configuração do painel fica salva e vale para contas novas", async () =>
   assert.equal((await get("/api/conta/creditos", { token: nova.token })).d.saldo, 0, "boas-vindas zeradas no painel");
   await configurar({ cobrancaAtiva: false, creditosIniciais: 3 });
 });
+
+test("sem conta de serviço da Google Play: as vendas não ligam e a compra responde 503", async () => {
+  const painel = (await get("/api/admin/creditos", { admin: adm })).d;
+  assert.deepEqual([painel.googlePlay.configurado, painel.config.vendasGooglePlay], [false, false]);
+  const r = await configurar({ vendasGooglePlay: true });
+  assert.equal(r.st, 409);
+  assert.match(r.d.error, /GOOGLE_PLAY_SERVICE_ACCOUNT/);
+  assert.equal((await post("/api/conta/creditos/google", { produto: "unico", token: "x" }, { token: rui.token })).st, 400, "produto que não está à venda");
+  const prod = (await get("/api/conta/creditos", { token: rui.token })).d.pacotes[0].produto;
+  assert.equal((await post("/api/conta/creditos/google", { produto: prod, token: "tok" }, { token: rui.token })).st, 503);
+  assert.equal((await get("/api/conta/creditos", { token: rui.token })).d.googlePlay.ativo, false);
+});

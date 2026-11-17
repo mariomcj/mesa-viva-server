@@ -44,6 +44,8 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 | `COBRANCA_ATIVA` | não | `true` liga a cobrança de créditos. Só vale até alguém salvar a configuração no painel (aba Créditos), que passa a mandar |
 | `CREDITOS_INICIAIS` | não | Créditos de boas-vindas por conta nova (padrão 3). Também só até salvar no painel |
 | `CREDITO_USD` | não | Custo de IA, em dólares, que vale 1 crédito (padrão 0,15 ≈ 1 hora de mesa no modo Rápido). Também só até salvar no painel |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT` | não | Conta de serviço do Google Cloud com acesso ao app no Play Console (ver e gerenciar pedidos): caminho do arquivo JSON ou o JSON numa linha. Sem ela, o servidor não confere compras da Google Play e o painel não deixa ligar as vendas |
+| `GOOGLE_PLAY_PACKAGE` | não | Pacote do app na Play Store (padrão `mesa.viva`) |
 
 ## Rodar
 
@@ -164,10 +166,11 @@ Tudo por acréscimo: quem não usa não vê diferença, e o app antigo segue fun
 - **Boas-vindas**: conta nova ganha `creditosIniciais` (padrão 3) na primeira vez que o servidor olha o saldo dela.
 - **Cobrança desligada por padrão**: o uso de cada mesa é medido (tabela `uso_ia_mesa`), mas nada é descontado nem bloqueado. Liga e desliga na aba **Créditos** do painel.
 - **Sem créditos**, as rotas que chamam o Mestre respondem `402` com `semCreditos: true` (antes de travar a mesa), e a mesa pública ganha `creditos: { lider, podeJogar, aviso, saldo* }` (*saldo só para o líder; o campo só existe com a cobrança ligada). No meio de uma luta, o combate termina por conta da casa até `cortesiaCombate` créditos.
-- **Pagamento por pedido**: o app cria um pedido (`MV-XXXXXX`) de um pacote; o jogador paga como as instruções do painel disserem (Pix, por exemplo) e o admin confirma no painel, que lança os créditos uma vez só. Sem instruções configuradas, o app não deixa pedir. Pedidos esperando expiram em 7 dias.
-- **Painel → Créditos**: pedidos para confirmar ou recusar, dar ou tirar créditos de qualquer conta (por e-mail ou ID, com motivo no extrato), saldos, **preço sugerido pelo consumo** (horas de jogo medidas, custo por hora, câmbio, margem e taxa) e a configuração (cobrança, boas-vindas, custo de 1 crédito, cortesia, instruções e pacotes).
-- Rotas: `GET /api/conta/creditos`, `POST /api/conta/creditos/pedido`, `POST /api/conta/creditos/pedido/:id/cancelar`; painel em `/api/admin/creditos*`.
-- Tabelas novas: `creditos_config`, `creditos_saldos`, `creditos_extrato`, `creditos_pedidos`, `uso_ia_mesa`. Tabelas de uma versão antiga (`contas_creditos`, `compras`, `uso_ia`) não são usadas nem alteradas.
+- **Google Play** (`google-play.js`): o app da Play Store compra o pacote (produto avulso consumível, com o ID configurado em cada pacote, padrão `creditos_taverna_5`, `creditos_aventura_12`, `creditos_campanha_30`) e manda o token para `POST /api/conta/creditos/google`. O servidor confere na Google Play Developer API (`purchases.products.get`), exige compra paga e da mesma conta (`obfuscatedAccountId` = hash da conta), credita uma vez só por token e consome a compra (`:consume`; se falhar, tenta de novo a cada 12 h). Vendas ligam e desligam no painel; compras feitas antes de desligar ainda são creditadas. Com as vendas ligadas, o pedido manual some do app, porque a Play Store não permite vender créditos por fora dela.
+- **Pedido manual** (testes ou instalação fora da loja): o app cria um pedido (`MV-XXXXXX`) de um pacote; o jogador paga como as instruções do painel disserem (Pix, por exemplo) e o admin confirma no painel, que lança os créditos uma vez só. Sem instruções configuradas, o app não deixa pedir. Pedidos esperando expiram em 7 dias.
+- **Painel → Créditos**: no topo, as chaves de **cobrança** e de **vendas pela Google Play** (as duas começam desligadas); compras da Google Play, pedidos para confirmar ou recusar, dar ou tirar créditos de qualquer conta (por e-mail ou ID, com motivo no extrato), saldos, **preço sugerido pelo consumo** (horas de jogo medidas, custo por hora, câmbio, margem e taxa) e a configuração (cobrança, boas-vindas, custo de 1 crédito, cortesia, instruções e pacotes).
+- Rotas: `GET /api/conta/creditos`, `POST /api/conta/creditos/google`, `POST /api/conta/creditos/pedido`, `POST /api/conta/creditos/pedido/:id/cancelar`; painel em `/api/admin/creditos*`.
+- Tabelas novas: `creditos_config`, `creditos_saldos`, `creditos_extrato`, `creditos_pedidos`, `creditos_google`, `uso_ia_mesa`. Tabelas de uma versão antiga (`contas_creditos`, `compras`, `uso_ia`) não são usadas nem alteradas.
 
 ## Melhorias só de servidor (`melhorias.js`)
 

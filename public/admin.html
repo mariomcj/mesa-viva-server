@@ -72,6 +72,13 @@ input:hover, select:hover, textarea:hover { border-color: var(--tinta-3); }
 .linha-check { display: flex; align-items: flex-start; gap: .55rem; font-size: .88rem; color: var(--tinta); cursor: pointer; }
 .linha-check input { width: 20px; min-height: 20px; height: 20px; flex: none; margin-top: .1rem; accent-color: var(--ouro); }
 .tabela td input { min-width: 84px; }
+.interruptores { display: grid; gap: .7rem; }
+.interruptor { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; border: 1px solid var(--borda); border-radius: 10px; padding: .75rem .9rem; background: var(--sup-2); }
+.interruptor-txt { flex: 1 1 260px; min-width: 0; }
+.interruptor-txt strong { display: block; color: var(--tinta); font-size: .95rem; margin-bottom: .15rem; }
+.interruptor-txt p { color: var(--tinta-2); font-size: .85rem; }
+.interruptor .selo { font-size: .82rem; }
+.interruptor-desl { color: var(--tinta-3); }
 
 /* Login */
 .login { min-height: 100vh; display: grid; place-items: center; padding: 1rem; background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(200,160,80,.13), transparent 70%); }
@@ -985,15 +992,16 @@ async function telaCreditos(corpo, vivo) {
   const per = $('.periodo'); if (per) per.hidden = false;
   const cfg = d.config || {}, t = d.totais || {}, c = d.consumo || {}, v = t.vendas || {};
   corpo.innerHTML =
-    (cfg.cobrancaAtiva ? '' : '<p class="faixa" role="status"><strong>Cobrança desligada.</strong> O uso de cada mesa é medido, mas nenhum crédito é descontado e nenhuma mesa para. Ligue em Configuração, no fim da página, quando os preços e as instruções de pagamento estiverem prontos.</p>') +
+    '<div class="grade">' + htmlCartao('c-chaves', 'Cobrança e vendas', 'Liga e desliga na hora, para o servidor inteiro. As duas começam desligadas.') + '</div>' +
     '<section class="kpis" aria-label="Indicadores de créditos">' +
-      htmlKpi('Cobrança', cfg.cobrancaAtiva ? 'Ligada' : 'Desligada', htmlSub(fCred(cfg.creditosIniciais) + ' créditos de boas-vindas por conta nova')) +
+      htmlKpi('Boas-vindas', fCred(cfg.creditosIniciais), htmlSub('créditos para cada conta nova')) +
       htmlKpi('Pedidos esperando', fInt(t.aguardando), htmlSub(t.aguardando ? 'confira o pagamento e confirme abaixo' : 'nenhum pagamento para conferir')) +
-      htmlKpi('Vendas em ' + fInt(c.dias) + ' dias', fBRL(v.valor), htmlSub(fInt(v.pedidos) + ' pedidos pagos · ' + fCred(v.creditos) + ' créditos')) +
+      htmlKpi('Vendas em ' + fInt(c.dias) + ' dias', fBRL(v.valor), htmlSub('vendas: ' + fInt(v.pedidos) + ' · ' + fCred(v.creditos) + ' créditos')) +
       htmlKpi('Créditos com os jogadores', fCred(t.emCirculacao), htmlSub(fInt(t.contas) + ' contas · ' + fCred(t.dados) + ' dados de graça no período')) +
       htmlKpi('Custo de IA por hora de mesa', c.custoHora == null ? '—' : fUSD(c.custoHora), htmlSub(num(c.horas) ? fDec(c.horas, 1) + ' h de jogo medidas em ' + fInt(c.dias) + ' dias' : 'ainda sem jogo medido no período')) +
     '</section>' +
-    '<div class="grade">' + htmlCartao('c-pedidos', 'Pedidos de créditos', 'Pacotes pedidos pelo app. Confirme só depois de ver o pagamento: o jogador coloca o código do pedido no comprovante.') + '</div>' +
+    ((d.google || []).length || cfg.vendasGooglePlay ? '<div class="grade">' + htmlCartao('c-google', 'Compras pela Google Play', 'Conferidas com a Google Play e creditadas na hora, sem você precisar fazer nada') + '</div>' : '') +
+    '<div class="grade">' + htmlCartao('c-pedidos', 'Pedidos manuais', 'Pacotes pedidos pelo app quando as vendas pela Google Play estão desligadas e há instruções de pagamento. Confirme só depois de ver o pagamento: o jogador coloca o código do pedido no comprovante.') + '</div>' +
     '<div class="grade g2">' +
       htmlCartao('c-dar', 'Dar ou tirar créditos', 'Sem pagamento: cortesia, teste, reembolso ou correção. Fica no extrato da conta.') +
       htmlCartao('c-preco', 'Preço sugerido pelo consumo', 'Com o custo real das mesas no período escolhido acima') +
@@ -1001,11 +1009,46 @@ async function telaCreditos(corpo, vivo) {
     '<div class="grade">' + htmlCartao('c-contas', 'Contas com créditos', 'Saldo atual e o consumo das mesas de cada líder no período (com a cobrança desligada, o consumo é só medido)') + '</div>' +
     '<div class="grade">' + htmlCartao('c-config', 'Configuração', 'Vale para o servidor inteiro e fica salva no banco') + '</div>';
   marcarAtualizado(Date.now());
+  montarChaves($('#c-chaves'), d);
+  if ($('#c-google')) montarGoogle($('#c-google'), d.google || []);
   montarPedidos($('#c-pedidos'), d.pedidos || []);
   montarDarCreditos($('#c-dar'));
   montarPreco($('#c-preco'), d);
   montarContas($('#c-contas'), d.contas || []);
   montarConfigCreditos($('#c-config'), cfg);
+}
+
+function montarChaves(host, d) {
+  const cfg = d.config || {}, gp = d.googlePlay || {};
+  const selo = (lig) => '<span class="selo' + (lig ? ' selo-jogo' : ' interruptor-desl') + '">' + (lig ? 'Ligada' : 'Desligada') + '</span>';
+  const chave = (lig, titulo, texto, acao, rotulo, desab) =>
+    '<div class="interruptor"><div class="interruptor-txt"><strong>' + esc(titulo) + ' ' + selo(lig) + '</strong><p>' + texto + '</p></div>' +
+    '<button type="button" class="btn ' + (lig ? '' : 'btn-primario') + '" data-acao="' + acao + '"' + (desab ? ' disabled aria-disabled="true"' : '') + '>' + esc(rotulo) + '</button></div>';
+  host.innerHTML = '<div class="interruptores">' +
+    chave(cfg.cobrancaAtiva, 'Cobrança',
+      cfg.cobrancaAtiva
+        ? 'Cada chamada ao Mestre desconta do líder da mesa. Sem créditos, o Mestre para (menos no meio de uma luta, que termina por conta da casa). Os convidados não pagam.'
+        : 'O uso de cada mesa é medido, mas nenhum crédito é descontado e nenhuma mesa para. O app mostra "Em teste".',
+      'alternar-cobranca', cfg.cobrancaAtiva ? 'Desligar a cobrança' : 'Ligar a cobrança') +
+    chave(cfg.vendasGooglePlay, 'Vendas pela Google Play',
+      !gp.configurado
+        ? 'O servidor ainda não tem a conta de serviço da Google Play (<code>GOOGLE_PLAY_SERVICE_ACCOUNT</code> no <code>.env</code>), por isso não dá para ligar. Os pacotes também precisam existir no Play Console, com o mesmo ID de produto da configuração abaixo.'
+        : cfg.vendasGooglePlay
+          ? 'O app mostra os pacotes com o preço da Google Play, e os créditos entram sozinhos depois da compra. O pedido manual some do app (app: <code>' + esc(gp.pacote || '') + '</code>).'
+          : 'Conta de serviço configurada (app <code>' + esc(gp.pacote || '') + '</code>). Ligue quando os pacotes estiverem ativos no Play Console.',
+      'alternar-google', cfg.vendasGooglePlay ? 'Desligar as vendas' : 'Ligar as vendas', !gp.configurado && !cfg.vendasGooglePlay) +
+    '</div>' +
+    (cfg.vendasGooglePlay ? '' : '<p class="suave" style="margin-top:.7rem">Para o app da Play Store, venda só pela Google Play: a Play Store não permite vender créditos por Pix ou outro pagamento dentro do app. O pedido manual (com as instruções de pagamento) é para testes ou para quem instalou fora da loja.</p>');
+}
+
+function montarGoogle(host, compras) {
+  if (!compras.length) { host.innerHTML = '<p class="vazio">Nenhuma compra pela Google Play no período.</p>'; return; }
+  host.innerHTML = '<div class="rolagem" tabindex="0" role="region" aria-label="Compras pela Google Play"><table class="tabela"><thead><tr>' +
+    '<th scope="col">Pedido Google</th><th scope="col">Conta</th><th scope="col">Pacote</th><th scope="col" class="num">Créditos</th><th scope="col" class="num">Preço (tabela)</th><th scope="col">Quando</th></tr></thead><tbody>' +
+    compras.map((g) => '<tr><td class="nq">' + esc(g.pedido || '—') + (g.consumida ? '' : ' <span class="selo selo-saguao" title="Creditada; a Google Play ainda não confirmou o consumo. O servidor tenta de novo sozinho.">consumo pendente</span>') + '</td>' +
+      '<td>' + esc(g.usuario || '—') + '<br><span class="suave">' + esc(g.email || g.conta || '') + '</span></td><td>' + esc(g.pacote) + '</td>' +
+      '<td class="num">' + fCred(g.creditos) + '</td><td class="num">' + fBRL(g.preco) + '</td><td class="nq" title="' + esc(fDataHora(g.t)) + '">' + esc(haQuanto(g.t)) + '</td></tr>').join('') +
+    '</tbody></table></div><p class="suave" style="margin-top:.4rem">O valor que entra de fato é o do Play Console, menos a taxa da Google.</p>';
 }
 
 function montarPedidos(host, pedidos) {
@@ -1091,20 +1134,20 @@ function montarConfigCreditos(host, cfg) {
   const pacotes = (cfg.pacotes || []).slice(0, 6);
   while (pacotes.length < Math.min(6, (cfg.pacotes || []).length + 1)) pacotes.push({ id: '', nome: '', creditos: '', preco: '', destaque: false });
   host.innerHTML = '<form data-form="config-creditos" novalidate>' +
-    '<label class="linha-check"><input type="checkbox" name="cobrancaAtiva"' + (cfg.cobrancaAtiva ? ' checked' : '') + '> <span><strong>Cobrança ligada</strong> — cada chamada ao Mestre desconta do líder da mesa; sem créditos, o Mestre para (menos no meio de uma luta, que termina por conta da casa).</span></label>' +
-    '<div class="campos" style="margin-top:.8rem">' +
+    '<div class="campos">' +
       '<div><label for="kini">Créditos de boas-vindas (conta nova)</label><input id="kini" name="creditosIniciais" type="number" step="0.5" min="0" max="100" value="' + esc(cfg.creditosIniciais) + '" inputmode="decimal"></div>' +
       '<div><label for="kusd">Custo de IA que vale 1 crédito (US$)</label><input id="kusd" name="creditoUsd" type="number" step="0.001" min="0.001" max="10" value="' + esc(cfg.creditoUsd) + '" inputmode="decimal"></div>' +
       '<div><label for="kcort">Cortesia no fim de um combate (créditos)</label><input id="kcort" name="cortesiaCombate" type="number" step="0.05" min="0" max="5" value="' + esc(cfg.cortesiaCombate) + '" inputmode="decimal"></div>' +
-      '<div class="inteira"><label for="kinstr">Como pagar (aparece no app depois do pedido; sem texto, o app não deixa pedir)</label>' +
+      '<div class="inteira"><label for="kinstr">Como pagar no pedido manual (sem texto, o app não deixa pedir; com as vendas pela Google Play ligadas, o pedido manual some do app)</label>' +
         '<textarea id="kinstr" name="instrucoes" maxlength="800" placeholder="Pix: sua-chave@exemplo.com (seu nome). Coloque o código do pedido na descrição. Os créditos entram assim que o pagamento for conferido.">' + esc(cfg.instrucoes || '') + '</textarea></div>' +
     '</div>' +
-    '<h4>Pacotes à venda</h4><div class="rolagem"><table class="tabela"><thead><tr><th scope="col">Nome</th><th scope="col">Créditos</th><th scope="col">Preço (R$)</th><th scope="col">Destaque</th></tr></thead><tbody>' +
+    '<h4>Pacotes à venda</h4><div class="rolagem"><table class="tabela"><thead><tr><th scope="col">Nome</th><th scope="col">Créditos</th><th scope="col">Preço (R$)</th><th scope="col">Produto no Google Play</th><th scope="col">Destaque</th></tr></thead><tbody>' +
     pacotes.map((p, i) => '<tr data-pacote="' + i + '"><td><input name="pnome' + i + '" maxlength="30" value="' + esc(p.nome) + '" aria-label="Nome do pacote ' + (i + 1) + '" placeholder="' + (p.nome ? '' : 'Novo pacote (opcional)') + '"><input type="hidden" name="pid' + i + '" value="' + esc(p.id) + '"></td>' +
       '<td><input name="pcred' + i + '" type="number" step="0.5" min="0" max="1000" value="' + esc(p.creditos) + '" aria-label="Créditos do pacote ' + (i + 1) + '" inputmode="decimal"></td>' +
       '<td><input name="ppreco' + i + '" type="number" step="0.01" min="0" max="10000" value="' + esc(p.preco) + '" aria-label="Preço do pacote ' + (i + 1) + '" inputmode="decimal"></td>' +
+      '<td><input name="pprod' + i + '" maxlength="100" value="' + esc(p.produto || '') + '" aria-label="ID do produto do pacote ' + (i + 1) + ' no Google Play" placeholder="creditos_..." autocapitalize="none" spellcheck="false" style="min-width:170px"></td>' +
       '<td><input type="radio" name="pdestaque" value="' + i + '"' + (p.destaque ? ' checked' : '') + ' aria-label="Pacote ' + (i + 1) + ' em destaque" style="width:auto;min-height:0"></td></tr>').join('') +
-    '</tbody></table></div><p class="suave" style="margin-top:.4rem">Para tirar um pacote, apague o nome dele.</p>' +
+    '</tbody></table></div><p class="suave" style="margin-top:.4rem">Para tirar um pacote, apague o nome dele. O produto no Google Play é o ID do produto avulso (consumível) criado no Play Console, com letras minúsculas, números e "_"; o preço da Google Play é o do Play Console, o daqui vale para o pedido manual e para as contas.</p>' +
     '<div class="acoes"><button type="submit" class="btn btn-primario">Salvar configuração</button></div><p class="erro" role="alert" data-erro></p></form>';
 }
 function lerConfigCreditos(f) {
@@ -1115,10 +1158,12 @@ function lerConfigCreditos(f) {
     if (!nome) return;
     const creditos = num(e['pcred' + i].value);
     if (creditos <= 0) throw new Error('O pacote ' + nome + ' precisa ter créditos.');
-    pacotes.push({ id: e['pid' + i].value, nome, creditos, preco: num(e['ppreco' + i].value), destaque: !!destaque && destaque.value === i });
+    const produto = e['pprod' + i].value.trim().toLowerCase();
+    if (produto && !/^[a-z0-9][a-z0-9_.]*$/.test(produto)) throw new Error('O produto do pacote ' + nome + ' só pode ter letras minúsculas, números, "_" e ".".');
+    pacotes.push({ id: e['pid' + i].value, nome, creditos, preco: num(e['ppreco' + i].value), produto, destaque: !!destaque && destaque.value === i });
   });
   if (!pacotes.length) throw new Error('Deixe pelo menos um pacote.');
-  return { cobrancaAtiva: e.cobrancaAtiva.checked, creditosIniciais: num(e.creditosIniciais.value), creditoUsd: num(e.creditoUsd.value), cortesiaCombate: num(e.cortesiaCombate.value), instrucoes: e.instrucoes.value, pacotes };
+  return { creditosIniciais: num(e.creditosIniciais.value), creditoUsd: num(e.creditoUsd.value), cortesiaCombate: num(e.cortesiaCombate.value), instrucoes: e.instrucoes.value, pacotes };
 }
 async function abrirExtrato(conta) {
   const reg = abrirModal('Extrato', htmlCarregando(), { largo: true });
@@ -1328,6 +1373,26 @@ const ACOES = {
     try { await APP.resolverPedido(id, 'recusar'); avisar('Pedido ' + id + ' recusado.'); renderAba(true); }
     catch (e) { avisar('Não foi possível recusar o pedido: ' + e.message, true); }
   },
+  async 'alternar-cobranca'() {
+    const cfg = (APP._cred && APP._cred.config) || {};
+    const ligar = !cfg.cobrancaAtiva;
+    const ok = ligar
+      ? await confirmar('Ligar a cobrança?', 'A partir de agora, cada chamada ao Mestre desconta créditos do líder da mesa, e mesas sem créditos param (menos no meio de uma luta). Contas novas recebem ' + fCred(cfg.creditosIniciais) + ' créditos de boas-vindas.' + (cfg.vendasGooglePlay || cfg.instrucoes ? '' : ' Atenção: ainda não há como comprar créditos (vendas pela Google Play desligadas e sem instruções de pagamento).'), 'Ligar cobrança')
+      : await confirmar('Desligar a cobrança?', 'O uso continua medido, mas nenhum crédito é descontado e nenhuma mesa para. Os saldos ficam guardados.', 'Desligar cobrança');
+    if (!ok) return;
+    try { await APP.salvarConfigCreditos({ cobrancaAtiva: ligar }); avisar(ligar ? 'Cobrança ligada.' : 'Cobrança desligada.'); renderAba(true); }
+    catch (e) { avisar('Não foi possível mudar a cobrança: ' + e.message, true); }
+  },
+  async 'alternar-google'() {
+    const cfg = (APP._cred && APP._cred.config) || {};
+    const ligar = !cfg.vendasGooglePlay;
+    const ok = ligar
+      ? await confirmar('Ligar as vendas pela Google Play?', 'O app passa a mostrar os pacotes com o preço da Google Play, e o pedido manual some. Confira antes que os produtos ' + (cfg.pacotes || []).map((p) => p.produto).join(', ') + ' estão ativos no Play Console.', 'Ligar vendas')
+      : await confirmar('Desligar as vendas pela Google Play?', 'O app para de oferecer a compra. Compras já feitas continuam sendo creditadas.', 'Desligar vendas');
+    if (!ok) return;
+    try { await APP.salvarConfigCreditos({ vendasGooglePlay: ligar }); avisar(ligar ? 'Vendas pela Google Play ligadas.' : 'Vendas pela Google Play desligadas.'); renderAba(true); }
+    catch (e) { avisar('Não foi possível mudar as vendas: ' + e.message, true); }
+  },
   'extrato-conta'(b) { abrirExtrato(b.dataset.conta); },
   'ajustar-conta'(b) {
     const campo = $('#cconta'); if (!campo) return;
@@ -1382,13 +1447,6 @@ const FORMS = {
   },
   async 'config-creditos'(f) {
     const c = lerConfigCreditos(f);
-    const antes = APP._cred && APP._cred.config;
-    if (c.cobrancaAtiva && antes && !antes.cobrancaAtiva) {
-      if (!(await confirmar('Ligar a cobrança?', 'A partir de agora, cada chamada ao Mestre desconta créditos do líder da mesa, e mesas sem créditos param (menos no meio de uma luta). Contas novas recebem ' + fCred(c.creditosIniciais) + ' créditos de boas-vindas.', 'Ligar cobrança'))) return;
-    }
-    if (!c.cobrancaAtiva && antes && antes.cobrancaAtiva) {
-      if (!(await confirmar('Desligar a cobrança?', 'O uso continua medido, mas nenhum crédito é descontado e nenhuma mesa para.', 'Desligar cobrança'))) return;
-    }
     await APP.salvarConfigCreditos(c);
     avisar('Configuração dos créditos salva.');
     renderAba(true);

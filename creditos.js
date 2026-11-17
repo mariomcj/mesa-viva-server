@@ -7,8 +7,11 @@
  *   (`creditoUsd`). Quando o provedor não informa o custo, vale uma estimativa fixa por chamada.
  * - Conta nova ganha `creditosIniciais` de boas-vindas.
  * - Enquanto a cobrança estiver desligada (o padrão), nada é bloqueado nem descontado: o uso só é medido.
- * - Pagamento: o app cria um pedido com um código; o jogador paga como as instruções do painel disserem
- *   (Pix, por exemplo) e o admin confirma o pedido no painel. O admin também pode dar créditos sem pedido.
+ * - Pagamento pela Google Play (o app da Play Store): o app compra o pacote, o servidor confere a compra na
+ *   Google Play Developer API, credita uma vez só e consome a compra. Liga e desliga no painel ("vendas").
+ * - Pedido manual (para testes ou fora da Play Store): o app cria um pedido com um código, o jogador paga como as
+ *   instruções do painel disserem e o admin confirma. Some do app quando as vendas pela Google Play estão ligadas,
+ *   porque a Play Store não permite vender créditos por fora dela. O admin também pode dar créditos sem pedido.
  * - Sem créditos, o Mestre para, menos no meio de uma luta: o combate termina por conta da casa,
  *   até `cortesiaCombate` créditos (renovada a cada crédito que entra).
  *
@@ -19,6 +22,7 @@
 
 const { AsyncLocalStorage } = require("async_hooks");
 const crypto = require("crypto");
+const { criarGooglePlay } = require("./google-play");
 
 const DIA_MS = 86_400_000;
 const LACUNA_SESSAO_MS = 15 * 60_000;   // mais de 15 min sem chamar a IA: a sessão de jogo acabou
@@ -37,14 +41,15 @@ const curto = (v, max) => String(v ?? "").replace(/[\u0000-\u0008\u000B\u000C\u0
 function padrao() {
   return {
     cobrancaAtiva: String(process.env.COBRANCA_ATIVA || "").toLowerCase() === "true",
+    vendasGooglePlay: false,
     creditosIniciais: limitar(process.env.CREDITOS_INICIAIS, 0, 100, 3),
     creditoUsd: limitar(process.env.CREDITO_USD, 0.001, 10, 0.15),
     cortesiaCombate: limitar(process.env.CREDITO_CORTESIA_COMBATE, 0, 5, 0.25),
     instrucoes: "",
     pacotes: [
-      { id: "taverna", nome: "Taverna", creditos: 5, preco: 12.9, destaque: false },
-      { id: "aventura", nome: "Aventura", creditos: 12, preco: 26.9, destaque: true },
-      { id: "campanha", nome: "Campanha", creditos: 30, preco: 59.9, destaque: false },
+      { id: "taverna", nome: "Taverna", creditos: 5, preco: 12.9, destaque: false, produto: "creditos_taverna_5" },
+      { id: "aventura", nome: "Aventura", creditos: 12, preco: 26.9, destaque: true, produto: "creditos_aventura_12" },
+      { id: "campanha", nome: "Campanha", creditos: 30, preco: 59.9, destaque: false, produto: "creditos_campanha_30" },
     ],
   };
 }
@@ -54,6 +59,7 @@ function normalizarConfig(entrada, base = padrao()) {
   const e = entrada && typeof entrada === "object" ? entrada : {};
   const c = { ...base };
   if (typeof e.cobrancaAtiva === "boolean") c.cobrancaAtiva = e.cobrancaAtiva;
+  if (typeof e.vendasGooglePlay === "boolean") c.vendasGooglePlay = e.vendasGooglePlay;
   if (e.creditosIniciais !== undefined) c.creditosIniciais = arred(limitar(e.creditosIniciais, 0, 100, base.creditosIniciais), 2);
   if (e.creditoUsd !== undefined) c.creditoUsd = arred(limitar(e.creditoUsd, 0.001, 10, base.creditoUsd), 4);
   if (e.cortesiaCombate !== undefined) c.cortesiaCombate = arred(limitar(e.cortesiaCombate, 0, 5, base.cortesiaCombate), 3);
@@ -70,12 +76,22 @@ function normalizarConfig(entrada, base = padrao()) {
       let id = curto(p.id, 30).toLowerCase().replace(/[^a-z0-9_-]/g, "") || nome.toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g, "").slice(0, 30) || `p${lista.length + 1}`;
       while (vistos.has(id)) id = `${id}x`;
       vistos.add(id);
-      lista.push({ id, nome, creditos, preco, destaque: p.destaque === true });
+      // ID do produto no Play Console: letras minúsculas, números, "_" e ".", começando com letra ou número
+      const produto = idProdutoValido(p.produto) || `creditos_${id.replace(/[^a-z0-9_]/g, "_")}`;
+      lista.push({ id, nome, creditos, preco, destaque: p.destaque === true, produto });
     }
     if (lista.length) c.pacotes = lista;
   }
   return c;
 }
+
+/** ID de produto aceito pelo Play Console, ou "" se não for. */
+function idProdutoValido(v) {
+  const t = curto(v, 100).toLowerCase();
+  return /^[a-z0-9][a-z0-9_.]{0,99}$/.test(t) ? t : "";
+}
+/** Identificador da conta enviado à Google Play na compra (obfuscatedAccountId: até 64 caracteres, sem dado pessoal). */
+const contaOfuscada = (conta) => crypto.createHash("sha256").update(`mesa-viva:${conta}`).digest("hex");
 
 /** Custo estimado (US$) de uma chamada sem custo informado pelo provedor. */
 function estimativa(tipo, modelo) {
@@ -153,6 +169,8 @@ let api = null;   // preenchido por instalar()
 
 function instalar(d) {
   const { app, db, authMw, adminMw, erro, codigoValido, ehMembro, M } = d;
+  // `d.googlePlay` (testes) ou a conta de serviço do .env; null = conferência desligada
+  const GP = d.googlePlay !== undefined ? d.googlePlay : criarGooglePlay();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS creditos_config (chave TEXT PRIMARY KEY, valor TEXT NOT NULL);
@@ -161,6 +179,9 @@ function instalar(d) {
     CREATE INDEX IF NOT EXISTS idx_creditos_extrato ON creditos_extrato (conta, id);
     CREATE TABLE IF NOT EXISTS creditos_pedidos (id TEXT PRIMARY KEY, conta TEXT NOT NULL, pacote TEXT NOT NULL, nome TEXT NOT NULL, creditos REAL NOT NULL, preco REAL NOT NULL, estado TEXT NOT NULL, criadoEm INTEGER NOT NULL, resolvidoEm INTEGER, obs TEXT NOT NULL DEFAULT '');
     CREATE INDEX IF NOT EXISTS idx_creditos_pedidos ON creditos_pedidos (conta, criadoEm);
+    CREATE TABLE IF NOT EXISTS creditos_google (token TEXT PRIMARY KEY, conta TEXT NOT NULL, produto TEXT NOT NULL, pacote TEXT NOT NULL, creditos REAL NOT NULL, preco REAL NOT NULL,
+      pedido TEXT, consumida INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_creditos_google ON creditos_google (conta, t);
     CREATE TABLE IF NOT EXISTS uso_ia_mesa (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, uid TEXT, conta TEXT, codigo TEXT, tipo TEXT NOT NULL, modelo TEXT,
       entrada INTEGER NOT NULL DEFAULT 0, saida INTEGER NOT NULL DEFAULT 0, custo REAL NOT NULL DEFAULT 0, estimado INTEGER NOT NULL DEFAULT 0, creditos REAL NOT NULL DEFAULT 0, cobrado INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS idx_uso_ia_mesa_t ON uso_ia_mesa (t);
@@ -327,6 +348,13 @@ function instalar(d) {
       db.prepare("DELETE FROM uso_ia_mesa WHERE t < ?").run(agora() - GUARDAR_USO_DIAS * DIA_MS);
       expirarPedidos();
     } catch (e) { console.error("[creditos] limpeza:", e.message); }
+    // compras creditadas cujo consumo na Google Play falhou: tenta de novo (sem consumir, o jogador não compra o pacote outra vez)
+    if (GP) {
+      for (const g of db.prepare("SELECT token, produto FROM creditos_google WHERE consumida = 0 LIMIT 50").all()) {
+        GP.consumir(g.produto, g.token).then(() => db.prepare("UPDATE creditos_google SET consumida = 1 WHERE token = ?").run(g.token))
+          .catch((e) => { if (e.status === 400 || e.status === 410) db.prepare("UPDATE creditos_google SET consumida = 1 WHERE token = ?").run(g.token); else console.error("[creditos] consumir:", e.message); });
+      }
+    }
   }
   limpar();
   setInterval(limpar, 12 * 3_600_000).unref();
@@ -344,13 +372,52 @@ function instalar(d) {
     const mesas = db.prepare(`SELECT u.codigo, SUM(u.creditos) AS creditos, COUNT(*) AS chamadas, MAX(u.t) AS ultima FROM uso_ia_mesa u
       WHERE u.conta = ? AND u.t >= ? AND u.codigo IS NOT NULL GROUP BY u.codigo ORDER BY ultima DESC LIMIT 10`).all(conta, agora() - 30 * DIA_MS)
       .map((m) => ({ codigo: m.codigo, creditos: arred(m.creditos, 3), chamadas: m.chamadas, ultima: m.ultima }));
-    return { ...s, creditosIniciais: cfg.creditosIniciais, lojaAberta: !!cfg.instrucoes, instrucoes: cfg.instrucoes,
+    const google = !!(GP && cfg.vendasGooglePlay);
+    return { ...s, creditosIniciais: cfg.creditosIniciais,
+      // pedido manual só fora da Google Play (a Play Store não deixa vender por fora dela)
+      lojaAberta: !google && !!cfg.instrucoes, instrucoes: google ? "" : cfg.instrucoes,
+      googlePlay: { ativo: google, conta: contaOfuscada(conta) },
       pacotes: cfg.pacotes, pedidos, extrato: extratoDa(conta, 30), mesas };
   };
   app.get("/api/conta/creditos", authMw, (req, res) => res.json(paraApp(req.uid)));
+  /**
+   * Compra feita na Google Play: confere, credita uma vez só e consome. Vale mesmo com as vendas desligadas
+   * no painel (uma compra feita antes de desligar ainda tem de virar crédito).
+   */
+  app.post("/api/conta/creditos/google", authMw, async (req, res) => {
+    const produto = idProdutoValido(req.body?.produto);
+    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+    if (!produto || !token || token.length > 4096) return erro(res, 400, "Compra inválida.");
+    const ja = db.prepare("SELECT conta FROM creditos_google WHERE token = ?").get(token);
+    if (ja) return ja.conta === req.uid ? res.json({ ...paraApp(req.uid), repetida: true }) : erro(res, 409, "Esta compra pertence a outra conta.");
+    const p = config().pacotes.find((x) => x.produto === produto);
+    if (!p) return erro(res, 400, "Pacote desconhecido.");
+    if (!GP) return erro(res, 503, "As compras pela Google Play ainda não foram configuradas no servidor.");
+    let compra;
+    try { compra = await GP.compra(produto, token); }
+    catch (e) { console.error("[creditos] google:", e.message); return erro(res, e.status === 404 || e.status === 400 ? 400 : 502, "Não consegui confirmar a compra com a Google Play. Tente de novo."); }
+    if (compra.purchaseState === 2) return res.status(202).json({ ...paraApp(req.uid), pendente: true });
+    if (compra.purchaseState !== 0) return erro(res, 402, "A compra não foi concluída.");
+    if (compra.obfuscatedExternalAccountId && compra.obfuscatedExternalAccountId !== contaOfuscada(req.uid)) return erro(res, 403, "Esta compra foi feita por outra conta.");
+    let creditou = false;
+    db.transaction(() => {
+      if (db.prepare("SELECT 1 FROM creditos_google WHERE token = ?").get(token)) return;   // dois pedidos ao mesmo tempo
+      db.prepare("INSERT INTO creditos_google (token, conta, produto, pacote, creditos, preco, pedido, consumida, t) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)")
+        .run(token, req.uid, produto, p.nome, p.creditos, p.preco, curto(compra.orderId, 80) || null, agora());
+      creditar(req.uid, p.creditos, "compra", `Pacote ${p.nome} (Google Play)`, curto(compra.orderId, 80) || null);
+      creditou = true;
+    })();
+    if (creditou) {
+      try { await GP.consumir(produto, token); db.prepare("UPDATE creditos_google SET consumida = 1 WHERE token = ?").run(token); }
+      catch (e) { console.error("[creditos] consumir:", e.message); }   // a limpeza periódica tenta de novo
+    }
+    res.json(paraApp(req.uid));
+  });
+
   app.post("/api/conta/creditos/pedido", authMw, (req, res) => {
     const cfg = config();
     if (!cfg.instrucoes) return erro(res, 409, "As compras de créditos ainda não estão abertas.");
+    if (GP && cfg.vendasGooglePlay) return erro(res, 409, "Compre os créditos pela Google Play.");
     const p = cfg.pacotes.find((x) => x.id === String(req.body?.pacote || ""));
     if (!p) return erro(res, 400, "Pacote desconhecido.");
     expirarPedidos();
@@ -387,16 +454,25 @@ function instalar(d) {
         FROM creditos_saldos s LEFT JOIN usuarios u ON u.id = s.conta ORDER BY s.atualizadoEm DESC LIMIT 300`).all(desde)
         .map((c) => ({ conta: c.conta, nome: c.nome || null, email: c.email || null, saldo: arred(c.saldo, 3), usados: arred(c.usados, 3), atualizadoEm: c.atualizadoEm }));
       const tot = db.prepare("SELECT COUNT(*) AS contas, COALESCE(SUM(saldo), 0) AS saldo FROM creditos_saldos").get();
-      const vendas = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(preco), 0) AS valor, COALESCE(SUM(creditos), 0) AS creditos FROM creditos_pedidos WHERE estado = 'pago' AND resolvidoEm >= ?").get(desde);
+      const vendasPedido = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(preco), 0) AS valor, COALESCE(SUM(creditos), 0) AS creditos FROM creditos_pedidos WHERE estado = 'pago' AND resolvidoEm >= ?").get(desde);
+      const vendasGoogle = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(preco), 0) AS valor, COALESCE(SUM(creditos), 0) AS creditos FROM creditos_google WHERE t >= ?").get(desde);
+      const vendas = { n: vendasPedido.n + vendasGoogle.n, valor: vendasPedido.valor + vendasGoogle.valor, creditos: vendasPedido.creditos + vendasGoogle.creditos };
+      const google = db.prepare(`SELECT g.pedido, g.pacote, g.creditos, g.preco, g.consumida, g.t, g.conta, u.nome AS usuario, u.email FROM creditos_google g
+        LEFT JOIN usuarios u ON u.id = g.conta WHERE g.t >= ? ORDER BY g.t DESC LIMIT 100`).all(desde)
+        .map((g) => ({ pedido: g.pedido, pacote: g.pacote, creditos: g.creditos, preco: g.preco, consumida: !!g.consumida, t: g.t, conta: g.conta, usuario: g.usuario || null, email: g.email || null }));
       const dados = db.prepare("SELECT COALESCE(SUM(quantidade), 0) AS q FROM creditos_extrato WHERE tipo IN ('admin', 'boas-vindas') AND quantidade > 0 AND t >= ?").get(desde).q;
       res.json({
-        config: config(), consumo: consumo(dias), pedidos, contas,
+        config: config(), consumo: consumo(dias), pedidos, contas, google,
+        googlePlay: { configurado: !!GP, pacote: GP ? GP.pacote : null },
         totais: { contas: tot.contas, emCirculacao: arred(tot.saldo, 2), aguardando: pedidos.filter((p) => p.estado === "aguardando").length,
           vendas: { pedidos: vendas.n, valor: arred(vendas.valor, 2), creditos: arred(vendas.creditos, 2) }, dados: arred(dados, 2) },
         sugestao: sugerirPrecos({ creditoUsd: config().creditoUsd }),
       });
     });
-    app.put("/api/admin/creditos/config", adminMw, (req, res) => res.json({ config: salvarConfig(req.body || {}) }));
+    app.put("/api/admin/creditos/config", adminMw, (req, res) => {
+      if (req.body?.vendasGooglePlay === true && !GP) return erro(res, 409, "Configure a conta de serviço da Google Play no servidor (GOOGLE_PLAY_SERVICE_ACCOUNT) antes de ligar as vendas.");
+      res.json({ config: salvarConfig(req.body || {}) });
+    });
     app.post("/api/admin/creditos/adicionar", adminMw, (req, res) => {
       const u = contaPor(req.body?.conta);
       if (!u) return erro(res, 404, "Conta não encontrada. Use o e-mail ou o ID do usuário.");
@@ -443,7 +519,7 @@ function instalar(d) {
 }
 
 module.exports = {
-  instalar, contextoMw, normalizarConfig, padrao, estimativa, medirSessoes, sugerirPrecos,
+  instalar, contextoMw, normalizarConfig, padrao, estimativa, medirSessoes, sugerirPrecos, contaOfuscada, idProdutoValido,
   /** Usado pelo limiteIA do server.js: null antes de instalar() (nada bloqueia). */
   bloqueioDoPedido: (req) => (api ? api.bloqueioDoPedido(req) : null),
 };
