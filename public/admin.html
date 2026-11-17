@@ -363,6 +363,8 @@ const APP = {
   salvarMundo(cod, corpo) { return this.req('PUT', '/api/admin/mesas/' + encodeURIComponent(cod) + '/mundo', corpo); },
   getCreditos(dias) { return this.req('GET', '/api/admin/creditos?dias=' + dias); },
   salvarConfigCreditos(c) { return this.req('PUT', '/api/admin/creditos/config', c); },
+  getRitmo() { return this.req('GET', '/api/admin/ritmo'); },
+  salvarRitmo(c) { return this.req('PUT', '/api/admin/ritmo', c); },
   darCreditos(d) { return this.req('POST', '/api/admin/creditos/adicionar', d); },
   getExtrato(conta) { return this.req('GET', '/api/admin/creditos/conta/' + encodeURIComponent(conta)); },
   resolverPedido(id, acao) { return this.req('POST', '/api/admin/creditos/pedidos/' + encodeURIComponent(id) + '/' + acao, {}); },
@@ -925,8 +927,9 @@ async function telaUso(corpo, vivo) {
 
 /* ═══════════ Mesas ═══════════ */
 async function telaMesas(corpo, vivo) {
-  const dados = await APP.listarMesas();
+  const [dados, ritmo] = await Promise.all([APP.listarMesas(), APP.getRitmo().catch(() => null)]);   // servidor sem o ritmo: o cartão não aparece
   if (!vivo()) return;
+  APP._ritmo = ritmo;
   const mesas = APP._mesas = dados.mesas || [];
   marcarContagem(); marcarAtualizado(Date.now());
   const emJogo = mesas.filter((m) => m.fase === 'jogo'), saguao = mesas.filter((m) => m.fase !== 'jogo');
@@ -939,10 +942,28 @@ async function telaMesas(corpo, vivo) {
       '<td class="num"><button type="button" class="btn btn-p btn-perigo" data-acao="excluir-mesa" data-cod="' + esc(m.codigo) + '" aria-label="Excluir a mesa ' + esc(m.codigo) + '">Excluir</button></td></tr>').join('') +
     '<tr class="sem-resultado" hidden><td colspan="9" class="suave">Nenhuma mesa combina com a busca.</td></tr></tbody></table></div>';
   corpo.innerHTML =
+    (ritmo ? '<div class="grade" style="margin-bottom:1rem">' + htmlCartao('c-ritmo', 'Ritmo da história', 'Vale para o servidor inteiro, na hora.') + '</div>' : '') +
     '<div class="pag-ferramentas" style="margin-bottom:.4rem"><div style="flex:1;min-width:180px"><label for="busca-mesas">Buscar mesa</label><input id="busca-mesas" class="busca" type="search" placeholder="Código, dono ou cena" data-filtro="#lista-jogo, #lista-saguao"></div>' +
     '<button type="button" class="btn btn-primario" data-acao="nova-mesa">Nova mesa</button></div>' +
     '<h3 class="secao-t">Em jogo <span class="suave">' + fInt(emJogo.length) + '</span></h3>' + tabela(emJogo, 'lista-jogo', 'Nenhuma mesa em jogo no momento.') +
     '<h3 class="secao-t">No saguão <span class="suave">' + fInt(saguao.length) + '</span></h3>' + tabela(saguao, 'lista-saguao', 'Nenhuma mesa esperando no saguão.');
+  if (ritmo) montarRitmo($('#c-ritmo'), ritmo);
+}
+/** Cartão do ritmo: o empurrão quando a história empaca (sempre ligado) e o evento de mesa parada (chave e minutos). */
+function montarRitmo(host, d) {
+  if (!host) return;
+  const cfg = d.config || {}, t = d.totais || {}, lig = !!cfg.eventoAtivo;
+  const opcoes = [2, 4, 6, 10, 15].filter((m) => m >= num((d.limites || {}).minutosMin || 2) && m <= num((d.limites || {}).minutosMax || 30));
+  if (opcoes.indexOf(num(cfg.eventoMinutos)) < 0) { opcoes.push(num(cfg.eventoMinutos)); opcoes.sort((a, b) => a - b); }
+  host.innerHTML = '<div class="interruptores"><div class="interruptor"><div class="interruptor-txt"><strong>Evento de mesa parada <span class="selo' + (lig ? ' selo-jogo' : ' interruptor-desl') + '">' + (lig ? 'Ligado' : 'Desligado') + '</span></strong>' +
+      '<p>' + (lig
+        ? 'Fora de combate, se ninguém age por ' + fInt(cfg.eventoMinutos) + ' minutos depois da fala do Mestre, ele narra algo que acontece na cena (no máximo uma vez por cena). Cada evento é uma chamada à IA, paga pelo líder como as outras.'
+        : 'O Mestre só fala quando alguém age. O empurrão na história continua valendo.') + '</p></div>' +
+      '<button type="button" class="btn ' + (lig ? '' : 'btn-primario') + '" data-acao="alternar-ritmo">' + (lig ? 'Desligar o evento' : 'Ligar o evento') + '</button></div></div>' +
+    (lig ? '<div class="periodo" role="group" aria-label="Minutos parados antes do evento" style="margin-top:.7rem">' + opcoes.map((m) =>
+      '<button type="button" data-acao="ritmo-minutos" data-min="' + m + '" aria-pressed="' + (m === num(cfg.eventoMinutos)) + '">' + m + ' min</button>').join('') + '</div>' : '') +
+    '<p class="suave" style="margin-top:.7rem">Empurrão (sempre ligado, sem custo a mais): quando a história não anda por algumas narrações ou as ações ficam vagas, o Mestre faz o mundo agir na próxima resposta. ' +
+      'Até agora: ' + fInt(t.empurroes) + (num(t.empurroes) === 1 ? ' empurrão' : ' empurrões') + ' e ' + fInt(t.eventos) + (num(t.eventos) === 1 ? ' evento' : ' eventos') + ' de mesa parada.</p>';
 }
 function atualizarMesas() {
   if (APP._tab === 'mesas' || APP._tab === 'geral') renderAba(true);
@@ -1392,6 +1413,22 @@ const ACOES = {
     if (!ok) return;
     try { await APP.salvarConfigCreditos({ vendasGooglePlay: ligar }); avisar(ligar ? 'Vendas pela Google Play ligadas.' : 'Vendas pela Google Play desligadas.'); renderAba(true); }
     catch (e) { avisar('Não foi possível mudar as vendas: ' + e.message, true); }
+  },
+  async 'alternar-ritmo'() {
+    const cfg = (APP._ritmo && APP._ritmo.config) || {};
+    const ligar = !cfg.eventoAtivo;
+    const ok = ligar
+      ? await confirmar('Ligar o evento de mesa parada?', 'Quando ninguém age por ' + fInt(cfg.eventoMinutos || 4) + ' minutos fora de combate, o Mestre narra algo que acontece na cena, no máximo uma vez por cena. Cada evento é uma chamada à IA.', 'Ligar evento')
+      : await confirmar('Desligar o evento de mesa parada?', 'O Mestre só fala quando alguém age. O empurrão na história continua valendo.', 'Desligar evento');
+    if (!ok) return;
+    try { await APP.salvarRitmo({ eventoAtivo: ligar }); avisar(ligar ? 'Evento de mesa parada ligado.' : 'Evento de mesa parada desligado.'); renderAba(true); }
+    catch (e) { avisar('Não foi possível mudar o evento: ' + e.message, true); }
+  },
+  async 'ritmo-minutos'(b) {
+    const m = Number(b.dataset.min);
+    if (!m || (APP._ritmo && APP._ritmo.config && APP._ritmo.config.eventoMinutos === m)) return;
+    try { await APP.salvarRitmo({ eventoMinutos: m }); avisar('O evento agora espera ' + m + ' minutos.'); renderAba(true); }
+    catch (e) { avisar('Não foi possível mudar os minutos: ' + e.message, true); }
   },
   'extrato-conta'(b) { abrirExtrato(b.dataset.conta); },
   'ajustar-conta'(b) {

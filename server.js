@@ -343,7 +343,7 @@ function broadcast(codigo, evento, dados) {
 function travar(codigo, uid, nome) {
   const m = db.prepare("SELECT processando FROM mesas WHERE codigo = ?").get(codigo);
   const p = json(m?.processando);
-  if (p && agora() - p.desde < TRAVA_MS) return p.por === uid ? "Sua ação já está sendo processada." : `O Mestre está narrando a ação de ${p.nome}. Espere um pouco.`;
+  if (p && agora() - p.desde < TRAVA_MS) return p.por === uid ? "Sua ação já está sendo processada." : p.nome ? `O Mestre está narrando a ação de ${p.nome}. Espere um pouco.` : "O Mestre está narrando. Espere um pouco.";
   salvarMesa(codigo, { processando: { por: uid, nome, desde: agora() } });
   broadcast(codigo, "atualizar", {});
   return null;
@@ -358,6 +358,8 @@ let MH = null;
 let VT = null, PJ = null;
 // Créditos da mesa (só o líder gasta): ligados mais abaixo
 let CRA = null;
+// Ritmo da mesa (empurrão quando a história empaca e evento de mesa parada): ligado mais abaixo
+let RT = null;
 /** XP por ação narrada. Padrão 5; XP_POR_ACAO no .env deixa a subida de nível mais lenta (recomendado: 2). */
 function xpPorAcao() {
   const v = process.env.XP_POR_ACAO;
@@ -643,6 +645,7 @@ app.post("/api/reiniciar-mesa", authMw, (req, res) => {
   NV.aoReiniciar(codigo);
   MH.aoReiniciar(codigo);
   VT.aoReiniciar(codigo);
+  try { RT.aoReiniciar(codigo); } catch (e) { console.error("[ritmo]", e.message); }
   broadcast(codigo, "reinicio", {});
   res.json({ ok: true });
 });
@@ -988,6 +991,7 @@ app.post("/api/agir", authMw, limiteIA, async (req, res) => {
   const msgTrava = travar(codigo, req.uid, ctx.mesa.membros[req.uid] || f.nome);
   if (msgTrava) return erro(res, 409, msgTrava);
   const [idAcao] = registrar(codigo, { tipo: "acao", autor: req.uid, nome: f.nome, texto: acao });
+  try { RT.antesDaAcao(codigo, acao, ctx.mesa); } catch (e) { console.error("[ritmo]", e.message); }
   try {
     const extra = combate ? `É a ação de ${f.nome} neste turno do combate (uma ação por turno). Se for um ataque, peça um teste do tipo "ataque" usando o nome exato de um ataque da ficha de ${f.nome} e o id do inimigo; se nenhum ataque da ficha servir, narre que não dá.${combate.mapa ? " O código confere o mapa: corpo a corpo só contra quem está ao lado (se der, o personagem avança sozinho até o alvo); à distância precisa de linha de visão. Narre a tentativa sem decidir se acerta." : ""}` : "";
     const r = await M.perguntar(OPENROUTER_KEY, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\nEVENTO: ${f.nome} (id ${req.uid}) declara a ação: "${acao.replace(/"/g, "'")}"\n${extra}`, ctx.mesa.qualidade || "rapido", 3000, 0.7);
@@ -1531,6 +1535,7 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
     }
   }
   try { VT.aoNarrar(ctx, r, { combate, rolagem }); } catch (e) { console.error("[votacao]", e.message); }
+  try { RT.aoNarrar(ctx, r, { combate, porAcao: !!permitirTeste && !!uidAtor }); } catch (e) { console.error("[ritmo]", e.message); }
   if (Object.keys(campos).length) salvarMesa(codigo, campos);
   ctx.mesa.combate = combate;
   if (campos.cena) ctx.mesa.cena = campos.cena;
@@ -2068,6 +2073,34 @@ PJ = require("./projecao").instalar({ app, db, authMw, mesaDoMembro, erro, json,
 // ── Créditos: o líder da mesa paga as chamadas à IA; pedidos de compra e créditos manuais pelo painel ──
 CRA = CR.instalar({ app, db, authMw, adminMw, erro, codigoValido, ehMembro, M });
 
+// ── Ritmo: o Mestre empurra a história quando ela empaca e narra algo quando a mesa fica parada ──
+/**
+ * Evento de mesa parada: o Mestre narra algo que acontece na cena. Roda no contexto de um pedido de quem está
+ * online, para os créditos valerem como nas outras chamadas (o líder paga; sem créditos, não acontece).
+ */
+function narrarMesaParada(codigo, uid) {
+  if (!OPENROUTER_KEY) return Promise.resolve(false);
+  const req = { uid, body: { codigo }, params: {}, path: "", get: () => "" };
+  const executar = async () => {
+    const ctx = carregar(codigo, uid);
+    if (!ctx || ctx.mesa.fase !== "jogo" || ctx.mesa.combate || ctx.mesa.rolagem) return false;
+    if (travar(codigo, "mestre", "")) return false;
+    try {
+      const r = RTM.limparEvento(await M.perguntar(OPENROUTER_KEY, `${M.contexto(ctx.mesa, Object.values(ctx.fichas), ctx.recentes)}\n\n${RTM.promptEvento()}`, ctx.mesa.qualidade || "rapido", 2000, 0.8));
+      if (!r) return false;
+      await aplicar(ctx, r, false, null);
+      return true;
+    } catch (e) { console.error("[ritmo] evento:", e.message); return false; }
+    finally { destravar(codigo); }
+  };
+  return new Promise((ok) => CR.contextoMw(req, null, () => ok(executar())));
+}
+const RTM = require("./ritmo");
+RT = RTM.instalar({ app, db, adminMw, erro, json, agora, M, travaMs: TRAVA_MS, narrarParado: narrarMesaParada,
+  temporizador: process.env.RITMO_EVENTOS !== "0",
+  digitando: (codigo) => { limparDigitando(codigo); return !!digitando.get(codigo)?.size; },
+  online: (codigo) => db.prepare("SELECT uid FROM membros WHERE codigo = ? AND ultimaAtividade > ? ORDER BY ultimaAtividade DESC").all(codigo, agora() - ONLINE_WINDOW_MS).map((m) => m.uid) });
+
 // ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);
 server.timeout = 120_000; // 2 min — Cloudflare tunnel proxyReadTimeout
@@ -2107,4 +2140,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, db };
+module.exports = { app, server, db, ritmo: () => RT };

@@ -46,6 +46,7 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 | `CREDITO_USD` | não | Custo de IA, em dólares, que vale 1 crédito (padrão 0,15 ≈ 1 hora de mesa no modo Rápido). Também só até salvar no painel |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT` | não | Conta de serviço do Google Cloud com acesso ao app no Play Console (ver e gerenciar pedidos): caminho do arquivo JSON ou o JSON numa linha. Sem ela, o servidor não confere compras da Google Play e o painel não deixa ligar as vendas |
 | `GOOGLE_PLAY_PACKAGE` | não | Pacote do app na Play Store (padrão `mesa.viva`) |
+| `RITMO_EVENTOS` | não | `0` desliga o relógio do evento de mesa parada no servidor inteiro, mesmo que o painel diga "ligado" |
 
 ## Rodar
 
@@ -171,6 +172,13 @@ Tudo por acréscimo: quem não usa não vê diferença, e o app antigo segue fun
 - **Painel → Créditos**: no topo, as chaves de **cobrança** e de **vendas pela Google Play** (as duas começam desligadas); compras da Google Play, pedidos para confirmar ou recusar, dar ou tirar créditos de qualquer conta (por e-mail ou ID, com motivo no extrato), saldos, **preço sugerido pelo consumo** (horas de jogo medidas, custo por hora, câmbio, margem e taxa) e a configuração (cobrança, boas-vindas, custo de 1 crédito, cortesia, instruções e pacotes).
 - Rotas: `GET /api/conta/creditos`, `POST /api/conta/creditos/google`, `POST /api/conta/creditos/pedido`, `POST /api/conta/creditos/pedido/:id/cancelar`; painel em `/api/admin/creditos*`.
 - Tabelas novas: `creditos_config`, `creditos_saldos`, `creditos_extrato`, `creditos_pedidos`, `creditos_google`, `uso_ia_mesa`. Tabelas de uma versão antiga (`contas_creditos`, `compras`, `uso_ia`) não são usadas nem alteradas.
+
+## Ritmo da história (`ritmo.js`)
+
+- **Ganchos**: as regras do Mestre (`mestre.js`) pedem que toda narração termine com algo puxando a história (um NPC que quer algo, um rastro, uma ameaça que se mexe, um prazo), sem perguntar "o que vocês fazem?". Teste que falha nunca é beco sem saída, e uma pista necessária pode ser achada de mais de um jeito.
+- **Empurrão** (sempre ligado, sem chamada a mais): o servidor conta as narrações de ações em que a história não andou (sem cena nova, virada de ato, ajuste no arco, novo dia, combate, item ganho ou votação) e as ações vagas seguidas ("olho em volta", "espero", "o que eu faço?"). Com 5 narrações paradas (8 na campanha) ou 2 ações vagas, a próxima narração recebe no contexto a ordem de o mundo agir. Depois do empurrão, a conta recomeça. Em combate, não conta.
+- **Evento de mesa parada** (chave no painel, aba **Mesas**; vem ligado, com 4 minutos): fora de combate, sem rolagem nem votação pendente, com alguém online, ninguém digitando e o Mestre tendo falado por último, se ninguém age por N minutos o Mestre narra algo que acontece na cena. É no máximo um por cena e nunca depois de 1 hora sem nada na mesa. O evento não pede teste, não começa combate, não dá item e não vira o ato. A chamada à IA vale como as outras: o líder paga (com a cobrança ligada) e, sem créditos, o evento não acontece.
+- Rotas do painel: `GET` e `PUT /api/admin/ritmo` (`eventoAtivo`, `eventoMinutos` de 2 a 30). Tabelas novas: `ritmo_mesas` e `ritmo_config`.
 
 ## Melhorias só de servidor (`melhorias.js`)
 
