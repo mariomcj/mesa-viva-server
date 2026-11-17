@@ -269,9 +269,18 @@
   function esquecer() { sessao = null; try { sessionStorage.removeItem(GUARDA); } catch (e) {} }
   function lembrar() { try { var s = JSON.parse(sessionStorage.getItem(GUARDA) || 'null'); if (s && s.id && s.chave) return s; } catch (e) {} return null; }
 
+  /** Apaga tudo o que a mesa anterior deixou na tela (heróis, peças, eventos, narração). */
+  function limparPalco() {
+    $('#eventos').textContent = ''; $('#grupo').textContent = ''; $('#ordem').textContent = '';
+    pecas = {}; cartoes = {}; mapaAssinatura = ''; narracaoMostrada = 0; fila.length = 0;
+    $('#narracao').hidden = true; $('#narracao').textContent = '';
+    limparTabuleiro();
+  }
+
   function novaSessao() {
     esquecer();
     anterior = null; ultimoLog = 0;
+    limparPalco();
     mostrarParear();
     $('#avisoParear').textContent = '';
     $('#qrCaixa').textContent = '…';
@@ -346,8 +355,7 @@
     var novas = [];
     if (primeira) {
       ultimoLog = e.log.length ? e.log[e.log.length - 1].id : 0;
-      $('#eventos').textContent = ''; pecas = {}; cartoes = {}; mapaAssinatura = '';
-      limparTabuleiro();
+      limparPalco();
     } else {
       novas = e.log.filter(function (l) { return l.id > ultimoLog; });
       if (novas.length) ultimoLog = novas[novas.length - 1].id;
