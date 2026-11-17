@@ -476,7 +476,16 @@ function elementosDaCena(mesa) {
 let extraDoContexto = null, medidor = null;
 function definirExtraDoContexto(f) { extraDoContexto = typeof f === "function" ? f : null; }
 function definirMedidor(f) { medidor = typeof f === "function" ? f : null; }
-function medir(tipo, modelo, uso) { if (medidor) { try { medidor({ tipo, modelo, uso }); } catch {} } }
+// Medidores extras (créditos da mesa) e porteiro: diz, antes de cada chamada, se a mesa ainda pode usar a IA
+const medidoresExtras = [];
+let porteiro = null;
+function acrescentarMedidor(f) { if (typeof f === "function") medidoresExtras.push(f); }
+function definirPorteiro(f) { porteiro = typeof f === "function" ? f : null; }
+/** Mensagem de bloqueio (sem créditos) ou null. */
+function bloqueio(tipo) { if (!porteiro) return null; try { return porteiro(tipo) || null; } catch { return null; } }
+function medir(tipo, modelo, uso) {
+  for (const f of [medidor, ...medidoresExtras]) { if (f) { try { f({ tipo, modelo, uso }); } catch {} } }
+}
 // Outros módulos (votação…) acrescentam blocos curtos ao contexto, sem trocar o do melhorias.js
 const extrasDoContexto = [];
 function acrescentarAoContexto(f) { if (typeof f === "function") extrasDoContexto.push(f); }
@@ -550,6 +559,8 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
     ? (process.env.MODELO_CAPRICHADO || "anthropic/claude-sonnet-5.5")
     : (process.env.MODELO_RAPIDO || "deepseek/deepseek-v4-flash");
   if (temperatura === undefined) temperatura = 0.7;
+  const semCreditos = bloqueio("texto");
+  if (semCreditos) throw new ErroMestre(semCreditos);
 
   const url = "https://openrouter.ai/api/v1/chat/completions";
   const body = { model, messages: [{ role: "system", content: prompt }], max_tokens: maxTokens, temperature: temperatura };
@@ -592,6 +603,7 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
 
 async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "img") {
   if (tentativa > 3) return _fallbackImage(prompt, baseUrl);
+  if (tentativa === 1 && bloqueio("imagem")) return _fallbackImage(prompt, baseUrl);   // sem créditos: ilustração simples, sem custo
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
   const modelos = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image"];
@@ -679,7 +691,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
 
 const { mod, sinal, ATRIBUTOS, PERICIAS } = require("./regras");
 
-module.exports = { IDIOMAS, idiomaValido, blocoIdioma, definirExtraDoContexto, acrescentarAoContexto, definirMedidor,
+module.exports = { IDIOMAS, idiomaValido, blocoIdioma, definirExtraDoContexto, acrescentarAoContexto, definirMedidor, acrescentarMedidor, definirPorteiro,
   REGRAS, FORMATO, CRICACAO, contexto, elementosDaCena, perguntar, gerarImagem, ErroMestre, resumoFicha, blocoNomes, lerJson,
   promptCriacao, promptImagem, promptImagemMapa, promptArco, normalizarArco, arcoPedraFunda, arcoMinimo, arcoEfetivo, arcoPublico, numAto,
 };

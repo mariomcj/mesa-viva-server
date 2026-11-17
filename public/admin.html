@@ -69,6 +69,9 @@ input:hover, select:hover, textarea:hover { border-color: var(--tinta-3); }
 .erro { color: var(--ruim); font-size: .88rem; margin-top: .6rem; }
 .erro:empty { display: none; }
 .suave { color: var(--tinta-3); font-size: .85rem; }
+.linha-check { display: flex; align-items: flex-start; gap: .55rem; font-size: .88rem; color: var(--tinta); cursor: pointer; }
+.linha-check input { width: 20px; min-height: 20px; height: 20px; flex: none; margin-top: .1rem; accent-color: var(--ouro); }
+.tabela td input { min-width: 84px; }
 
 /* Login */
 .login { min-height: 100vh; display: grid; place-items: center; padding: 1rem; background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(200,160,80,.13), transparent 70%); }
@@ -351,6 +354,11 @@ const APP = {
   getUso(dias) { return this.req('GET', '/api/admin/uso?dias=' + dias); },
   getMundo(cod) { return this.req('GET', '/api/admin/mesas/' + encodeURIComponent(cod) + '/mundo'); },
   salvarMundo(cod, corpo) { return this.req('PUT', '/api/admin/mesas/' + encodeURIComponent(cod) + '/mundo', corpo); },
+  getCreditos(dias) { return this.req('GET', '/api/admin/creditos?dias=' + dias); },
+  salvarConfigCreditos(c) { return this.req('PUT', '/api/admin/creditos/config', c); },
+  darCreditos(d) { return this.req('POST', '/api/admin/creditos/adicionar', d); },
+  getExtrato(conta) { return this.req('GET', '/api/admin/creditos/conta/' + encodeURIComponent(conta)); },
+  resolverPedido(id, acao) { return this.req('POST', '/api/admin/creditos/pedidos/' + encodeURIComponent(id) + '/' + acao, {}); },
   /** Métricas dos gráficos. Devolve null quando o servidor ainda não tem a rota (versão antiga). */
   async getMetricas(dias) {
     try {
@@ -610,7 +618,7 @@ function agruparDias(serie, campos) {
 
 /* ═══════════ Peças de página ═══════════ */
 const ICONE = '<svg class="marca-icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 7.5 16.5 15h-9z" fill="currentColor" fill-opacity=".85"/></svg>';
-const ABAS = [['geral', 'Visão geral'], ['mesas', 'Mesas'], ['usuarios', 'Usuários'], ['uso', 'Uso da IA']];
+const ABAS = [['geral', 'Visão geral'], ['mesas', 'Mesas'], ['usuarios', 'Usuários'], ['uso', 'Uso da IA'], ['creditos', 'Créditos']];
 const PERIODOS = [7, 30, 90];
 function htmlCarregando() {
   return '<div class="carregando" role="status"><span class="so-leitor">Carregando…</span><div class="osso"></div><div class="osso alto"></div></div>';
@@ -697,7 +705,7 @@ function renderAba(manter) {
   let corpo = manter ? $('#corpo[data-aba="' + APP._tab + '"]', main) : null;
   if (!corpo) {
     limparGraficos();
-    const tem = APP._tab === 'geral' || APP._tab === 'uso';
+    const tem = APP._tab === 'geral' || APP._tab === 'uso' || APP._tab === 'creditos';
     const titulo = ABAS.find((a) => a[0] === APP._tab)[1];
     main.innerHTML = htmlTopoPagina(titulo, tem ? htmlPeriodo() : '') + '<div id="corpo" data-aba="' + APP._tab + '">' + htmlCarregando() + '</div>';
     corpo = $('#corpo', main);
@@ -713,8 +721,8 @@ function renderAba(manter) {
     // a lista foi refeita e o botão que tinha o foco sumiu (mesa excluída, por exemplo): o foco volta para o conteúdo, e não para o topo da página
     if (!MODAIS.length && document.activeElement === document.body) main.focus({ preventScroll: true });
   };
-  const telas = { geral: telaGeral, mesas: telaMesas, usuarios: telaUsuarios, uso: telaUso };
-  const nomes = { geral: 'a visão geral', mesas: 'as mesas', usuarios: 'os usuários', uso: 'o uso da IA' };
+  const telas = { geral: telaGeral, mesas: telaMesas, usuarios: telaUsuarios, uso: telaUso, creditos: telaCreditos };
+  const nomes = { geral: 'a visão geral', mesas: 'as mesas', usuarios: 'os usuários', uso: 'o uso da IA', creditos: 'os créditos' };
   telas[APP._tab](corpo, vivo).catch((e) => { if (vivo() && APP._token) { limparGraficos(); corpo.innerHTML = htmlErro(e, nomes[APP._tab]); } }).then(fim);
 }
 
@@ -949,6 +957,185 @@ async function telaUsuarios(corpo, vivo) {
     '<tr class="sem-resultado" hidden><td colspan="6" class="suave">Nenhum usuário combina com a busca.</td></tr></tbody></table></div>';
 }
 
+/* ═══════════ Créditos ═══════════ */
+const fBRL = (v) => 'R$ ' + fDec(v, 2);
+const fCred = (v) => { const n = num(v); return fDec(n, Number.isInteger(n) ? 0 : (Math.abs(n) >= 10 ? 1 : 2)); };
+const ESTADOS_PEDIDO = { aguardando: 'Esperando pagamento', pago: 'Pago', cancelado: 'Cancelado pelo jogador', recusado: 'Recusado', expirado: 'Expirou' };
+const TIPOS_EXTRATO = { 'boas-vindas': 'Boas-vindas', compra: 'Compra', admin: 'Administrador', uso: 'Uso da mesa' };
+const DESCONTOS = [0, 0.1, 0.2, 0.25, 0.3, 0.3];
+function seloPedido(e) {
+  const cls = e === 'pago' ? ' selo-jogo' : e === 'aguardando' ? ' selo-saguao' : '';
+  return '<span class="selo' + cls + '">' + esc(ESTADOS_PEDIDO[e] || e) + '</span>';
+}
+/** Mesmo cálculo do servidor (creditos.js → sugerirPrecos): custo × câmbio × margem, mais a taxa; pacotes maiores com desconto. */
+function precoSugerido(usd, cambio, margem, taxa, creditos, i) {
+  const porCredito = num(usd) * num(cambio) * num(margem) / Math.max(0.5, 1 - num(taxa) / 100);
+  return Math.max(0.9, Math.ceil(creditos * porCredito * (1 - (i < DESCONTOS.length ? DESCONTOS[i] : 0.3))) - 0.1);
+}
+
+async function telaCreditos(corpo, vivo) {
+  let d;
+  try { d = await APP.getCreditos(APP._dias); }
+  catch (e) {
+    if (e.status === 404 || e.naoJson) { if (vivo()) corpo.innerHTML = '<p class="faixa" role="status"><strong>Créditos indisponíveis.</strong> Este servidor ainda não tem o sistema de créditos (<code>/api/admin/creditos</code>). Atualize o servidor.</p>'; return; }
+    throw e;
+  }
+  if (!vivo()) return;
+  APP._cred = d;
+  const per = $('.periodo'); if (per) per.hidden = false;
+  const cfg = d.config || {}, t = d.totais || {}, c = d.consumo || {}, v = t.vendas || {};
+  corpo.innerHTML =
+    (cfg.cobrancaAtiva ? '' : '<p class="faixa" role="status"><strong>Cobrança desligada.</strong> O uso de cada mesa é medido, mas nenhum crédito é descontado e nenhuma mesa para. Ligue em Configuração, no fim da página, quando os preços e as instruções de pagamento estiverem prontos.</p>') +
+    '<section class="kpis" aria-label="Indicadores de créditos">' +
+      htmlKpi('Cobrança', cfg.cobrancaAtiva ? 'Ligada' : 'Desligada', htmlSub(fCred(cfg.creditosIniciais) + ' créditos de boas-vindas por conta nova')) +
+      htmlKpi('Pedidos esperando', fInt(t.aguardando), htmlSub(t.aguardando ? 'confira o pagamento e confirme abaixo' : 'nenhum pagamento para conferir')) +
+      htmlKpi('Vendas em ' + fInt(c.dias) + ' dias', fBRL(v.valor), htmlSub(fInt(v.pedidos) + ' pedidos pagos · ' + fCred(v.creditos) + ' créditos')) +
+      htmlKpi('Créditos com os jogadores', fCred(t.emCirculacao), htmlSub(fInt(t.contas) + ' contas · ' + fCred(t.dados) + ' dados de graça no período')) +
+      htmlKpi('Custo de IA por hora de mesa', c.custoHora == null ? '—' : fUSD(c.custoHora), htmlSub(num(c.horas) ? fDec(c.horas, 1) + ' h de jogo medidas em ' + fInt(c.dias) + ' dias' : 'ainda sem jogo medido no período')) +
+    '</section>' +
+    '<div class="grade">' + htmlCartao('c-pedidos', 'Pedidos de créditos', 'Pacotes pedidos pelo app. Confirme só depois de ver o pagamento: o jogador coloca o código do pedido no comprovante.') + '</div>' +
+    '<div class="grade g2">' +
+      htmlCartao('c-dar', 'Dar ou tirar créditos', 'Sem pagamento: cortesia, teste, reembolso ou correção. Fica no extrato da conta.') +
+      htmlCartao('c-preco', 'Preço sugerido pelo consumo', 'Com o custo real das mesas no período escolhido acima') +
+    '</div>' +
+    '<div class="grade">' + htmlCartao('c-contas', 'Contas com créditos', 'Saldo atual e o consumo das mesas de cada líder no período (com a cobrança desligada, o consumo é só medido)') + '</div>' +
+    '<div class="grade">' + htmlCartao('c-config', 'Configuração', 'Vale para o servidor inteiro e fica salva no banco') + '</div>';
+  marcarAtualizado(Date.now());
+  montarPedidos($('#c-pedidos'), d.pedidos || []);
+  montarDarCreditos($('#c-dar'));
+  montarPreco($('#c-preco'), d);
+  montarContas($('#c-contas'), d.contas || []);
+  montarConfigCreditos($('#c-config'), cfg);
+}
+
+function montarPedidos(host, pedidos) {
+  if (!pedidos.length) { host.innerHTML = '<p class="vazio">Nenhum pedido no período.</p>'; return; }
+  host.innerHTML = '<div class="rolagem" tabindex="0" role="region" aria-label="Pedidos de créditos"><table class="tabela"><thead><tr>' +
+    '<th scope="col">Código</th><th scope="col">Conta</th><th scope="col">Pacote</th><th scope="col" class="num">Créditos</th><th scope="col" class="num">Valor</th><th scope="col">Pedido em</th><th scope="col">Situação</th><th scope="col"><span class="so-leitor">Ações</span></th></tr></thead><tbody>' +
+    pedidos.map((p) => {
+      const aberto = p.estado === 'aguardando' || p.estado === 'expirado';
+      return '<tr><td class="nq"><strong>' + esc(p.id) + '</strong></td><td>' + esc(p.usuario || '—') + '<br><span class="suave">' + esc(p.email || p.conta || '') + '</span></td>' +
+        '<td>' + esc(p.nome) + '</td><td class="num">' + fCred(p.creditos) + '</td><td class="num">' + fBRL(p.preco) + '</td>' +
+        '<td class="nq" title="' + esc(fDataHora(p.criadoEm)) + '">' + esc(haQuanto(p.criadoEm)) + '</td><td>' + seloPedido(p.estado) + '</td>' +
+        '<td class="num nq">' + (aberto
+          ? '<button type="button" class="btn btn-p btn-primario" data-acao="confirmar-pedido" data-id="' + esc(p.id) + '" aria-label="Confirmar o pagamento do pedido ' + esc(p.id) + '">Confirmar pagamento</button> ' +
+            '<button type="button" class="btn btn-p" data-acao="recusar-pedido" data-id="' + esc(p.id) + '" aria-label="Recusar o pedido ' + esc(p.id) + '">Recusar</button>'
+          : '<span class="suave">' + esc(p.resolvidoEm ? fData(p.resolvidoEm) : '') + '</span>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+function montarDarCreditos(host) {
+  host.innerHTML = '<form data-form="dar-creditos" novalidate><div class="campos">' +
+    '<div class="inteira"><label for="cconta">Conta (e-mail ou ID)</label><input id="cconta" name="conta" list="lista-contas" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="jogador@exemplo.com" required><datalist id="lista-contas"></datalist></div>' +
+    '<div><label for="cqtd">Créditos (negativo tira)</label><input id="cqtd" name="quantidade" type="number" step="0.5" min="-1000" max="1000" value="5" inputmode="decimal" required></div>' +
+    '<div><label for="cmotivo">Motivo (aparece no extrato)</label><input id="cmotivo" name="motivo" maxlength="200" placeholder="Cortesia"></div>' +
+    '</div><div class="acoes"><button type="submit" class="btn btn-primario">Lançar créditos</button></div><p class="erro" role="alert" data-erro></p></form>' +
+    '<p class="suave" style="margin-top:.6rem">1 crédito vale cerca de 1 hora de mesa no modo Rápido, para o grupo inteiro. Só o líder da mesa gasta.</p>';
+  APP.listarUsuarios().then((r) => {
+    const lista = $('#lista-contas'); if (!lista) return;
+    (r.usuarios || []).slice(0, 500).forEach((u) => { if (u.email) lista.appendChild(h('option', { value: u.email, text: u.nome || '' })); });
+  }).catch(() => {});
+}
+
+function montarPreco(host, d) {
+  const c = d.consumo || {}, cfg = d.config || {}, r = c.rapido || {}, k = c.caprichado || {};
+  const base = r.custoHora || c.custoHora || cfg.creditoUsd;
+  const linha = (rot, val) => '<div><dt>' + esc(rot) + '</dt><dd>' + esc(val) + '</dd></div>';
+  host.innerHTML =
+    (num(c.horas) < 3 ? '<p class="faixa" role="status"><strong>Pouco jogo medido ainda</strong> (' + fDec(c.horas, 1) + ' h). A sugestão fica mais confiável depois de algumas horas de mesa. Enquanto isso, ela parte do custo configurado de 1 crédito.</p>' : '') +
+    '<dl class="totais" aria-label="Consumo medido">' +
+      linha('Horas de mesa', fDec(c.horas, 1) + ' h') + linha('Sessões', fInt(c.sessoes)) + linha('Custo no período', fUSD(c.custo)) +
+      linha('Rápido, por hora', r.custoHora == null ? '—' : fUSD(r.custoHora)) + linha('Caprichado, por hora', k.custoHora == null ? '—' : fUSD(k.custoHora)) +
+      linha('Chamadas por hora', c.chamadasHora == null ? '—' : fDec(c.chamadasHora, 0)) +
+    '</dl>' +
+    '<p class="suave" style="margin:.2rem 0 .8rem">' + (c.medindoDesde ? 'Medindo desde ' + esc(fData(c.medindoDesde)) + '. ' : '') +
+      (num(c.parteEstimada) > 0 ? fPct(num(c.parteEstimada) * 100) + ' do custo é estimado (o provedor não informou). ' : '') +
+      'Uma sessão termina depois de 15 min sem chamar o Mestre.' + (num(c.foraDeMesa && c.foraDeMesa.chamadas) ? ' Fora de mesa (retratos, criação de ficha): ' + fUSD((c.foraDeMesa || {}).custo) + ', sem cobrança.' : '') + '</p>' +
+    '<form data-form="preco" novalidate><div class="campos">' +
+      '<div><label for="pusd">Custo de 1 crédito (US$)</label><input id="pusd" name="usd" type="number" step="0.001" min="0.001" value="' + esc(fNumCampo(base, 4)) + '" inputmode="decimal"></div>' +
+      '<div><label for="pcambio">Câmbio (R$ por US$)</label><input id="pcambio" name="cambio" type="number" step="0.01" min="1" value="5.50" inputmode="decimal"></div>' +
+      '<div><label for="pmargem">Margem (vezes o custo)</label><input id="pmargem" name="margem" type="number" step="0.1" min="1" value="3" inputmode="decimal"></div>' +
+      '<div><label for="ptaxa">Taxa do pagamento (%)</label><input id="ptaxa" name="taxa" type="number" step="0.1" min="0" max="40" value="1" inputmode="decimal"></div>' +
+    '</div><div id="preco-saida" aria-live="polite" style="margin-top:.8rem"></div>' +
+    '<div class="acoes"><button type="submit" class="btn">Usar estes preços na configuração</button></div><p class="erro" role="alert" data-erro></p></form>';
+  const form = $('form[data-form="preco"]', host);
+  const calcular = () => {
+    const e = form.elements, usd = num(e.usd.value), cambio = num(e.cambio.value), margem = num(e.margem.value), taxa = num(e.taxa.value);
+    const pacotes = (APP._cred.config.pacotes || []).map((p, i) => ({ nome: p.nome, creditos: p.creditos, preco: precoSugerido(usd, cambio, margem, taxa, p.creditos, i), custo: p.creditos * usd * cambio }));
+    const porHora = usd * cambio;
+    $('#preco-saida', host).innerHTML =
+      '<p>Custo de 1 hora de mesa: <strong>' + fBRL(porHora) + '</strong> · preço por crédito no menor pacote: <strong>' + fBRL(pacotes[0] ? pacotes[0].preco / pacotes[0].creditos : 0) + '</strong></p>' +
+      '<div class="rolagem" style="margin-top:.5rem"><table class="tabela"><thead><tr><th scope="col">Pacote</th><th scope="col" class="num">Créditos</th><th scope="col" class="num">Preço sugerido</th><th scope="col" class="num">Custo de IA</th><th scope="col" class="num">Sobra</th></tr></thead><tbody>' +
+      pacotes.map((p) => '<tr><td>' + esc(p.nome) + '</td><td class="num">' + fCred(p.creditos) + '</td><td class="num"><strong>' + fBRL(p.preco) + '</strong></td><td class="num">' + fBRL(p.custo) + '</td><td class="num">' + fBRL(p.preco * (1 - taxa / 100) - p.custo) + '</td></tr>').join('') +
+      '</tbody></table></div>' +
+      '<p class="suave" style="margin-top:.5rem">Boas-vindas: ' + fCred(APP._cred.config.creditosIniciais) + ' créditos custam cerca de ' + fBRL(num(APP._cred.config.creditosIniciais) * porHora) + ' de IA por conta nova que jogar até o fim deles. Pacotes maiores têm 10% e 20% de desconto.</p>';
+    form._sugestao = { usd, pacotes };
+  };
+  form.addEventListener('input', calcular);
+  calcular();
+}
+const fNumCampo = (v, casas) => String(Math.round(num(v) * 10 ** casas) / 10 ** casas);
+
+function montarContas(host, contas) {
+  if (!contas.length) { host.innerHTML = '<p class="vazio">Nenhuma conta tem créditos ainda. A conta aparece aqui quando joga ou abre a tela de créditos pela primeira vez.</p>'; return; }
+  host.innerHTML = '<div class="pag-ferramentas" style="margin-bottom:.6rem"><div style="flex:1;min-width:180px"><label for="busca-cred">Buscar conta</label><input id="busca-cred" class="busca" type="search" placeholder="Nome, e-mail ou ID" data-filtro="#lista-cred"></div></div>' +
+    '<div class="rolagem alta" tabindex="0" role="region" aria-label="Contas com créditos"><table class="tabela"><thead><tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col" class="num">Saldo</th><th scope="col" class="num">Consumo no período</th><th scope="col">Último movimento</th><th scope="col"><span class="so-leitor">Ações</span></th></tr></thead><tbody id="lista-cred">' +
+    contas.map((x) => '<tr data-busca="' + esc([x.nome, x.email, x.conta].join(' ').toLowerCase()) + '"><td>' + esc(x.nome || '—') + '</td><td>' + esc(x.email || x.conta) + '</td>' +
+      '<td class="num"><strong>' + fCred(x.saldo) + '</strong></td><td class="num">' + fCred(x.usados) + '</td><td class="nq" title="' + esc(fDataHora(x.atualizadoEm)) + '">' + esc(haQuanto(x.atualizadoEm)) + '</td>' +
+      '<td class="num nq"><button type="button" class="btn btn-p" data-acao="extrato-conta" data-conta="' + esc(x.conta) + '" aria-label="Ver o extrato de ' + esc(x.nome || x.email || x.conta) + '">Extrato</button> ' +
+      '<button type="button" class="btn btn-p" data-acao="ajustar-conta" data-conta="' + esc(x.email || x.conta) + '" aria-label="Dar ou tirar créditos de ' + esc(x.nome || x.email || x.conta) + '">Ajustar</button></td></tr>').join('') +
+    '<tr class="sem-resultado" hidden><td colspan="6" class="suave">Nenhuma conta combina com a busca.</td></tr></tbody></table></div>';
+}
+
+function montarConfigCreditos(host, cfg) {
+  const pacotes = (cfg.pacotes || []).slice(0, 6);
+  while (pacotes.length < Math.min(6, (cfg.pacotes || []).length + 1)) pacotes.push({ id: '', nome: '', creditos: '', preco: '', destaque: false });
+  host.innerHTML = '<form data-form="config-creditos" novalidate>' +
+    '<label class="linha-check"><input type="checkbox" name="cobrancaAtiva"' + (cfg.cobrancaAtiva ? ' checked' : '') + '> <span><strong>Cobrança ligada</strong> — cada chamada ao Mestre desconta do líder da mesa; sem créditos, o Mestre para (menos no meio de uma luta, que termina por conta da casa).</span></label>' +
+    '<div class="campos" style="margin-top:.8rem">' +
+      '<div><label for="kini">Créditos de boas-vindas (conta nova)</label><input id="kini" name="creditosIniciais" type="number" step="0.5" min="0" max="100" value="' + esc(cfg.creditosIniciais) + '" inputmode="decimal"></div>' +
+      '<div><label for="kusd">Custo de IA que vale 1 crédito (US$)</label><input id="kusd" name="creditoUsd" type="number" step="0.001" min="0.001" max="10" value="' + esc(cfg.creditoUsd) + '" inputmode="decimal"></div>' +
+      '<div><label for="kcort">Cortesia no fim de um combate (créditos)</label><input id="kcort" name="cortesiaCombate" type="number" step="0.05" min="0" max="5" value="' + esc(cfg.cortesiaCombate) + '" inputmode="decimal"></div>' +
+      '<div class="inteira"><label for="kinstr">Como pagar (aparece no app depois do pedido; sem texto, o app não deixa pedir)</label>' +
+        '<textarea id="kinstr" name="instrucoes" maxlength="800" placeholder="Pix: sua-chave@exemplo.com (seu nome). Coloque o código do pedido na descrição. Os créditos entram assim que o pagamento for conferido.">' + esc(cfg.instrucoes || '') + '</textarea></div>' +
+    '</div>' +
+    '<h4>Pacotes à venda</h4><div class="rolagem"><table class="tabela"><thead><tr><th scope="col">Nome</th><th scope="col">Créditos</th><th scope="col">Preço (R$)</th><th scope="col">Destaque</th></tr></thead><tbody>' +
+    pacotes.map((p, i) => '<tr data-pacote="' + i + '"><td><input name="pnome' + i + '" maxlength="30" value="' + esc(p.nome) + '" aria-label="Nome do pacote ' + (i + 1) + '" placeholder="' + (p.nome ? '' : 'Novo pacote (opcional)') + '"><input type="hidden" name="pid' + i + '" value="' + esc(p.id) + '"></td>' +
+      '<td><input name="pcred' + i + '" type="number" step="0.5" min="0" max="1000" value="' + esc(p.creditos) + '" aria-label="Créditos do pacote ' + (i + 1) + '" inputmode="decimal"></td>' +
+      '<td><input name="ppreco' + i + '" type="number" step="0.01" min="0" max="10000" value="' + esc(p.preco) + '" aria-label="Preço do pacote ' + (i + 1) + '" inputmode="decimal"></td>' +
+      '<td><input type="radio" name="pdestaque" value="' + i + '"' + (p.destaque ? ' checked' : '') + ' aria-label="Pacote ' + (i + 1) + ' em destaque" style="width:auto;min-height:0"></td></tr>').join('') +
+    '</tbody></table></div><p class="suave" style="margin-top:.4rem">Para tirar um pacote, apague o nome dele.</p>' +
+    '<div class="acoes"><button type="submit" class="btn btn-primario">Salvar configuração</button></div><p class="erro" role="alert" data-erro></p></form>';
+}
+function lerConfigCreditos(f) {
+  const e = f.elements, pacotes = [];
+  const destaque = f.querySelector('input[name="pdestaque"]:checked');
+  f.querySelectorAll('tr[data-pacote]').forEach((tr) => {
+    const i = tr.dataset.pacote, nome = e['pnome' + i].value.trim();
+    if (!nome) return;
+    const creditos = num(e['pcred' + i].value);
+    if (creditos <= 0) throw new Error('O pacote ' + nome + ' precisa ter créditos.');
+    pacotes.push({ id: e['pid' + i].value, nome, creditos, preco: num(e['ppreco' + i].value), destaque: !!destaque && destaque.value === i });
+  });
+  if (!pacotes.length) throw new Error('Deixe pelo menos um pacote.');
+  return { cobrancaAtiva: e.cobrancaAtiva.checked, creditosIniciais: num(e.creditosIniciais.value), creditoUsd: num(e.creditoUsd.value), cortesiaCombate: num(e.cortesiaCombate.value), instrucoes: e.instrucoes.value, pacotes };
+}
+async function abrirExtrato(conta) {
+  const reg = abrirModal('Extrato', htmlCarregando(), { largo: true });
+  try {
+    const d = await APP.getExtrato(conta);
+    if (!modalAberto(reg)) return;
+    reg.fundo.querySelector('h2').textContent = 'Extrato de ' + (d.nome || d.email || d.conta);
+    const ext = d.extrato || [];
+    reg.corpo.innerHTML = '<p>Saldo: <strong>' + fCred(d.saldo) + ' créditos</strong> · <span class="suave">' + esc(d.email || '') + '</span></p>' +
+      (!ext.length ? '<p class="vazio" style="margin-top:.8rem">Sem movimentos.</p>' :
+      '<div class="rolagem alta" style="margin-top:.8rem" tabindex="0" role="region" aria-label="Movimentos"><table class="tabela"><thead><tr><th scope="col">Quando</th><th scope="col">Tipo</th><th scope="col">Descrição</th><th scope="col" class="num">Créditos</th></tr></thead><tbody>' +
+      ext.map((x) => '<tr><td class="nq">' + esc(fDataHora(x.t)) + '</td><td class="nq">' + esc(TIPOS_EXTRATO[x.tipo] || x.tipo) + '</td><td>' + esc(x.descricao || '') + (x.chamadas ? ' <span class="suave">(' + fInt(x.chamadas) + ' chamadas)</span>' : '') + '</td>' +
+        '<td class="num">' + (num(x.quantidade) > 0 ? '+' : '') + fCred(x.quantidade) + '</td></tr>').join('') + '</tbody></table></div>');
+    manterFoco(reg);
+  } catch (e) { if (modalAberto(reg)) reg.corpo.innerHTML = htmlErro(e, 'o extrato'); }
+}
+
 /* ═══════════ Modais ═══════════ */
 const MODAIS = [];
 function abrirModal(titulo, html, opc) {
@@ -1129,6 +1316,25 @@ const ACOES = {
   },
   mundo() { const mesa = modalDoTipo('mesa'); if (mesa) abrirMundo(mesa.cod); },
   'mundo-encontro'() { const reg = modalDoTipo('mundo'); if (reg) mudarMundo(reg, { encontro: true }, 'Encontro sorteado.'); },
+  async 'confirmar-pedido'(b) {
+    const p = ((APP._cred && APP._cred.pedidos) || []).find((x) => x.id === b.dataset.id) || { id: b.dataset.id };
+    if (!(await confirmar('Confirmar o pagamento do pedido ' + p.id + '?', (p.usuario || p.email || 'A conta') + ' recebe ' + fCred(p.creditos) + ' créditos (' + (p.nome || 'pacote') + ', ' + fBRL(p.preco) + '). Confirme só se o pagamento já caiu.', 'Confirmar pagamento'))) return;
+    try { await APP.resolverPedido(p.id, 'confirmar'); avisar('Pedido ' + p.id + ' confirmado: créditos lançados.'); renderAba(true); }
+    catch (e) { avisar('Não foi possível confirmar o pedido: ' + e.message, true); }
+  },
+  async 'recusar-pedido'(b) {
+    const id = b.dataset.id;
+    if (!(await confirmar('Recusar o pedido ' + id + '?', 'Nenhum crédito será lançado. O jogador vê o pedido como recusado no app.', 'Recusar pedido'))) return;
+    try { await APP.resolverPedido(id, 'recusar'); avisar('Pedido ' + id + ' recusado.'); renderAba(true); }
+    catch (e) { avisar('Não foi possível recusar o pedido: ' + e.message, true); }
+  },
+  'extrato-conta'(b) { abrirExtrato(b.dataset.conta); },
+  'ajustar-conta'(b) {
+    const campo = $('#cconta'); if (!campo) return;
+    campo.value = b.dataset.conta;
+    campo.scrollIntoView({ block: 'center' });
+    const q = $('#cqtd'); if (q) { q.focus(); q.select(); }
+  },
   async 'mundo-limpar'() {
     const reg = modalDoTipo('mundo'); if (!reg) return;
     if (await confirmar('Limpar a memória da mesa?', 'Fatos, NPCs, reputação e clima da mesa ' + reg.cod + ' serão apagados.', 'Limpar memória')) mudarMundo(reg, { limpar: true }, 'Memória da mesa apagada.');
@@ -1157,6 +1363,35 @@ const FORMS = {
     const e = f.elements;
     await APP.editarFicha(mesa.cod, f.dataset.uid, { nome: e.nome.value, raca: e.raca.value, classe: e.classe.value, pv: Number(e.pv.value), pvMax: Number(e.pvMax.value), nivel: Number(e.nivel.value), xp: Number(e.xp.value) });
     fecharModal(); avisar('Ficha salva.'); await preencherMesa(mesa);
+  },
+  async 'dar-creditos'(f) {
+    const e = f.elements, q = num(e.quantidade.value), conta = e.conta.value.trim();
+    if (!conta) throw new Error('Diga o e-mail ou o ID da conta.');
+    if (!q) throw new Error('Diga quantos créditos (negativo para tirar).');
+    const r = await APP.darCreditos({ conta, quantidade: q, motivo: e.motivo.value.trim() });
+    avisar((q > 0 ? 'Lançados ' : 'Retirados ') + fCred(Math.abs(q)) + ' créditos para ' + (r.nome || r.email || conta) + '. Saldo: ' + fCred(r.saldo) + '.');
+    renderAba(true);
+  },
+  async preco(f) {
+    const sug = f._sugestao, cfgForm = $('form[data-form="config-creditos"]');
+    if (!sug || !cfgForm) return;
+    cfgForm.elements.creditoUsd.value = fNumCampo(sug.usd, 4);
+    sug.pacotes.forEach((p, i) => { const campo = cfgForm.elements['ppreco' + i]; if (campo) campo.value = fNumCampo(p.preco, 2); });
+    cfgForm.scrollIntoView({ block: 'start' });
+    avisar('Preços copiados para a configuração. Confira e toque em Salvar configuração.');
+  },
+  async 'config-creditos'(f) {
+    const c = lerConfigCreditos(f);
+    const antes = APP._cred && APP._cred.config;
+    if (c.cobrancaAtiva && antes && !antes.cobrancaAtiva) {
+      if (!(await confirmar('Ligar a cobrança?', 'A partir de agora, cada chamada ao Mestre desconta créditos do líder da mesa, e mesas sem créditos param (menos no meio de uma luta). Contas novas recebem ' + fCred(c.creditosIniciais) + ' créditos de boas-vindas.', 'Ligar cobrança'))) return;
+    }
+    if (!c.cobrancaAtiva && antes && antes.cobrancaAtiva) {
+      if (!(await confirmar('Desligar a cobrança?', 'O uso continua medido, mas nenhum crédito é descontado e nenhuma mesa para.', 'Desligar cobrança'))) return;
+    }
+    await APP.salvarConfigCreditos(c);
+    avisar('Configuração dos créditos salva.');
+    renderAba(true);
   },
   async mundo(f) {
     const reg = modalDoTipo('mundo'); if (!reg) return;

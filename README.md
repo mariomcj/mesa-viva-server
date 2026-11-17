@@ -41,6 +41,9 @@ Crie um arquivo `.env` na pasta do servidor. Ele não vai para o Git.
 | `LIMITE_IA_MAX` | não | Pedidos à IA por conta a cada 10 min (padrão 40) |
 | `MINIGAMES` | não | `0` desliga os desafios opcionais antes das rolagens de Prestidigitação e Investigação |
 | `VOTACAO_DO_MESTRE` | não | `0` impede o Mestre de abrir votações (os jogadores continuam podendo) |
+| `COBRANCA_ATIVA` | não | `true` liga a cobrança de créditos. Só vale até alguém salvar a configuração no painel (aba Créditos), que passa a mandar |
+| `CREDITOS_INICIAIS` | não | Créditos de boas-vindas por conta nova (padrão 3). Também só até salvar no painel |
+| `CREDITO_USD` | não | Custo de IA, em dólares, que vale 1 crédito (padrão 0,15 ≈ 1 hora de mesa no modo Rápido). Também só até salvar no painel |
 
 ## Rodar
 
@@ -153,6 +156,18 @@ Tudo por acréscimo: quem não usa não vê diferença, e o app antigo segue fun
 - **Votação do grupo** (`votacao.js`): `POST /api/mesa/:codigo/votacao` (`pergunta`, 2 a 4 `opcoes`), `POST /api/mesa/:codigo/votar` (`opcao`) e `POST /api/mesa/:codigo/votacao/encerrar`. Fecha quando todos os jogadores online votaram, em 90 s, ou quando quem abriu (ou o dono da mesa) encerra. O Mestre também pode abrir (campo `"votacao"` na resposta) e lê o resultado no histórico. A mesa pública ganha `votacao` enquanto houver uma aberta. O app novo manda o cabeçalho `x-app-versao: 2`; o Mestre só abre votação quando todos os jogadores online estão com um app que sabe votar, e uma votação aberta por jogador fecha assim que votam todos os que conseguem (ninguém espera por quem ainda está no app antigo).
 - **Minigames** (`minigames.js`): rolagens de Prestidigitação e Investigação saem com `minigame: { tipo, alvo }`. O app joga o desafio e manda `POST /api/minigame` com `acertos`; o servidor soma de −1 a +2 no bônus, uma vez. Quem não joga rola o dado como sempre.
 - **Projeção da mesa** (`projecao.js` e `public/projecao.html`): a TV abre `/projecao` (ou `/tv`), mostra um QR Code e um código de 6 letras; um jogador lê o QR pelo app (`POST /api/projecao/parear` com `codigo` e `id`) e a tela passa a mostrar a mesa em tempo real — cena, narração, personagens, tabuleiro e as animações do combate. A tela só lê: recebe um estado público (`GET /api/projecao/:id/estado`, com a chave que só ela conhece) e os mesmos avisos de WebSocket do app. `POST /api/projecao/encerrar` desliga. Telas sem uso expiram sozinhas (15 min sem parear; 12 h paradas). O QR usa o pacote `qrcode-generator`; sem ele a página mostra só o código.
+
+## Créditos da mesa (`creditos.js`)
+
+- **Só o líder da mesa paga** (a conta que criou a mesa). Quem entra na mesa joga de graça. Mesas criadas pelo painel não cobram de ninguém.
+- **1 crédito ≈ 1 hora de mesa no modo Rápido**, para o grupo inteiro. Cada chamada à IA desconta o custo real dela (o `usage.cost` que o provedor devolve) dividido por `creditoUsd`; sem custo informado, vale uma estimativa por chamada. O modo Caprichado gasta mais, sozinho.
+- **Boas-vindas**: conta nova ganha `creditosIniciais` (padrão 3) na primeira vez que o servidor olha o saldo dela.
+- **Cobrança desligada por padrão**: o uso de cada mesa é medido (tabela `uso_ia_mesa`), mas nada é descontado nem bloqueado. Liga e desliga na aba **Créditos** do painel.
+- **Sem créditos**, as rotas que chamam o Mestre respondem `402` com `semCreditos: true` (antes de travar a mesa), e a mesa pública ganha `creditos: { lider, podeJogar, aviso, saldo* }` (*saldo só para o líder; o campo só existe com a cobrança ligada). No meio de uma luta, o combate termina por conta da casa até `cortesiaCombate` créditos.
+- **Pagamento por pedido**: o app cria um pedido (`MV-XXXXXX`) de um pacote; o jogador paga como as instruções do painel disserem (Pix, por exemplo) e o admin confirma no painel, que lança os créditos uma vez só. Sem instruções configuradas, o app não deixa pedir. Pedidos esperando expiram em 7 dias.
+- **Painel → Créditos**: pedidos para confirmar ou recusar, dar ou tirar créditos de qualquer conta (por e-mail ou ID, com motivo no extrato), saldos, **preço sugerido pelo consumo** (horas de jogo medidas, custo por hora, câmbio, margem e taxa) e a configuração (cobrança, boas-vindas, custo de 1 crédito, cortesia, instruções e pacotes).
+- Rotas: `GET /api/conta/creditos`, `POST /api/conta/creditos/pedido`, `POST /api/conta/creditos/pedido/:id/cancelar`; painel em `/api/admin/creditos*`.
+- Tabelas novas: `creditos_config`, `creditos_saldos`, `creditos_extrato`, `creditos_pedidos`, `uso_ia_mesa`. Tabelas de uma versão antiga (`contas_creditos`, `compras`, `uso_ia`) não são usadas nem alteradas.
 
 ## Melhorias só de servidor (`melhorias.js`)
 

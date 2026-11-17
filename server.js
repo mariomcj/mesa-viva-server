@@ -22,6 +22,7 @@ const T = require("./temas");
 const MP = require("./mapa");
 const PG = require("./progressao");
 const MG = require("./minigames");
+const CR = require("./creditos");
 
 // ── Config ──
 // .env primeiro, para as variáveis valerem abaixo
@@ -247,6 +248,9 @@ function mesaDoMembro(req, res) {
 // Limite de pedidos à IA por conta (protege os créditos)
 const _usoIA = new Map(); // uid -> [instantes]
 function limiteIA(req, res, next) {
+  // Créditos: com a cobrança ligada, uma mesa cujo líder ficou sem créditos para aqui (402), antes de travar a mesa
+  const semCreditos = CR.bloqueioDoPedido(req);
+  if (semCreditos) return res.status(402).json({ error: semCreditos, semCreditos: true });
   const t = agora();
   const lista = (_usoIA.get(req.uid) || []).filter((x) => t - x < LIMITE_IA.janelaMs);
   if (lista.length >= LIMITE_IA.max) return erro(res, 429, "Muitos pedidos ao Mestre. Espere alguns minutos.");
@@ -352,6 +356,8 @@ let NV = null;
 let MH = null;
 // Votação do grupo e projeção da mesa (TV): ligadas mais abaixo
 let VT = null, PJ = null;
+// Créditos da mesa (só o líder gasta): ligados mais abaixo
+let CRA = null;
 /** XP por ação narrada. Padrão 5; XP_POR_ACAO no .env deixa a subida de nível mais lenta (recomendado: 2). */
 function xpPorAcao() {
   const v = process.env.XP_POR_ACAO;
@@ -374,6 +380,8 @@ if (!BASE_URL_FIXA) {
 }
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+// Contexto de cada pedido: diz a quem cobrar as chamadas à IA feitas por ele (créditos da mesa)
+app.use(CR.contextoMw);
 
 app.get(["/admin", "/admin/"], (req, res) => res.redirect(301, "/admin.html"));
 app.use(express.static("public", {
@@ -1371,6 +1379,7 @@ app.get("/api/mesa/:codigo", authMw, (req, res) => {
   MH.mesaPublica(mesa);
   try { VT.mesaPublica(mesa, codigo, { uid: req.uid, versao: req.get("x-app-versao") }); } catch (e) { delete mesa.votacaoGrupo; }
   try { PJ.mesaPublica(mesa, codigo); } catch (e) {}
+  try { CRA?.mesaPublica(mesa, codigo, req.uid, M.idiomaValido(req.get("x-idioma"))); } catch (e) { delete mesa.creditos; }
   mesa.aventura = av ? av.id : "";
   mesa.aventuraNome = av ? (M.idiomaValido(req.get("x-idioma")) === "en" ? av.nomeEn : av.nome) : "";
   res.json(mesa);
@@ -2056,6 +2065,8 @@ MG.instalar({ app, db, authMw, mesaDoMembro, salvarMesa, registrar, broadcast, e
 PJ = require("./projecao").instalar({ app, db, authMw, mesaDoMembro, erro, json, texto, agora, broadcast, R, T, clientes: () => wss.clients,
   votacao: (codigo) => VT.ler(codigo), mundo: (mesa) => { const m = { mundo: mesa.mundo }; MH.mesaPublica(m); return m; },
   janelaOnlineMs: ONLINE_WINDOW_MS, travaMs: TRAVA_MS });
+// ── Créditos: o líder da mesa paga as chamadas à IA; pedidos de compra e créditos manuais pelo painel ──
+CRA = CR.instalar({ app, db, authMw, adminMw, erro, codigoValido, ehMembro, M });
 
 // ── WebSocket: avisos em tempo real (o app consulta o estado ao receber qualquer aviso) ──
 const server = http.createServer(app);
