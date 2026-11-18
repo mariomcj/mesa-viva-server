@@ -185,8 +185,13 @@ function instalar(d) {
     const rol = json(mesa.rolagem);
     const cdVisivel = mesa.cdVisivel !== 0;
     const mundo = d.mundo ? d.mundo(mesa) : {};
-    const log = db.prepare("SELECT id, t, tipo, texto, nome, res, ok FROM log WHERE codigo = ? ORDER BY id DESC LIMIT ?").all(codigo, LINHAS_DO_DIARIO).reverse();
-    for (const e of log) e.ok = e.ok == null ? null : e.ok === 1;
+    const log = db.prepare("SELECT id, t, tipo, texto, nome, res, ok, dados FROM log WHERE codigo = ? ORDER BY id DESC LIMIT ?").all(codigo, LINHAS_DO_DIARIO).reverse();
+    for (const e of log) {
+      e.ok = e.ok == null ? null : e.ok === 1;
+      // os dados rolados (d20 e dano), para a tela mostrar os dados rolando
+      const dados = json(e.dados);
+      if (dados) e.dados = dados; else delete e.dados;
+    }
     return {
       pareada: true, agora: t,
       mesa: {

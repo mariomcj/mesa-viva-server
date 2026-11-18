@@ -354,6 +354,13 @@ test("projeção: a TV pede o QR, o jogador pareia, a tela recebe a mesa e os av
   assert.deepEqual([e.combate.mapa.colunas, e.combate.mapa.linhas, e.combate.inimigos[0].nome], [10, 14, "Ogro"]);
   assert.ok(e.combate.posicoes[ana.id] && e.combate.posicoes.ini_0);
   assert.ok(e.log.some((l) => l.texto.startsWith("Ogro ataca ")));
+  // cada ataque leva os dados rolados, para a tela mostrar o d20 e o dano rolando
+  const golpe = e.log.find((l) => l.texto.startsWith("Ogro ataca "));
+  assert.equal(golpe.dados.contra, "CA");
+  assert.ok(golpe.dados.d20 >= 1 && golpe.dados.d20 <= 20);
+  assert.equal(golpe.dados.total, golpe.dados.d20 + golpe.dados.bonus);
+  if (golpe.dados.dano) assert.equal(golpe.dados.dano.total, golpe.dados.dano.pecas.reduce((s, [, v]) => s + v, 0) + golpe.dados.dano.fixo);
+  assert.ok(e.log.filter((l) => l.tipo !== "roll").every((l) => !("dados" in l)));
 
   // uma tela não vai para duas mesas; encerrar desliga a tela e apaga o acesso
   const outra = await mesaEmJogo([caio]);

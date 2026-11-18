@@ -161,6 +161,32 @@
   #dado.bom .d20 path { fill: var(--bom); } #dado.ruim .d20 path { fill: var(--ruim); } #dado.critico .d20 path { fill: var(--ambar); }
   @keyframes gira { from { transform: rotate(-540deg) scale(.3); } to { transform: none; } }
   @keyframes dadoEntra { 0% { opacity: 0; } 8% { opacity: 1; } 82% { opacity: 1; } 100% { opacity: 0; } }
+  /* Rolagem: o d20 gira e para, depois os dados de dano; só então a mesa continua */
+  #rolagem { position: absolute; inset: 0; z-index: 18; display: flex; align-items: center; justify-content: center; padding: calc(var(--u) * 2.4); background: rgba(0,0,0,.42); pointer-events: none; animation: entra .3s ease; }
+  #palco.batalha #rolagem { justify-content: flex-end; background: linear-gradient(90deg, transparent 52%, rgba(0,0,0,.55) 60%); }
+  #rolagem .rCaixa { width: min(78vw, calc(var(--u) * 52)); padding: calc(var(--u) * 2) calc(var(--u) * 2.4) calc(var(--u) * 2.2); border-radius: calc(var(--u) * 1.6); background: rgba(25,32,37,.97); border: 2px solid rgba(227,154,74,.55); box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 6) rgba(0,0,0,.65); text-align: center; }
+  #palco.batalha #rolagem .rCaixa { width: calc(42vw - var(--u) * 2.4); }
+  .rTitulo { font-size: calc(var(--u) * 2.5); margin-bottom: calc(var(--u) * 1.3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .poli { position: relative; width: calc(var(--u) * 7.5); height: calc(var(--u) * 7.5); margin: 0 auto; }
+  .poli.grande { width: calc(var(--u) * 12.5); height: calc(var(--u) * 12.5); }
+  .poli svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .poli .corpo { fill: #10161a; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; }
+  .poli .aresta { fill: none; stroke: currentColor; stroke-opacity: .35; stroke-width: 2; }
+  .poli span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: calc(var(--u) * 2.9); color: var(--texto); font-variant-numeric: tabular-nums; }
+  .poli.grande span { font-size: calc(var(--u) * 4.6); }
+  .poli.d20 { color: var(--brasa); } .poli.dano { color: var(--ruim); } .poli.cura { color: var(--bom); }
+  .poli.girando svg { animation: rodaDado .6s linear infinite; }
+  .poli.parou svg { filter: drop-shadow(0 0 calc(var(--u) * .9) currentColor); }
+  @keyframes rodaDado { to { transform: rotate(360deg); } }
+  .rMostra { opacity: 0; transition: opacity .2s; } .rMostra.on { opacity: 1; }
+  .rConta { margin-top: calc(var(--u) * 1); color: var(--apagado); font-size: calc(var(--u) * 2.1); font-variant-numeric: tabular-nums; }
+  .rSelo { font-size: calc(var(--u) * 3.3); font-weight: 800; }
+  .rSelo.bom { color: var(--bom); } .rSelo.ruim { color: var(--ruim); } .rSelo.critico { color: var(--ambar); }
+  .rDano { display: flex; flex-wrap: wrap; justify-content: center; gap: calc(var(--u) * 1.1); margin-top: calc(var(--u) * 1.6); }
+  .rDano.muitos .poli { width: calc(var(--u) * 5.4); height: calc(var(--u) * 5.4); } .rDano.muitos .poli span { font-size: calc(var(--u) * 2.2); }
+  .rFaces { margin-top: calc(var(--u) * .3); color: var(--apagado); font-size: calc(var(--u) * 1.25); }
+  .rTotal { margin-top: calc(var(--u) * 1); font-size: calc(var(--u) * 3); font-weight: 800; font-variant-numeric: tabular-nums; }
+  .rTotal.dano { color: #ff8b7a; } .rTotal.cura { color: var(--bom); }
   #votacao { position: absolute; left: 50%; top: 20%; transform: translateX(-50%); width: min(62vw, calc(var(--u) * 70)); z-index: 15; padding: calc(var(--u) * 2) calc(var(--u) * 2.4); border-radius: calc(var(--u) * 1.4); background: rgba(25,32,37,.97); border: 2px solid var(--ambar); box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 6) rgba(0,0,0,.6); }
   #votacao h2 { margin: 0 0 calc(var(--u) * .4); font-size: calc(var(--u) * 1.4); color: var(--ambar); font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
   #votacao .pergunta { font-size: calc(var(--u) * 2.6); margin-bottom: calc(var(--u) * 1.4); }
@@ -181,6 +207,7 @@
     #grupo .cartao { flex: 1 1 42%; } #baixo, #palco.batalha #baixo { right: calc(var(--u) * 2.4); }
     #arena, #ordem { right: calc(var(--u) * 2.4); } #arena { bottom: 56vh; }
     #palco.batalha #grupo { left: calc(var(--u) * 1.5); top: auto; bottom: 30vh; } #palco.batalha #baixo { left: calc(var(--u) * 2.4); }
+    #palco.batalha #rolagem { justify-content: center; background: rgba(0,0,0,.42); } #palco.batalha #rolagem .rCaixa { width: min(88vw, calc(var(--u) * 52)); }
   }
 </style>
 </head>
@@ -238,6 +265,8 @@
   var pecas = {};               // id -> elemento da peça no tabuleiro
   var cartoes = {};             // id -> elemento do cartão (grupo e inimigos)
   var fila = [], filaRodando = false;
+  var mostrado = null;          // último estado desenhado (a vida e a vez esperam os dados pararem)
+  var geracaoFila = 0, rolagemAtiva = false;
   var fundoAtual = '', camada = 0, mapaAssinatura = '';
 
   var NOME_STATUS = { envenenado: ['Envenenado', 'Poisoned'], em_chamas: ['Em chamas', 'Burning'], atordoado: ['Atordoado', 'Stunned'], protegido: ['Protegido', 'Shielded'], regenerando: ['Regenerando', 'Regenerating'] };
@@ -273,6 +302,8 @@
   function limparPalco() {
     $('#eventos').textContent = ''; $('#grupo').textContent = ''; $('#ordem').textContent = '';
     pecas = {}; cartoes = {}; mapaAssinatura = ''; narracaoMostrada = 0; fila.length = 0;
+    geracaoFila++; filaRodando = false; rolagemAtiva = false; mostrado = null;
+    var rol = $('#rolagem'); if (rol) rol.remove();
     $('#narracao').hidden = true; $('#narracao').textContent = '';
     limparTabuleiro();
   }
@@ -352,16 +383,40 @@
     var primeira = !anterior || anterior.mesa.codigo !== e.mesa.codigo;
     if (e.mesa.idioma !== idioma) { idioma = e.mesa.idioma; textosFixos(); }
     mostrarPalco();
-    var novas = [];
+    var antes = anterior;
+    anterior = e;
     if (primeira) {
       ultimoLog = e.log.length ? e.log[e.log.length - 1].id : 0;
       limparPalco();
-    } else {
-      novas = e.log.filter(function (l) { return l.id > ultimoLog; });
-      if (novas.length) ultimoLog = novas[novas.length - 1].id;
+      aplicar(e, true);
+      return;
     }
-    var antes = anterior;
-    anterior = e;
+    var novas = e.log.filter(function (l) { return l.id > ultimoLog; });
+    if (novas.length) ultimoLog = novas[novas.length - 1].id;
+    var eventos = [];
+    novas.forEach(function (l) { var ev = interpretar(l, e, antes); if (ev) eventos.push(ev); });
+    var ehRolagem = function (x) { return x.tipo === 'rolagem'; };
+    var segurar = rolagemAtiva || eventos.some(ehRolagem) || fila.some(function (x) { return x.tipo === 'rolagem' || x.tipo === 'estado'; });
+    if (!segurar) {
+      // nada rolando: a mesa muda já e os avisos entram em seguida
+      aplicar(e, false);
+      eventos.forEach(function (x) { fila.push(x); });
+      rodarFila();
+      return;
+    }
+    // dados vão rolar: a vida, a vez e a narração só mudam depois que eles param.
+    // Se o combate começou agora, o tabuleiro aparece já (com a vida de antes) para os golpes terem onde acontecer.
+    if (e.combate && e.combate.mapa && !(mostrado && mostrado.combate && mostrado.combate.mapa)) aplicar(comVidaDe(e, mostrado), false);
+    eventos.forEach(function (x) { fila.push(x); });
+    var ultimo = fila[fila.length - 1];
+    if (!eventos.length && ultimo && ultimo.tipo === 'estado') ultimo.e = e; else fila.push({ tipo: 'estado', e: e });
+    rodarFila();
+  }
+
+  /** Desenha um estado da mesa e mostra a vida que mudou desde o último desenhado. */
+  function aplicar(e, primeira) {
+    var antes = mostrado;
+    mostrado = e;
     desenharTopo(e);
     desenharFundo(e);
     var emBatalha = !!(e.combate && e.combate.mapa);
@@ -373,14 +428,22 @@
     desenharNarracao(e, primeira);
     desenharSituacao(e);
     desenharVotacao(e);
-    // primeiro os golpes do diário (quem ataca quem), depois os números de vida que mudaram
-    var ultimoGolpe = null;
-    novas.forEach(function (l) { var ev = interpretar(l, e, antes); if (ev) { if (ev.tipo === 'ataque') ultimoGolpe = ev; fila.push(ev); } });
-    if (antes && !primeira) {
-      var mostrar = function () { mostrarDiferencas(antes, e); };
-      if (ultimoGolpe) ultimoGolpe.depois = mostrar; else mostrar();
-    }
-    rodarFila();
+    if (antes && !primeira) mostrarDiferencas(antes, e);
+  }
+
+  /** O estado [e] com a vida, a narração e a votação de [base]: o tabuleiro aparece sem adiantar o resultado dos dados. */
+  function comVidaDe(e, base) {
+    var c = JSON.parse(JSON.stringify(e));
+    if (!base) return c;
+    var pv = {};
+    base.fichas.forEach(function (f) { pv[f.uid] = f.pv; });
+    if (base.combate) base.combate.inimigos.forEach(function (i) { pv[i.id] = i.pv; });
+    c.fichas.forEach(function (f) { if (f.uid in pv) f.pv = pv[f.uid]; });
+    if (c.combate) c.combate.inimigos.forEach(function (i) { if (i.id in pv) i.pv = pv[i.id]; });
+    c.log = base.log;
+    c.mesa.votacao = base.mesa.votacao;
+    c.mesa.narrando = '';
+    return c;
   }
 
   function desenharTopo(e) {
@@ -429,7 +492,7 @@
     tab.style.backgroundImage = ''; tab.classList.remove('comImagem');
   }
   function ajustarTabuleiro() {
-    var e = anterior; if (!e || !e.combate || !e.combate.mapa) return;
+    var e = mostrado; if (!e || !e.combate || !e.combate.mapa) return;
     var m = e.combate.mapa, arena = $('#arena'), tab = $('#tabuleiro');
     var L = arena.clientWidth, A = arena.clientHeight; if (!L || !A) return;
     var lado = Math.floor(Math.min(L / m.colunas, A / m.linhas));
@@ -616,6 +679,14 @@
     return melhor ? melhor.id : null;
   }
   function interpretar(l, e, antes) {
+    var ev = interpretarLinha(l, e, antes);
+    var d = l.tipo === 'roll' ? l.dados : null;
+    if (d && (typeof d.d20 === 'number' || (d.dano && typeof d.dano.total === 'number'))) {
+      return { tipo: 'rolagem', l: l, d: d, golpe: ev && ev.tipo === 'ataque' ? ev : null };
+    }
+    return ev;
+  }
+  function interpretarLinha(l, e, antes) {
     var t = l.texto || '';
     if (l.tipo === 'narr') return null;                                   // a narração aparece na caixa própria
     if (l.tipo === 'acao') return { tipo: 'linha', classe: 'acao', nome: l.nome, texto: t };
@@ -655,12 +726,154 @@
         if (ev.dado) dado(ev);
         golpe(ev);
         evento(ev.bom === true ? 'bom' : ev.bom === false ? 'ruim' : '', '', ev.texto.replace(/ \(chance \d+%\)/, ''), ev.dado ? ev.res : '');
-        if (ev.depois) setTimeout(ev.depois, 430);
         espera = ev.dado ? 1500 : 1000;
+      }
+      else if (ev.tipo === 'estado') { aplicar(ev.e, false); espera = 150; }
+      else if (ev.tipo === 'rolagem') {
+        var esperando = fila.filter(function (x) { return x.tipo === 'rolagem'; }).length;
+        if (esperando < 6) {
+          var g = geracaoFila;
+          rolarDados(ev, function () { if (g !== geracaoFila) return; filaRodando = false; rodarFila(); });
+          return;
+        }
+        // muitas rolagens acumuladas (a tela ficou sem rede): as mais antigas passam sem animar
+        if (ev.golpe) golpe(ev.golpe);
+        linhaDaRolagem(ev);
+        espera = 250;
       }
     } catch (x) { if (window.console) console.error(x); }
     if (fila.length > 8) espera = Math.min(espera, 250);                 // muita coisa de uma vez: acelera para não atrasar
-    setTimeout(function () { filaRodando = false; rodarFila(); }, espera);
+    var ger = geracaoFila;
+    setTimeout(function () { if (ger !== geracaoFila) return; filaRodando = false; rodarFila(); }, espera);
+  }
+
+  // ── Dados rolando ──
+  var FORMAS = { 4: '50,8 95,88 5,88', 6: '12,12 88,12 88,88 12,88', 8: '50,3 95,50 50,97 5,50', 10: '50,3 93,42 50,97 7,42', 12: '50,3 96,37 78,94 22,94 4,37', 20: '50,3 93,27 93,73 50,97 7,73 7,27' };
+  function poliedro(faces, classe) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var caixa = el('div', 'poli ' + classe);
+    var svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 100 100'); svg.setAttribute('aria-hidden', 'true');
+    var forma;
+    if (FORMAS[faces]) { forma = document.createElementNS(NS, 'polygon'); forma.setAttribute('points', FORMAS[faces]); }
+    else { forma = document.createElementNS(NS, 'circle'); forma.setAttribute('cx', '50'); forma.setAttribute('cy', '50'); forma.setAttribute('r', '46'); }
+    forma.setAttribute('class', 'corpo'); svg.appendChild(forma);
+    if (faces === 20) {
+      var a = document.createElementNS(NS, 'path'); a.setAttribute('d', 'M50 3 L22 66 L78 66 Z M7 27 L22 66 M93 27 L78 66 M22 66 L50 97 L78 66'); a.setAttribute('class', 'aresta'); svg.appendChild(a);
+    }
+    caixa.appendChild(svg);
+    var num = el('span', '', '');
+    caixa.appendChild(num);
+    return { caixa: caixa, num: num };
+  }
+  function tituloRolagem(l) {
+    var t = (l.texto || '').replace(/ \(chance \d+%\)/, '');
+    var i = t.indexOf(':'); if (i > 0) return t.slice(0, i).trim();
+    var m = t.match(/^(.*?)\s+(recupera|sofre)\s/); return m ? m[1] : t;
+  }
+  function passou(d) { return d.d20 === 20 || (d.d20 !== 1 && d.alvo != null && (d.total || 0) >= d.alvo); }
+  function seloD20(d) {
+    if (d.d20 === 20) return tr('Crítico!', 'Critical!');
+    if (d.d20 === 1) return tr('Falha crítica', 'Critical miss');
+    if (d.contra === 'CA') return passou(d) ? tr('Acertou', 'Hit') : tr('Errou', 'Missed');
+    return passou(d) ? tr('Sucesso', 'Success') : tr('Falha', 'Failure');
+  }
+  function contaD20(d) {
+    var b = d.bonus > 0 ? ' + ' + d.bonus : d.bonus < 0 ? ' − ' + (-d.bonus) : '';
+    var contra = d.contra === 'CA' ? tr('CA', 'AC') : d.contra === 'CD' ? tr('CD', 'DC') : '';
+    return d.d20 + b + ' = ' + d.total + (d.alvo != null && contra ? '  ·  ' + contra + ' ' + d.alvo : '');
+  }
+  function contaDano(d) {
+    var dn = d.dano, pecas = (dn.pecas || []).slice(0, 12), partes = pecas.map(function (p) { return p[1] < 0 ? '− ' + (-p[1]) : String(p[1]); });
+    var fixo = !pecas.length ? '' : dn.fixo > 0 ? ' + ' + dn.fixo : dn.fixo < 0 ? ' − ' + (-dn.fixo) : '';
+    var conta = partes.length ? partes.join(' + ').replace(/\+ −/g, '−') + fixo + ' = ' : '';
+    return conta + (d.cura ? tr(dn.total + ' PV', dn.total + ' HP') : tr(dn.total + ' de dano', dn.total + ' damage'));
+  }
+  function linhaDaRolagem(ev) {
+    var l = ev.l;
+    evento(l.ok === true ? 'bom' : l.ok === false ? 'ruim' : '', '', (l.texto || '').replace(/ \(chance \d+%\)/, ''), l.res || '');
+  }
+
+  /** Mostra uma rolagem: o d20 gira e para (com o golpe no tabuleiro), depois os dados de dano. Chama [fim] quando os dados param. */
+  function rolarDados(ev, fim) {
+    var d = ev.d, l = ev.l, ger = geracaoFila, feito = false, sorteio = null, timers = [];
+    var reduzir = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    var t = reduzir ? { g20: 250, l20: 1100, gd: 250, ld: 1300 } : { g20: 1300, l20: 800, gd: 1000, ld: 1200 };
+    var temD20 = typeof d.d20 === 'number';
+    var dano = d.dano && typeof d.dano.total === 'number' ? d.dano : null;
+    rolagemAtiva = true;
+    var velho = $('#rolagem'); if (velho) velho.remove();
+    var fundo = el('div'); fundo.id = 'rolagem';
+    var caixa = el('div', 'rCaixa'); fundo.appendChild(caixa);
+    caixa.appendChild(el('div', 'rTitulo titulo', tituloRolagem(l)));
+    var anuncio = el('div', '', ''); anuncio.setAttribute('aria-live', 'polite'); anuncio.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)'; fundo.appendChild(anuncio);
+
+    var d20 = null, conta20 = null, selo20 = null;
+    if (temD20) {
+      d20 = { pd: poliedro(20, 'd20 grande'), faces: 20, valor: d.d20 };
+      caixa.appendChild(d20.pd.caixa);
+      conta20 = el('div', 'rConta rMostra', contaD20(d));
+      selo20 = el('div', 'rSelo rMostra ' + (d.d20 === 20 ? 'critico' : l.ok === true ? 'bom' : l.ok === false ? 'ruim' : passou(d) ? 'bom' : 'ruim'), seloD20(d));
+      caixa.appendChild(conta20); caixa.appendChild(selo20);
+    }
+    var areaDano = null, dadosDano = [], totalDano = null;
+    if (dano) {
+      var pecas = (dano.pecas || []).slice(0, 12);
+      areaDano = el('div', 'rDano' + (pecas.length > 4 ? ' muitos' : '')); areaDano.hidden = true;
+      pecas.forEach(function (p) {
+        var faces = Math.max(2, Number(p[0]) || 6);
+        var x = { pd: poliedro(faces, d.cura ? 'cura' : 'dano'), faces: faces, valor: Math.abs(Number(p[1]) || 0) };
+        var col = el('div'); col.appendChild(x.pd.caixa); col.appendChild(el('div', 'rFaces', 'd' + faces));
+        areaDano.appendChild(col); dadosDano.push(x);
+      });
+      totalDano = el('div', 'rTotal rMostra ' + (d.cura ? 'cura' : 'dano'), (dano.critico ? tr('Crítico', 'Critical') + ' · ' : '') + contaDano(d));
+      totalDano.hidden = true;
+      caixa.appendChild(areaDano); caixa.appendChild(totalDano);
+    }
+    $('#palco').appendChild(fundo);
+
+    var acabar = function () {
+      if (feito) return;
+      feito = true;
+      clearInterval(sorteio); timers.forEach(clearTimeout);
+      fundo.remove();
+      rolagemAtiva = false;
+      if (ger !== geracaoFila) return;
+      try { linhaDaRolagem(ev); } catch (x) { if (window.console) console.error(x); }
+      fim();
+    };
+    var depois = function (ms, f) {
+      timers.push(setTimeout(function () {
+        if (feito || ger !== geracaoFila) return;
+        try { f(); } catch (x) { if (window.console) console.error(x); acabar(); }
+      }, ms));
+    };
+    var sortear = function (x) { return String(1 + Math.floor(Math.random() * x.faces)); };
+    var girar = function (lista) {
+      lista.forEach(function (x) { if (!reduzir) x.pd.caixa.classList.add('girando'); x.pd.num.textContent = reduzir ? '…' : sortear(x); });
+      if (!reduzir) sorteio = setInterval(function () { lista.forEach(function (x) { x.pd.num.textContent = sortear(x); }); }, 80);
+    };
+    var parar = function (lista) {
+      clearInterval(sorteio); sorteio = null;
+      lista.forEach(function (x) { x.pd.caixa.classList.remove('girando'); x.pd.caixa.classList.add('parou'); x.pd.num.textContent = String(x.valor); });
+    };
+    var faseDano = function () {
+      if (!dano) { acabar(); return; }
+      areaDano.hidden = false; totalDano.hidden = false;
+      var mostrarTotal = function () { totalDano.classList.add('on'); anuncio.textContent = totalDano.textContent; depois(t.ld, acabar); };
+      if (dadosDano.length) { girar(dadosDano); depois(t.gd, function () { parar(dadosDano); mostrarTotal(); }); }
+      else mostrarTotal();
+    };
+    if (temD20) {
+      girar([d20]);
+      depois(t.g20, function () {
+        parar([d20]);
+        conta20.classList.add('on'); selo20.classList.add('on');
+        anuncio.textContent = tituloRolagem(l) + '. ' + contaD20(d) + '. ' + seloD20(d) + '.';
+        if (ev.golpe) golpe(ev.golpe); else if (d.d20 === 20) clarao('critico');
+        depois(t.l20, faseDano);
+      });
+    } else faseDano();
+    setTimeout(acabar, 15000);                                            // rede de segurança
   }
 
   function centro(id) {
