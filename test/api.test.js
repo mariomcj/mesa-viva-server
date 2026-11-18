@@ -161,6 +161,9 @@ test("fluxo completo: começar, agir, teste, rolar, diário com sucesso/falha em
   const roll = log.find((e) => e.tipo === "roll");
   assert.equal(roll.ok, true);
   assert.match(roll.texto, /15\+5 = 20/);
+  // valores do dado para o app animar
+  assert.deepEqual(roll.dados, { d20: 15, bonus: 5, alvo: roll.dados.alvo, contra: "CD", total: 20 });
+  assert.ok(log.filter((e) => e.tipo !== "roll").every((e) => !("dados" in e)));
 
   await post("/api/configurar-mesa", { codigo, cdVisivel: false }, o);
   assert.equal((await get(`/api/mesa/${codigo}`, o)).d.cdVisivel, false);

@@ -114,7 +114,7 @@ test("rolagem com opções: dano pelo elemento, selo do resultado e condição d
   // sem opções: o mesmo resultado de antes das melhorias
   c = combate();
   r = R.resolverRolagem(rol({ elemento: "fogo" }), 15, c, "Ana");
-  assert.deepEqual(Object.keys(r), ["natural", "total", "sucesso", "dano", "descricao"]);
+  assert.deepEqual(Object.keys(r), ["natural", "total", "sucesso", "dano", "descricao", "dados"]);  // dados: para o app animar
   assert.deepEqual([r.dano, c.inimigos[0].pv], [10, 190]);
 });
 

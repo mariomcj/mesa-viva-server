@@ -108,18 +108,30 @@ function rolar(expr, critico = false, rng = Math.random) {
   const re = /([+-]?)(\d*)d(\d+)|([+-]?)(\d+)/g;
   let total = 0;
   const dados = [];
+  const pecas = [];          // [faces, valor com sinal], para o app mostrar cada dado rolando
   let m;
   while ((m = re.exec(s))) {
     if (m[3]) {
       const qtd = Math.min(40, Number(m[2] || 1) * (critico ? 2 : 1));
       const faces = Math.max(1, Math.min(100, Number(m[3])));
       const sg = m[1] === "-" ? -1 : 1;
-      for (let i = 0; i < qtd; i++) { const r = d(faces, rng); dados.push(r); total += sg * r; }
+      for (let i = 0; i < qtd; i++) { const r = d(faces, rng); dados.push(r); pecas.push([faces, sg * r]); total += sg * r; }
     } else if (m[5]) {
       total += (m[4] === "-" ? -1 : 1) * Number(m[5]);
     }
   }
-  return { total: Math.max(0, total), dados };
+  return { total: Math.max(0, total), dados, pecas };
+}
+
+/**
+ * Os dados de um dano (ou cura) para o app animar: cada dado com as faces e o valor, e o resto
+ * (modificador, elementos, talentos) em `fixo`, de modo que a soma das peças + fixo = total.
+ */
+function resumoDano(r, totalFinal, critico = false) {
+  const pecas = (r?.pecas || []).slice(0, 12);
+  const soma = pecas.reduce((s, [, v]) => s + v, 0);
+  const total = Math.max(0, Math.round(Number(totalFinal ?? r?.total) || 0));
+  return { pecas, fixo: total - soma, total, ...(critico ? { critico: true } : {}) };
 }
 
 function bonusPericia(f, pericia) {
@@ -483,13 +495,14 @@ function resolverRolagem(rol, natural, combate, nomeAtacante, opcoes = {}) {
   natural = Math.max(1, Math.min(20, Math.round(Number(natural)) || 1));
   const total = natural + (rol.bonus || 0);
   const sucesso = natural === 20 || (natural !== 1 && total >= (rol.cd || 13));
-  let dano, descricao, ajuste = null;
+  let dano, descricao, ajuste = null, rolado = null;
   if (rol.tipo === "ataque") {
     if (sucesso) {
       // crítico no 20; talentos e subclasse podem baixar para 19 (rol.critMin), desde que o golpe acerte
       const critico = natural === 20 || natural >= (Number(rol.critMin) || 20);
       const r = rolar(rol.dano || "1d4", critico);
       dano = r.total;
+      rolado = { r, critico };
       const alvo = combate?.inimigos?.find((i) => i.id === rol.alvo || i.nome === rol.alvo);
       if (alvo && opcoes.ajustarDano) {
         ajuste = opcoes.ajustarDano(rol, alvo, dano, critico) || null;
@@ -505,6 +518,9 @@ function resolverRolagem(rol, natural, combate, nomeAtacante, opcoes = {}) {
     descricao = `${rol.rotulo}: ${natural}${sinal(rol.bonus)} = ${total} vs CD ${rol.cd} — ${sucesso ? "sucesso" : "falha"}.`;
   }
   const resultado = { natural, total, sucesso, dano, descricao };
+  // para o app animar o d20 e os dados de dano
+  resultado.dados = { d20: natural, bonus: rol.bonus || 0, alvo: rol.cd || 13, contra: rol.tipo === "ataque" ? "CA" : "CD", total,
+    ...(rolado && dano !== undefined ? { dano: resumoDano(rolado.r, dano, rolado.critico) } : {}) };
   if (opcoes.selo) { const selo = opcoes.selo(rol, resultado, ajuste?.selo || ""); if (selo) resultado.selo = selo; }
   if (ajuste?.avisos?.length) resultado.avisos = ajuste.avisos;
   return resultado;
@@ -582,14 +598,16 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
     const nat = d(20);
     const total = nat + inimigo.ataque;
     const acertou = nat === 20 || (nat !== 1 && total >= ca);
-    let dano = 0;
+    let dano = 0, rolado = null;
     if (acertou) {
-      dano = rolar(inimigo.dano, nat === 20).total;
+      rolado = rolar(inimigo.dano, nat === 20);
+      dano = rolado.total;
       alvo.pv = Math.max(0, alvo.pv - dano);
     }
+    const dados = { d20: nat, bonus: inimigo.ataque || 0, alvo: ca, contra: "CA", total, ...(rolado ? { dano: resumoDano(rolado, dano, nat === 20) } : {}) };
     const extras = acertou && opcoes.aoAcertar ? opcoes.aoAcertar(inimigo, alvo, dano, c) || [] : [];
     const linha = `${inimigo.nome} ataca ${alvo.nome}: ${nat}${sinal(inimigo.ataque)} = ${total} vs CA ${ca}${bonusCA ? ` (cobertura +${bonusCA})` : ""}${protecao ? ` (protegido +${protecao})` : ""}${fixo ? ` (talentos +${fixo})` : ""} → ${acertou ? `${nat === 20 ? "crítico, " : ""}acertou, ${dano} de dano${alvo.pv <= 0 ? ` — ${alvo.nome} cai` : ""}` : "errou"}`;
-    ocorrido.push({ linha, log: { texto: linha, ok: acertou } });
+    ocorrido.push({ linha, log: { texto: linha, ok: acertou, dados } });
     anotar(extras);
     avancar();
   }
@@ -599,7 +617,7 @@ function passarVez(c, fichas, quemAgiu, opcoes = {}) {
 
 module.exports = {
   ATRIBUTOS, NOME_ATRIBUTO, PERICIAS, RACAS, CLASSES, SEXOS, DADO_DE_VIDA,
-  mod, sinal, d, rolar, bonusPericia, normalizarFicha, inicio: iniciativa,
+  mod, sinal, d, rolar, resumoDano, bonusPericia, normalizarFicha, inicio: iniciativa,
   criarInimigo, iniciarCombate, vezAtual, combateAcabou,
   montarRolagem, resolverRolagem, passarVez, chave, acharAtaque,
   CONJURADORES, NIVEIS_PONTOS, NIVEIS_TECNICA, NIVEL_MAXIMO, TIPOS_ITEM, TIPOS_RAPIDOS, MAX_ITENS, MAX_QTD, POCAO_DE_CURA, MAGIAS_INICIAIS,

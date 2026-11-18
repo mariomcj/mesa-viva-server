@@ -111,6 +111,8 @@ try { db.exec("CREATE TABLE IF NOT EXISTS aparelhos (deviceUid TEXT PRIMARY KEY,
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_log_codigo ON log (codigo, id)"); } catch (e) {}
 // Temas e arco da história. Mesas antigas ficam com tema clássico e duração curta.
 try { db.exec("ALTER TABLE mesas ADD COLUMN tema TEXT DEFAULT 'classico'"); } catch (e) {}
+// valores de cada dado de uma rolagem (JSON), para o app animar o d20 e os dados de dano
+try { db.exec("ALTER TABLE log ADD COLUMN dados TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN duracao TEXT DEFAULT 'curta'"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN desejos TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE mesas ADD COLUMN arco TEXT"); } catch (e) {}                          // arco inteiro (privado), JSON
@@ -318,12 +320,13 @@ function salvarFicha(codigo, f) {
 
 /** Grava entradas no diário e devolve os ids criados. */
 function registrar(codigo, ...entradas) {
-  const stmt = db.prepare("INSERT INTO log (codigo, t, tipo, texto, autor, nome, res, ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const stmt = db.prepare("INSERT INTO log (codigo, t, tipo, texto, autor, nome, res, ok, dados) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
   const t = agora();
   const ids = [];
   let narrou = false;
   for (const [i, e] of entradas.entries()) {
-    const info = stmt.run(codigo, t + i, e.tipo, e.texto, e.autor || null, e.nome || null, e.res || null, e.ok != null ? (e.ok ? 1 : 0) : null);
+    const dados = e.dados && typeof e.dados === "object" ? JSON.stringify(e.dados) : null;
+    const info = stmt.run(codigo, t + i, e.tipo, e.texto, e.autor || null, e.nome || null, e.res || null, e.ok != null ? (e.ok ? 1 : 0) : null, dados);
     ids.push(Number(info.lastInsertRowid));
     if (e.tipo === "narr") narrou = true;
   }
@@ -1031,6 +1034,7 @@ app.post("/api/rolar", authMw, limiteIA, async (req, res) => {
       tipo: "roll", texto: `${f.nome} · ${rol.rotulo}: ${r2.natural}${R.sinal(rol.bonus)} = ${r2.total} vs ${rol.tipo === "ataque" ? "CA" : "CD"} ${rol.cd}${valor !== null ? " (dado real)" : ""}`,
       res: r2.selo || (r2.dano !== undefined ? `acertou, ${r2.dano} de dano` : r2.sucesso ? "sucesso" : "falha"),
       ok: r2.sucesso,
+      dados: r2.dados,
     });
     for (const aviso of r2.avisos || []) registrar(codigo, { tipo: "sys", texto: aviso });
     salvarMesa(codigo, combate ? { rolagem: null, combate } : { rolagem: null });
@@ -1244,9 +1248,10 @@ app.post("/api/usar-item", authMw, limiteIA, async (req, res) => {
     let cura = null;
     const em = alvo.uid !== f.uid ? ` em ${alvo.nome}` : "";
     if (/^cura /.test(item.efeito)) {
-      cura = R.rolar(item.efeito.slice(5)).total;
+      const rc = R.rolar(item.efeito.slice(5));
+      cura = rc.total;
       alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
-      registrar(codigo, { tipo: "roll", texto: `${f.nome} usa ${item.nome}${em}: ${alvo.nome} recupera ${cura} PV`, ok: true });
+      registrar(codigo, { tipo: "roll", texto: `${f.nome} usa ${item.nome}${em}: ${alvo.nome} recupera ${cura} PV`, ok: true, dados: { cura: true, dano: R.resumoDano(rc, cura) } });
     } else if (/^mana /.test(item.efeito)) {
       cura = Math.min(alvo.manaMax - alvo.mana, Number(item.efeito.slice(5)) || 0);
       alvo.mana += cura;
@@ -1398,8 +1403,11 @@ app.get("/api/mesa/:codigo/fichas", authMw, (req, res) => {
 
 app.get("/api/mesa/:codigo/log", authMw, (req, res) => {
   const codigo = mesaDoMembro(req, res); if (!codigo) return;
-  const log = db.prepare("SELECT id, t, tipo, texto, autor, nome, res, ok FROM log WHERE codigo = ? ORDER BY id DESC LIMIT 60").all(codigo).reverse();
-  for (const e of log) e.ok = e.ok == null ? null : e.ok === 1;
+  const log = db.prepare("SELECT id, t, tipo, texto, autor, nome, res, ok, dados FROM log WHERE codigo = ? ORDER BY id DESC LIMIT 60").all(codigo).reverse();
+  for (const e of log) {
+    e.ok = e.ok == null ? null : e.ok === 1;
+    if (e.dados) { try { e.dados = JSON.parse(e.dados); } catch { delete e.dados; } } else delete e.dados;
+  }
   res.json(log);
 });
 
@@ -1472,16 +1480,16 @@ async function aplicar(ctx, r, permitirTeste, uidAtor) {
     const alvoId = ef?.alvo;
     const f = fichaPorAlvo(ctx, alvoId);
     if (f) {
-      if (ef.cura) { const v = R.rolar(String(ef.cura)).total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: true }); }
-      if (ef.dano) { const v = R.rolar(String(ef.dano)).total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano${f.pv <= 0 ? " e cai" : ""}`, ok: false }); }
+      if (ef.cura) { const rc = R.rolar(String(ef.cura)), v = rc.total; f.pv = Math.min(f.pvMax, f.pv + v); registrar(codigo, { tipo: "roll", texto: `${f.nome} recupera ${v} PV`, ok: true, dados: { cura: true, dano: R.resumoDano(rc, v) } }); }
+      if (ef.dano) { const rd = R.rolar(String(ef.dano)), v = rd.total; f.pv = Math.max(0, f.pv - v); registrar(codigo, { tipo: "roll", texto: `${f.nome} sofre ${v} de dano${f.pv <= 0 ? " e cai" : ""}`, ok: false, dados: { dano: R.resumoDano(rd, v) } }); }
       salvarFicha(codigo, f);
       continue;
     }
     const ini = combate?.inimigos?.find((i) => i.id === alvoId || R.chave(i.nome) === R.chave(alvoId));
     if (ini && ef.dano) {
-      const v = R.rolar(String(ef.dano)).total;
+      const rd = R.rolar(String(ef.dano)), v = rd.total;
       ini.pv = Math.max(0, ini.pv - v);
-      registrar(codigo, { tipo: "roll", texto: `${ini.nome} sofre ${v} de dano`, ok: true });
+      registrar(codigo, { tipo: "roll", texto: `${ini.nome} sofre ${v} de dano`, ok: true, dados: { dano: R.resumoDano(rd, v) } });
       campos.combate = combate;
     }
   }
@@ -1803,9 +1811,10 @@ async function conjurarSemRolagem(ctx, f, m, alvoPedido) {
   const nomeM = noTema(ctx.mesa.tema, m.nome);
   registrar(codigo, { tipo: "acao", autor: f.uid, nome: f.nome, texto: `Conjura ${nomeM}${sobre}.` });
   if (m.tipo === "cura") {
-    cura = R.rolar(m.efeito || "1d4").total + PG.efeitos(f).cura;          // subclasse Curandeiro: +2
+    const rc = R.rolar(m.efeito || "1d4");
+    cura = rc.total + PG.efeitos(f).cura;          // subclasse Curandeiro: +2
     alvo.pv = Math.min(alvo.pvMax, alvo.pv + cura);
-    registrar(codigo, { tipo: "roll", texto: `${f.nome} conjura ${nomeM}: ${alvo.nome} recupera ${cura} PV`, ok: true });
+    registrar(codigo, { tipo: "roll", texto: `${f.nome} conjura ${nomeM}: ${alvo.nome} recupera ${cura} PV`, ok: true, dados: { cura: true, dano: R.resumoDano(rc, cura) } });
   }
   salvarFicha(codigo, f);
   if (alvo && alvo !== f && alvo.uid) salvarFicha(codigo, alvo);
@@ -2017,7 +2026,7 @@ async function avancarCombate(ctx, quemAgiu) {
     salvarMesa(codigo, { combate });
     ctx.mesa.combate = combate;
     // ok = bom para o grupo; movimentos (ok null) são neutros
-    for (const o of ocorrido) registrar(codigo, { tipo: o.log.tipo || "roll", texto: o.log.texto, ok: o.log.ok == null ? null : !o.log.ok });
+    for (const o of ocorrido) registrar(codigo, { tipo: o.log.tipo || "roll", texto: o.log.texto, ok: o.log.ok == null ? null : !o.log.ok, ...(o.log.dados ? { dados: o.log.dados } : {}) });
     if (ocorrido.length && OPENROUTER_KEY) {
       const prox = R.vezAtual(combate);
       try {
