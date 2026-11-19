@@ -76,7 +76,7 @@ Sempre que houver oposição armada (inimigos visíveis, ameaça iminente, embos
 
 MAPA DE BATALHA (vai junto com "combate" quando a luta começa; os jogadores veem o campo de cima, numa grade):
 - Grade de "colunas" × "linhas" casas, cada casa = 1,5 m. Padrão 10 × 14 (em pé, para celular); pode ir de 8×10 a 12×16. "x" vai de 0 (esquerda) a colunas-1; "y" de 0 (topo) a linhas-1 (base). Distância em casas: a maior entre a diferença de x e a de y (diagonal custa 1).
-- "terreno": lista de retângulos {"tipo","x","y","l","a","nome"} (l casas de largura por a de altura, a partir de x,y). Tipos: "obstaculo" (parede, pilar, árvore grossa, rocha: ninguém passa nem vê através), "cobertura" (mureta, caixote, barril: dá para atravessar, custa 2 casas; quem está nela ou logo atrás ganha +2 de CA contra ataques à distância), "dificil" (lama, entulho, mato alto, escada: custa 2 casas para entrar), "agua" (rio raso, poça funda: custa 2), "abismo" (fosso, lava, precipício: ninguém passa). Use de 3 a 7 peças que combinem com a cena, no máximo 35% do mapa, e deixe sempre caminho entre o grupo e os inimigos. "descricao": o lugar visto de cima, numa frase.
+- "terreno": lista de retângulos {"tipo","x","y","l","a","nome"} (l casas de largura por a de altura, a partir de x,y). Tipos: "obstaculo" (parede, pilar, árvore grossa, rocha: ninguém passa nem vê através), "cobertura" (mureta, caixote, barril: dá para atravessar, custa 2 casas; quem está nela ou logo atrás ganha +2 de CA contra ataques à distância), "dificil" (lama, entulho, mato alto, escada: custa 2 casas para entrar), "agua" (rio raso, poça funda: custa 2), "abismo" (fosso, lava, precipício: ninguém passa). Use de 3 a 7 peças que combinem com a cena, no máximo 35% do mapa, e deixe sempre caminho entre o grupo e os inimigos. "descricao": o lugar visto de cima, numa frase: o chão e o que está sobre ele (ex.: "salão de pedra com mesas viradas, uma lareira e um tapete rasgado"), sem pessoas nem criaturas.
 - Posições: cada inimigo tem "x" e "y"; "posicoes" dá a casa de cada personagem, pelo id dele ({"<id>":{"x":4,"y":12}}). Normalmente o grupo começa embaixo (2 últimas linhas) e os inimigos em cima (3 primeiras linhas); numa emboscada ou cerco, espalhe como a cena pedir. Duas figuras nunca na mesma casa, nem em obstáculo ou abismo.
 - Cada inimigo tem "alcance": "corpo" (só ataca quem está ao lado) ou "distancia" (arco, besta, arma de fogo, magia: até 12 casas, com linha de visão).
 - Cada personagem anda 6 casas por turno (Anão e Halfling, 5). Os jogadores movem as próprias fichas; o código move os inimigos e confere distância, linha de visão e cobertura. Narre de acordo com as posições do contexto.
@@ -239,11 +239,27 @@ function blocoCriacao(t) {
   return bloco ? `${bloco} Não dê a armas e itens os nomes que as técnicas e magias têm neste tema.\n` : "";
 }
 
-/** Prompt da imagem do mapa de batalha visto de cima (em inglês, sem pessoas nem grade), no estilo do tema. */
+/**
+ * Prompt da imagem do mapa de combate (em inglês): uma planta vista de cima, como os mapas de mesa de RPG,
+ * com o terreno do jogo no lugar certo e o chão livre para as peças. Sem grade (o app e a TV desenham a deles),
+ * sem texto e sem pessoas. Os materiais e as cores vêm do tema (`estiloMapa`), não do estilo das cenas.
+ */
 function promptImagemMapa(tema, mapa) {
   const t = T.temaPorId(tema?.id || tema);
   const terreno = MP.terrenoEmIngles(mapa);
-  return `Top-down orthographic battle map seen directly from above, tabletop RPG style, ${mapa.descricao}${terreno ? `, ${terreno}` : ""}, no grid lines, no text, no people, no creatures, no tokens, portrait orientation, aspect ratio ${mapa.colunas}:${mapa.linhas}, ${t.estiloImagem}`;
+  const estilo = t.estiloMapa || "fantasy setting, natural earthy palette";
+  return [
+    "Top-down tabletop RPG battle map: a 2D floor plan seen straight down from directly above (orthographic 90-degree overhead view; no perspective, no isometric or tilted angle, no horizon, no sky).",
+    `Location: ${mapa.descricao}.`,
+    terreno ? `Place these features exactly where described: ${terreno}.` : "",
+    "Draw everything as seen from above: tree canopies, the tops of rocks, roofs, table tops, room floors; walls are thick outlines seen from above.",
+    "The playable ground fills the whole image edge to edge, with mostly open walkable floor for the tokens; no frame, border, margin, legend, compass or title.",
+    `Scale: the area is ${mapa.colunas} squares wide by ${mapa.linhas} squares tall, each square 5 feet (1.5 m); size doors, furniture, trees and rocks to that scale.`,
+    `Style: hand-drawn digital battle map illustration like a virtual tabletop map, clean dark ink outlines, painted textures, soft shading, crisp readable details, even lighting from above with small glowing light sources.`,
+    `Setting materials and colors (use only what fits this location): ${estilo}.`,
+    `Vertical portrait image, aspect ratio ${mapa.colunas}:${mapa.linhas}.`,
+    "Do not include: grid lines, text, letters, numbers, labels, watermark, signature, people, characters, creatures, animals, tokens or miniatures.",
+  ].filter(Boolean).join(" ");
 }
 
 /** Prompt da imagem de fundo de uma cena, no estilo do tema. */

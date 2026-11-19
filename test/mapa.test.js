@@ -7,6 +7,7 @@ const assert = require("node:assert/strict");
 const MP = require("../mapa");
 const R = require("../regras");
 const M = require("../mestre");
+const T = require("../temas");
 
 const mapa = (terreno = [], colunas = 10, linhas = 14) => ({ colunas, linhas, descricao: "Teste", terreno, imagem: "" });
 const peca = (tipo, x, y, l = 1, a = 1, nome = tipo) => ({ tipo, x, y, l, a, nome });
@@ -252,10 +253,18 @@ test("situação no mapa em texto para o Mestre e prompt da imagem do mapa", () 
   assert.match(txt, /Posições: Lia C12; Bruno G13 \(caído\); Goblin 1 F3 \(a 9 casas de Lia\)\./);
   assert.ok(!txt.includes("Goblin 2"), "derrotado não aparece");
   const p = M.promptImagemMapa("piratas", c.mapa);
-  assert.match(p, /^Top-down orthographic battle map seen directly from above, tabletop RPG style, Clareira com um riacho, /);
+  // planta vista de cima, como os mapas de mesa de RPG: terreno no lugar, escala da grade, estilo de mapa do tema
+  assert.match(p, /^Top-down tabletop RPG battle map: a 2D floor plan seen straight down from directly above/);
+  assert.match(p, /no perspective, no isometric or tilted angle, no horizon, no sky/);
+  assert.match(p, /Location: Clareira com um riacho\./);
   assert.match(p, /solid obstacle "Pilar caído" near the upper (left|center)/);
   assert.match(p, /shallow water "Riacho" crossing the middle/);
-  assert.match(p, /no grid lines, no text, no people, no creatures, no tokens, portrait orientation/);
+  assert.match(p, /10 squares wide by 14 squares tall, each square 5 feet/);
+  assert.match(p, /aspect ratio 10:14/);
+  assert.match(p, /Do not include: grid lines, text, letters, numbers, labels, watermark, signature, people, characters, creatures, animals, tokens or miniatures\./);
+  assert.match(p, /use only what fits this location\): pirate adventure/);
+  assert.ok(!p.includes(T.temaPorId("piratas").estiloImagem), "o estilo das cenas (paisagem, céu) não entra no mapa");
+  for (const t of T.TEMAS) assert.ok(t.estiloMapa && /^[\x20-\x7E]+$/.test(t.estiloMapa), `estiloMapa em inglês: ${t.id}`);
   // o contexto do Mestre em combate traz o mapa; combate antigo sem mapa, não
   const mesa = { tema: "classico", combate: { ...c, rodada: 1 }, resumo: "", cena: "" };
   const fichas = [R.normalizarFicha({ nome: "Lia" }, "u1")];

@@ -125,9 +125,9 @@ test("combate começa com o mapa da IA: terreno, posições, alcance, deslocamen
   assert.deepEqual(c.deslocamento, { [atual]: { total: 5, usado: 0 } });                 // Anão: 5 casas
   // a imagem chega em segundo plano e fica no mapa
   assert.equal(contagem.imagem, imagensAntes + 1);
-  assert.match(registro.imagens.at(-1), /^Top-down orthographic battle map seen directly from above, tabletop RPG style, Trilha de pedra/);
+  assert.match(registro.imagens.at(-1), /^Top-down tabletop RPG battle map: [\s\S]* Location: Trilha de pedra/);
   assert.match(registro.imagens.at(-1), /solid obstacle "Pilar caído"/);
-  assert.match(registro.imagens.at(-1), /no people, no creatures, no tokens, portrait orientation/);
+  assert.match(registro.imagens.at(-1), /Do not include: grid lines, text, [\s\S]*people[\s\S]*tokens or miniatures\./);
   assert.match(await esperarImagem(codigo), /^https:\/\/imagens\.exemplo\/img\d+\.png$/);
   // o Mestre recebe a situação do mapa
   const quem = atual === mario.id ? mario : lucia;
