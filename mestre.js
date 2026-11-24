@@ -248,17 +248,19 @@ function promptImagemMapa(tema, mapa) {
   const t = T.temaPorId(tema?.id || tema);
   const terreno = MP.terrenoEmIngles(mapa);
   const estilo = t.estiloMapa || "fantasy setting, natural earthy palette";
+  // a escala vai em metros e pés, sem falar em "casas"/"squares": com essa palavra a IA desenhava uma grade própria
+  const metros = (n) => String(Math.round(n * 1.5 * 10) / 10).replace(/\.0$/, "");
   return [
     "Top-down tabletop RPG battle map: a 2D floor plan seen straight down from directly above (orthographic 90-degree overhead view; no perspective, no isometric or tilted angle, no horizon, no sky).",
     `Location: ${mapa.descricao}.`,
-    terreno ? `Place these features exactly where described: ${terreno}.` : "",
+    terreno ? `Place these features exactly where described (the words in parentheses only say what each feature is; never write them on the image): ${terreno}.` : "",
     "Draw everything as seen from above: tree canopies, the tops of rocks, roofs, table tops, room floors; walls are thick outlines seen from above.",
-    "The playable ground fills the whole image edge to edge, with mostly open walkable floor for the tokens; no frame, border, margin, legend, compass or title.",
-    `Scale: the area is ${mapa.colunas} squares wide by ${mapa.linhas} squares tall, each square 5 feet (1.5 m); size doors, furniture, trees and rocks to that scale.`,
+    "The playable ground fills the whole image edge to edge as one continuous painted surface, with mostly open walkable floor for the tokens; no grid, no tiles or squares drawn over it, no frame, border, margin, legend, compass or title.",
+    `Scale: the area is about ${metros(mapa.colunas)} m wide by ${metros(mapa.linhas)} m tall (${mapa.colunas * 5} by ${mapa.linhas * 5} feet); size doors, furniture, trees and rocks to that scale.`,
     `Style: hand-drawn digital battle map illustration like a virtual tabletop map, clean dark ink outlines, painted textures, soft shading, crisp readable details, even lighting from above with small glowing light sources.`,
     `Setting materials and colors (use only what fits this location): ${estilo}.`,
-    `Vertical portrait image, aspect ratio ${mapa.colunas}:${mapa.linhas}.`,
-    "Do not include: grid lines, text, letters, numbers, labels, watermark, signature, people, characters, creatures, animals, tokens or miniatures.",
+    `Vertical portrait image, aspect ratio ${MP.proporcaoDaImagem(mapa)}.`,
+    "Do not include: grid lines, grid overlay, text, letters, words, numbers, labels, watermark, signature, people, characters, creatures, animals, tokens or miniatures.",
   ].filter(Boolean).join(" ");
 }
 
@@ -635,7 +637,13 @@ function resumoSemImagem(data) {
  * resposta sem imagem, demora ou falha de rede passam para a próxima; só a chave recusada (401) desiste na hora.
  * Depois da última, devolve a ilustração reserva (SVG em data:). Toda falha vai para o log com o motivo.
  */
-async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "img") {
+// Rota documentada da API de imagens da OpenRouter; a antiga (/images/generations) fica de reserva se a nova sumir
+const ROTA_IMAGEM = "https://openrouter.ai/api/v1/images";
+const ROTA_IMAGEM_ANTIGA = "https://openrouter.ai/api/v1/images/generations";
+let rotaImagem = ROTA_IMAGEM;
+
+/** `extra`: campos a mais no pedido (ex.: `{ aspect_ratio: "3:4" }` no mapa). */
+async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "img", extra = {}) {
   if (tentativa > 3) { console.error(`[imagem] ${prefixo}: sem imagem depois de 3 tentativas; fica a ilustração reserva`); return _fallbackImage(prompt, baseUrl); }
   if (tentativa === 1 && bloqueio("imagem")) { console.log(`[imagem] ${prefixo}: mesa sem créditos; fica a ilustração reserva`); return _fallbackImage(prompt, baseUrl); }
   const controller = new AbortController();
@@ -645,7 +653,8 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
   const modelo = modelos[Math.min(tentativa - 1, modelos.length - 1)];
   let falha = "", espera = 0;
   try {
-    const res = await fetch("https://openrouter.ai/api/v1/images/generations", {
+    const rota = rotaImagem;
+    const res = await fetch(rota, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -653,13 +662,18 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
         "HTTP-Referer": "https://mesa-viva.local",
         "X-Title": "Mesa Viva",
       },
-      body: JSON.stringify({ model: modelo, prompt }),
+      body: JSON.stringify({ ...extra, model: modelo, prompt }),
       signal: controller.signal,
     });
     clearTimeout(timeout);
     if (!res.ok) {
       const e = await res.text().catch(() => "");
       if (res.status === 401) throw new ErroMestre(`Imagem: 401 ${e.slice(0, 200)}`);   // chave recusada: repetir não adianta
+      if ((res.status === 404 || res.status === 405) && rota === ROTA_IMAGEM) {
+        console.error(`[imagem] a rota ${ROTA_IMAGEM} respondeu ${res.status}; usando ${ROTA_IMAGEM_ANTIGA}`);
+        rotaImagem = ROTA_IMAGEM_ANTIGA;
+        return gerarImagem(apiKey, prompt, baseUrl, tentativa, prefixo, extra);
+      }
       falha = `HTTP ${res.status} ${e.slice(0, 200)}`;
       if ([429, 502, 503].includes(res.status) || (res.status === 402 && tentativa >= modelos.length)) espera = 2000;
     } else {
@@ -686,7 +700,7 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
   } finally { clearTimeout(timeout); }
   console.error(`[imagem] ${prefixo} · ${modelo} · tentativa ${tentativa}: ${falha}`);
   if (espera) await new Promise((r) => setTimeout(r, espera));
-  return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
+  return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo, extra);
 }
 
     function _fallbackImage(conceito, baseUrl) {

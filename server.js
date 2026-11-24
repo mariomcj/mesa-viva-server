@@ -1899,7 +1899,7 @@ function conferirAtaqueNoMapa(c, ficha, ataque, rol, nomeExibido = ataque.nome) 
 function gerarImagemMapa(codigo, tema, c) {
   if (!c?.mapa || !c.id || !OPENROUTER_KEY || process.env.IMAGENS_DE_MAPA === "0") return;
   const id = c.id;
-  M.gerarImagem(OPENROUTER_KEY, M.promptImagemMapa(tema, c.mapa), SERVER_BASE_URL, 1, "mapa")
+  M.gerarImagem(OPENROUTER_KEY, M.promptImagemMapa(tema, c.mapa), SERVER_BASE_URL, 1, "mapa", { aspect_ratio: MP.proporcaoDaImagem(c.mapa) })
     .then((url) => {
       // a ilustração reserva (SVG em data:) não serve de mapa: o app fica com o tabuleiro desenhado
       if (!url || url.startsWith("data:")) { console.error(`[mapa] ${codigo}: o combate ficou sem imagem (o app mostra o tabuleiro desenhado)`); return; }

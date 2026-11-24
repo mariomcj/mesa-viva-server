@@ -257,11 +257,20 @@ test("situação no mapa em texto para o Mestre e prompt da imagem do mapa", () 
   assert.match(p, /^Top-down tabletop RPG battle map: a 2D floor plan seen straight down from directly above/);
   assert.match(p, /no perspective, no isometric or tilted angle, no horizon, no sky/);
   assert.match(p, /Location: Clareira com um riacho\./);
-  assert.match(p, /solid obstacle "Pilar caído" near the upper (left|center)/);
-  assert.match(p, /shallow water "Riacho" crossing the middle/);
-  assert.match(p, /10 squares wide by 14 squares tall, each square 5 feet/);
-  assert.match(p, /aspect ratio 10:14/);
-  assert.match(p, /Do not include: grid lines, text, letters, numbers, labels, watermark, signature, people, characters, creatures, animals, tokens or miniatures\./);
+  // o nome vai entre parênteses, sem aspas (entre aspas a IA o desenhava como rótulo), e com aviso para não escrever
+  assert.match(p, /solid obstacle \(pilar caído\) near the upper (left|center)/);
+  assert.match(p, /shallow water \(riacho\) crossing the middle/);
+  assert.ok(!p.includes('"'), "nenhum nome entre aspas");
+  assert.match(p, /the words in parentheses only say what each feature is; never write them on the image/);
+  // escala em metros e pés, sem "squares" (que fazia a IA desenhar uma grade própria)
+  assert.match(p, /about 15 m wide by 21 m tall \(50 by 70 feet\)/);
+  assert.ok(!/squares? (wide|tall)|each square/.test(p), "a escala não fala em casas");
+  assert.match(p, /no grid, no tiles or squares drawn over it/);
+  assert.match(p, /aspect ratio 3:4\./);
+  assert.match(p, /Do not include: grid lines, grid overlay, text, letters, words, numbers, labels, watermark, signature, people, characters, creatures, animals, tokens or miniatures\./);
+  // proporção pedida à IA: a mais próxima de colunas:linhas entre as que os dois modelos aceitam em pé
+  assert.deepEqual([[10, 14], [12, 16], [8, 10], [8, 12], [9, 16], [12, 12], [16, 8]].map(([colunas, linhas]) => MP.proporcaoDaImagem({ colunas, linhas })),
+    ["3:4", "3:4", "4:5", "2:3", "9:16", "1:1", "1:1"]);
   assert.match(p, /use only what fits this location\): pirate adventure/);
   assert.ok(!p.includes(T.temaPorId("piratas").estiloImagem), "o estilo das cenas (paisagem, céu) não entra no mapa");
   for (const t of T.TEMAS) assert.ok(t.estiloMapa && /^[\x20-\x7E]+$/.test(t.estiloMapa), `estiloMapa em inglês: ${t.id}`);

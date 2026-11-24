@@ -6,7 +6,7 @@
 
 const contagem = { texto: 0, imagem: 0, arco: 0 };
 // portaoImagem: se for uma Promise, as imagens esperam por ela (para testar imagem que chega atrasada)
-const registro = { ultimoPrompt: "", imagens: [], portaoImagem: null };
+const registro = { ultimoPrompt: "", imagens: [], pedidosImagem: [], portaoImagem: null };
 const fetchReal = globalThis.fetch;
 const resposta = (obj) => new Response(JSON.stringify(obj), { status: 200, headers: { "Content-Type": "application/json" } });
 
@@ -138,6 +138,7 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith("https://openrouter.ai/api/v1/images")) {
     const n = ++contagem.imagem;
     registro.imagens.push(JSON.parse(opts.body).prompt);
+    registro.pedidosImagem.push({ url: u, ...JSON.parse(opts.body) });
     if (registro.portaoImagem) await registro.portaoImagem;
     return resposta({ data: [{ url: `https://imagens.exemplo/img${n}.png` }] });
   }

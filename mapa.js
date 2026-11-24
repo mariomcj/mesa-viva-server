@@ -578,8 +578,20 @@ function ondeEmIngles(mapa, t) {
 const TIPO_EM_INGLES = {
   obstaculo: "solid obstacle", cobertura: "low cover", dificil: "rough difficult ground", agua: "shallow water", abismo: "deep chasm",
 };
+// O nome vai entre parênteses e sem aspas: entre aspas, a IA de imagem desenhava o nome como rótulo no mapa
 function terrenoEmIngles(mapa) {
-  return (mapa.terreno || []).map((t) => `${TIPO_EM_INGLES[t.tipo]} "${t.nome}" ${ondeEmIngles(mapa, t)}`).join(", ");
+  return (mapa.terreno || []).map((t) => `${TIPO_EM_INGLES[t.tipo]} (${String(t.nome || "").toLowerCase()}) ${ondeEmIngles(mapa, t)}`).join(", ");
+}
+
+/**
+ * Proporção da imagem do mapa para a IA (`aspect_ratio`): a mais próxima de colunas:linhas entre as que os dois
+ * modelos de imagem aceitam em pé. Sem isso a imagem vinha quadrada e o app a esticava no tabuleiro.
+ */
+const PROPORCOES_EM_PE = [["1:1", 1], ["4:5", 0.8], ["3:4", 0.75], ["2:3", 2 / 3], ["9:16", 0.5625]];
+function proporcaoDaImagem(mapa) {
+  const r = (Number(mapa?.colunas) || COLUNAS_PADRAO) / (Number(mapa?.linhas) || LINHAS_PADRAO);
+  if (r > 1) return "1:1";
+  return PROPORCOES_EM_PE.reduce((melhor, p) => (Math.abs(p[1] - r) < Math.abs(melhor[1] - r) ? p : melhor))[0];
 }
 
 module.exports = {
@@ -587,7 +599,7 @@ module.exports = {
   TIPOS, NOME_TIPO,
   letra, rotulo, distancia, dentro, casas, deslocamentoBase, alcanceDoAtaque,
   celulas, tipoEm, bloqueia, custoEntrar, passavel, pecaEm, casasNaLinha, linhaDeVisao, temCobertura,
-  ocupantes, restricoes, explorar, podeParar, caminho, alcancaveis, planejarMovimento, aproximar,
+  ocupantes, restricoes, explorar, podeParar, caminho, alcancaveis, planejarMovimento, aproximar, proporcaoDaImagem,
   normalizarMapa, mapaPadrao, rngComSemente, casaLivre, posicionarNovos, conectado, garantirConexao, prepararCombate, completarPosicoes,
   turnoInimigo, criarTatica, descreverSituacao, terrenoEmIngles,
 };
