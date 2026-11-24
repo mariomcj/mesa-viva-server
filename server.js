@@ -1901,14 +1901,16 @@ function gerarImagemMapa(codigo, tema, c) {
   const id = c.id;
   M.gerarImagem(OPENROUTER_KEY, M.promptImagemMapa(tema, c.mapa), SERVER_BASE_URL, 1, "mapa")
     .then((url) => {
-      if (!url) return;
+      // a ilustração reserva (SVG em data:) não serve de mapa: o app fica com o tabuleiro desenhado
+      if (!url || url.startsWith("data:")) { console.error(`[mapa] ${codigo}: o combate ficou sem imagem (o app mostra o tabuleiro desenhado)`); return; }
       const atual = json(db.prepare("SELECT combate FROM mesas WHERE codigo = ?").get(codigo)?.combate);
       if (!atual || atual.id !== id || !atual.mapa) return;     // o combate acabou ou é outro: a imagem não serve mais
       atual.mapa.imagem = url;
       salvarMesa(codigo, { combate: atual });
       broadcast(codigo, "atualizar", {});
+      console.log(`[mapa] ${codigo}: imagem do mapa pronta`);
     })
-    .catch(() => {});
+    .catch((e) => console.error(`[mapa] ${codigo}: ${e?.message || e}`));
 }
 
 /** Imagem de fundo da cena, no estilo do tema (em segundo plano; cada imagem custa créditos). */
@@ -1920,7 +1922,7 @@ function gerarFundo(codigo, tema, cena) {
   if (!OPENROUTER_KEY || process.env.IMAGENS_DE_FUNDO === "0") return;
   M.gerarImagem(OPENROUTER_KEY, M.promptImagem(tema, cena), SERVER_BASE_URL)
     .then((url) => { if (url) { MH?.guardarFundo(tema, cena, url); salvarMesa(codigo, { fundo: url }); broadcast(codigo, "atualizar", {}); } })
-    .catch(() => {});
+    .catch((e) => console.error(`[fundo] ${codigo}: ${e?.message || e}`));
 }
 
 const QUALIDADE_ARCO = process.env.QUALIDADE_ARCO === "rapido" ? "rapido" : "caprichado";

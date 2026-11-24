@@ -625,13 +625,25 @@ async function perguntar(apiKey, prompt, qualidade = "rapido", maxTokens = 3000,
   return lerJson(text);
 }
 
+/** Resumo de uma resposta da IA de imagem que veio sem imagem (para o log; sem o base64). */
+function resumoSemImagem(data) {
+  try { return JSON.stringify(data, (k, v) => (k === "b64_json" ? "<b64>" : v)).slice(0, 300); } catch { return String(data).slice(0, 300); }
+}
+
+/**
+ * Gera uma imagem pela OpenRouter. Até 3 tentativas (o segundo modelo entra a partir da segunda): erro da IA,
+ * resposta sem imagem, demora ou falha de rede passam para a próxima; só a chave recusada (401) desiste na hora.
+ * Depois da última, devolve a ilustração reserva (SVG em data:). Toda falha vai para o log com o motivo.
+ */
 async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "img") {
-  if (tentativa > 3) return _fallbackImage(prompt, baseUrl);
-  if (tentativa === 1 && bloqueio("imagem")) return _fallbackImage(prompt, baseUrl);   // sem créditos: ilustração simples, sem custo
+  if (tentativa > 3) { console.error(`[imagem] ${prefixo}: sem imagem depois de 3 tentativas; fica a ilustração reserva`); return _fallbackImage(prompt, baseUrl); }
+  if (tentativa === 1 && bloqueio("imagem")) { console.log(`[imagem] ${prefixo}: mesa sem créditos; fica a ilustração reserva`); return _fallbackImage(prompt, baseUrl); }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25_000);
+  const limiteMs = prefixo === "mapa" ? 45_000 : 25_000;      // o mapa chega em segundo plano: pode esperar mais
+  const timeout = setTimeout(() => controller.abort(), limiteMs);
   const modelos = ["google/gemini-2.5-flash-image", "google/gemini-3.1-flash-image"];
   const modelo = modelos[Math.min(tentativa - 1, modelos.length - 1)];
+  let falha = "", espera = 0;
   try {
     const res = await fetch("https://openrouter.ai/api/v1/images/generations", {
       method: "POST",
@@ -647,38 +659,34 @@ async function gerarImagem(apiKey, prompt, baseUrl, tentativa = 1, prefixo = "im
     clearTimeout(timeout);
     if (!res.ok) {
       const e = await res.text().catch(() => "");
-      if ([429, 502, 503].includes(res.status) || (res.status === 402 && tentativa >= modelos.length)) {
-        await new Promise((r) => setTimeout(r, 2000));
-        return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
+      if (res.status === 401) throw new ErroMestre(`Imagem: 401 ${e.slice(0, 200)}`);   // chave recusada: repetir não adianta
+      falha = `HTTP ${res.status} ${e.slice(0, 200)}`;
+      if ([429, 502, 503].includes(res.status) || (res.status === 402 && tentativa >= modelos.length)) espera = 2000;
+    } else {
+      const data = await res.json();
+      medir("imagem", modelo, data?.usage);
+      const item = data?.data?.[0];
+      if (item?.url) return item.url;
+      if (item?.b64_json) {
+        const fs = require("fs");
+        const path = require("path");
+        const pubDir = path.join(__dirname, "public", "images");
+        if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
+        const name = `${prefixo}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
+        const buf = Buffer.from(item.b64_json, "base64");
+        fs.writeFileSync(path.join(pubDir, name), buf);
+        const rel = `/images/${name}`;
+        return baseUrl ? `${baseUrl}${rel}` : rel;
       }
-      if (res.status === 402) {
-        return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
-      }
-      throw new ErroMestre(`Imagem: ${res.status} ${e.slice(0, 200)}`);
+      falha = `resposta sem imagem: ${resumoSemImagem(data)}`;
     }
-    const data = await res.json();
-    medir("imagem", modelo, data?.usage);
-    const item = data?.data?.[0];
-    if (item?.url) return item.url;
-    if (item?.b64_json) {
-      const fs = require("fs");
-      const path = require("path");
-      const pubDir = path.join(__dirname, "public", "images");
-      if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true });
-      const name = `${prefixo}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
-      const buf = Buffer.from(item.b64_json, "base64");
-      fs.writeFileSync(path.join(pubDir, name), buf);
-      const rel = `/images/${name}`;
-      return baseUrl ? `${baseUrl}${rel}` : rel;
-    }
-    return "";
   } catch (e) {
-    clearTimeout(timeout);
-    if (e.name === "AbortError") {
-      return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
-    }
-    throw new ErroMestre(`Imagem: ${e.message || e}`);
-  }
+    if (e instanceof ErroMestre) throw e;
+    falha = e.name === "AbortError" ? `sem resposta em ${limiteMs / 1000} s` : `falha: ${e.message || e}`;
+  } finally { clearTimeout(timeout); }
+  console.error(`[imagem] ${prefixo} · ${modelo} · tentativa ${tentativa}: ${falha}`);
+  if (espera) await new Promise((r) => setTimeout(r, espera));
+  return gerarImagem(apiKey, prompt, baseUrl, tentativa + 1, prefixo);
 }
 
     function _fallbackImage(conceito, baseUrl) {
